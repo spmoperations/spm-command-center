@@ -4,10 +4,10 @@ import { Fragment, useState } from "react";
 import { DelegateForm } from "@/components/DelegateForm";
 import { SuggestionRow } from "@/components/SuggestionRow";
 import { DueText, PrioritySelect, SourceLink, VisuallyHidden } from "@/components/bits";
-import { DEPTS, PRIORITY_RANK } from "@/core/config";
+import { DEPTS, MODE_NAME, MODES, PRIORITY_RANK } from "@/core/config";
 import { addDays } from "@/core/dates";
-import { canDelegate, isMine } from "@/core/delegation";
-import type { Priority, Task } from "@/core/types";
+import { canAssign, canAssignInChat, isMine, SLACK_PICK } from "@/core/delegation";
+import type { Mode, Priority, Task } from "@/core/types";
 import { addTask, delegateTask, setTaskPriority, toggleTask, undelegateTask, useApp, type App } from "@/store/store";
 
 const SECTIONS: { key: Priority; title: string; sub: string }[] = [
@@ -17,10 +17,17 @@ const SECTIONS: { key: Priority; title: string; sub: string }[] = [
 ];
 
 const COLUMNS = 7;
+/** Suggestions shown before "Show all": enough to act on without pushing the tasks off screen. */
+const SUGGESTIONS_SHOWN = 5;
 
-function TaskRow({ t, app, delegating, onDelegating }: { t: Task; app: App; delegating: boolean; onDelegating(id: string | null): void }) {
+/** `plain` leaves out department and project: personal tasks have neither. */
+function TaskRow({ t, app, delegating, onDelegating, plain }: { t: Task; app: App; delegating: boolean; onDelegating(id: string | null): void; plain?: boolean }) {
   const { state, today } = app;
   const rowClass = t.done ? "done" : t.delegatedTo ? "delegated" : "";
+  const columns = plain ? COLUMNS - 2 : COLUMNS;
+  // A task that came from a channel or a group message can be assigned right there.
+  const source = t.src?.type === "message" ? state.inbox.find((c) => c.id === t.src!.id) : undefined;
+  const chat = source && canAssignInChat(source) ? (source.ctx.startsWith("#") ? source.ctx : "the group message") : null;
   return (
     <Fragment>
       <tr className={rowClass}>
@@ -36,12 +43,12 @@ function TaskRow({ t, app, delegating, onDelegating }: { t: Task; app: App; dele
           )}
           {t.delegatedTo && (
             <div className="dg-note">
-              <span className="chip dg-chip">Delegated · {t.delegatedTo.name}</span> {t.delegatedTo.note}
+              <span className="chip dg-chip">Assigned · {t.delegatedTo.name}</span> {t.delegatedTo.note}
             </div>
           )}
         </td>
-        <td>{t.dept}</td>
-        <td>{t.project}</td>
+        {!plain && <td>{t.dept}</td>}
+        {!plain && <td>{t.project}</td>}
         <td>
           <PrioritySelect value={t.pri} onChange={(p) => setTaskPriority(t.id, p)} />
         </td>
@@ -54,9 +61,9 @@ function TaskRow({ t, app, delegating, onDelegating }: { t: Task; app: App; dele
               Take back
             </button>
           )}
-          {canDelegate(state.team, t) && (
-            <button className="btn dg" aria-expanded={delegating} title={`Someone in ${t.dept} can own this`} onClick={() => onDelegating(delegating ? null : t.id)}>
-              Delegate
+          {canAssign(t) && (
+            <button className="btn dg" aria-expanded={delegating} title="Hand this task to someone else" onClick={() => onDelegating(delegating ? null : t.id)}>
+              Assign
             </button>
           )}
         </td>
@@ -64,14 +71,16 @@ function TaskRow({ t, app, delegating, onDelegating }: { t: Task; app: App; dele
       {delegating && (
         <tr className="dg-row">
           <td />
-          <td colSpan={COLUMNS - 1}>
+          <td colSpan={columns - 1}>
             <DelegateForm
               team={state.team}
+              slackPeople={state.slackPeople}
               today={today}
               subject={t}
+              chat={chat}
               onCancel={() => onDelegating(null)}
-              onDelegate={(personId, note, due) => {
-                delegateTask(t.id, personId, note, due);
+              onDelegate={(personId, note, due, where) => {
+                delegateTask(t.id, personId, note, due, where);
                 onDelegating(null);
               }}
             />
@@ -82,36 +91,76 @@ function TaskRow({ t, app, delegating, onDelegating }: { t: Task; app: App; dele
   );
 }
 
+/** The form starts on the side that is showing. Its key is the mode, so switching sides resets it. */
 function AddTask({ app }: { app: App }) {
   const [title, setTitle] = useState("");
+  const [mode, setTaskMode] = useState<Mode>(app.ui.mode);
   const [dept, setDept] = useState("Operations");
-  const [project, setProject] = useState(app.state.projects.includes("Internal Ops") ? "Internal Ops" : (app.state.projects[0] ?? ""));
+  const [project, setProject] = useState("");
   const [pri, setPri] = useState<Priority>("mid");
   const [due, setDue] = useState(app.today);
+  const [assignTo, setAssignTo] = useState("");
+  const personal = mode === "personal";
+  const { team, slackPeople } = app.state;
+  const others = slackPeople.filter((p) => !team.some((t) => t.slackUserId === p.id));
   return (
     <form
       className="panel addtask"
-      style={{ gridTemplateColumns: "minmax(0, 2.4fr) repeat(4, minmax(0, 1fr)) auto" }}
+      style={{ gridTemplateColumns: `minmax(0, 2.4fr) repeat(${personal ? 3 : 6}, minmax(0, 1fr)) auto` }}
       onSubmit={(e) => {
         e.preventDefault();
         if (!title.trim()) return;
-        addTask({ title: title.trim(), dept, project, pri, due: due || app.today });
+        addTask({ title: title.trim(), mode, dept, project: project.trim(), pri, due: due || app.today, assignTo: personal ? undefined : assignTo || undefined });
         setTitle("");
+        setAssignTo("");
       }}
     >
       <input className="f" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="New task" required aria-label="Task" />
-      <select className="f" value={dept} aria-label="Department" onChange={(e) => setDept(e.target.value)}>
-        {DEPTS.map((d) => (
-          <option key={d}>{d}</option>
+      <select className="f" value={mode} aria-label="Personal or Professional" onChange={(e) => setTaskMode(e.target.value as Mode)}>
+        {MODES.map((m) => (
+          <option key={m} value={m}>
+            {MODE_NAME[m]}
+          </option>
         ))}
       </select>
-      <select className="f" value={project} aria-label="Project" onChange={(e) => setProject(e.target.value)}>
+      {!personal && (
+        <select className="f" value={dept} aria-label="Department" onChange={(e) => setDept(e.target.value)}>
+          {DEPTS.map((d) => (
+            <option key={d}>{d}</option>
+          ))}
+        </select>
+      )}
+      {!personal && <input className="f" value={project} list="known-projects" placeholder="Project or client" aria-label="Project" onChange={(e) => setProject(e.target.value)} />}
+      <datalist id="known-projects">
         {app.state.projects.map((p) => (
-          <option key={p}>{p}</option>
+          <option key={p} value={p} />
         ))}
-      </select>
+      </datalist>
       <PrioritySelect value={pri} onChange={setPri} />
       <input className="f" type="date" value={due} aria-label="Due date" onChange={(e) => setDue(e.target.value)} />
+      {!personal && (
+        <select className="f" value={assignTo} aria-label="Who does it" onChange={(e) => setAssignTo(e.target.value)}>
+          <option value="">For me</option>
+          {team.length > 0 && (
+            <optgroup label="Your team">
+              {team.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {others.length > 0 && (
+            <optgroup label={team.length > 0 ? "Others on Slack" : "People on Slack"}>
+              {others.map((p) => (
+                <option key={p.id} value={`${SLACK_PICK}${p.id}`}>
+                  {p.name}
+                </option>
+              ))}
+            </optgroup>
+          )}
+        </select>
+      )}
       <button className="btn primary" type="submit">
         Add task
       </button>
@@ -127,24 +176,30 @@ export default function TasksPage() {
   const [closed, setClosed] = useState<Priority[]>([]);
   const [showLater, setShowLater] = useState<Priority[]>([]);
   const [delegating, setDelegating] = useState<string | null>(null);
+  const [allSuggestions, setAllSuggestions] = useState(false);
   if (!app) return null;
-  const { state, now, today } = app;
+  const { state, ui, now, today } = app;
+  const personal = ui.mode === "personal";
 
-  const list = state.tasks.filter(
+  const inMode = state.tasks.filter((t) => t.mode === ui.mode);
+  const list = inMode.filter(
     (t) =>
-      (dept === "all" || t.dept === dept) &&
-      (project === "all" || t.project === project) &&
+      (personal || ((dept === "all" || t.dept === dept) && (project === "all" || t.project === project))) &&
       (status === "all" || (status === "open" ? isMine(t) : status === "delegated" ? !t.done && !!t.delegatedTo : t.done)),
   );
   const soonCut = addDays(now, 2);
   const byDue = (a: Task, b: Task) => a.due.localeCompare(b.due);
   const suggestions = state.suggestions
-    .filter((g) => g.status === "new")
+    .filter((g) => g.status === "new" && g.mode === ui.mode)
     .sort((a, b) => PRIORITY_RANK[a.pri] - PRIORITY_RANK[b.pri] || a.due.localeCompare(b.due));
-  const mine = state.tasks.filter(isMine);
-  const delegatedCount = state.tasks.filter((t) => !t.done && t.delegatedTo).length;
+  const mine = inMode.filter(isMine);
+  const delegatedCount = inMode.filter((t) => !t.done && t.delegatedTo).length;
   const toggle = (list: Priority[], key: Priority) => (list.includes(key) ? list.filter((k) => k !== key) : [...list, key]);
-  const row = (t: Task) => <TaskRow key={t.id} t={t} app={app} delegating={delegating === t.id} onDelegating={setDelegating} />;
+  const row = (t: Task) => <TaskRow key={t.id} t={t} app={app} plain={personal} delegating={delegating === t.id} onDelegating={setDelegating} />;
+  // Personal: one list, soonest due first, then highest priority; done at the bottom.
+  const flat = [...list].sort(
+    (a, b) => Number(a.done) - Number(b.done) || (a.done ? (b.doneAt ?? 0) - (a.doneAt ?? 0) : a.due.localeCompare(b.due) || PRIORITY_RANK[a.pri] - PRIORITY_RANK[b.pri]),
+  );
 
   return (
     <section className="view">
@@ -152,8 +207,8 @@ export default function TasksPage() {
         <div>
           <h2>Tasks</h2>
           <div className="muted" style={{ fontSize: 14 }}>
-            {mine.length} on your plate · {mine.filter((t) => t.due < today).length} overdue
-            {delegatedCount > 0 && ` · ${delegatedCount} delegated`}
+            {MODE_NAME[ui.mode]}: {mine.length} on your plate · {mine.filter((t) => t.due < today).length} overdue
+            {delegatedCount > 0 && ` · ${delegatedCount} assigned to others`}
           </div>
         </div>
       </div>
@@ -170,43 +225,88 @@ export default function TasksPage() {
           </h3>
         </div>
         <p className="sg-intro">
-          Tasks pulled from your conversations and call transcripts, each with a suggested priority and due date. Adjust either before adding. Nothing becomes a task until you click Add task.
+          Found for you: your action items from recorded calls, and messages that ask you for something and are still waiting for a reply. Change the priority or due date if you like. Nothing becomes a task until you click Add task.
         </p>
         {suggestions.length > 0 ? (
           <div className="sg-list">
-            {suggestions.map((g) => (
+            {(allSuggestions ? suggestions : suggestions.slice(0, SUGGESTIONS_SHOWN)).map((g) => (
               <SuggestionRow key={g.id} g={g} app={app} />
             ))}
+            {suggestions.length > SUGGESTIONS_SHOWN && (
+              <button className="sg-more" aria-expanded={allSuggestions} onClick={() => setAllSuggestions(!allSuggestions)}>
+                {allSuggestions ? "Show fewer" : `Show all ${suggestions.length} suggestions`}
+              </button>
+            )}
           </div>
         ) : (
           <p className="empty">No suggestions right now.</p>
         )}
       </div>
 
-      <AddTask app={app} />
+      <AddTask key={ui.mode} app={app} />
 
-      <div className="filters">
-        <select className="f" value={status} aria-label="Status" onChange={(e) => setStatus(e.target.value)}>
-          <option value="all">Status: All</option>
-          <option value="open">On my plate</option>
-          <option value="delegated">Delegated</option>
-          <option value="done">Done</option>
-        </select>
-        <select className="f" value={dept} aria-label="Department" onChange={(e) => setDept(e.target.value)}>
-          <option value="all">Department: All</option>
-          {DEPTS.map((d) => (
-            <option key={d}>{d}</option>
-          ))}
-        </select>
-        <select className="f" value={project} aria-label="Project" onChange={(e) => setProject(e.target.value)}>
-          <option value="all">Project: All</option>
-          {state.projects.map((p) => (
-            <option key={p}>{p}</option>
-          ))}
-        </select>
-      </div>
+      {inMode.length === 0 && (
+        <div className="panel hint-panel">
+          <strong>No {personal ? "personal " : ""}tasks yet.</strong> Type one in the box above{suggestions.length > 0 ? ", or click Add task on a suggestion." : "."}
+        </div>
+      )}
 
-      {SECTIONS.map((sec) => {
+      {inMode.length > 0 && (
+        <div className="filters">
+          <select className="f" value={status} aria-label="Status" onChange={(e) => setStatus(e.target.value)}>
+            <option value="all">Status: All</option>
+            <option value="open">On my plate</option>
+            {!personal && <option value="delegated">Assigned to others</option>}
+            <option value="done">Done</option>
+          </select>
+          {!personal && (
+            <select className="f" value={dept} aria-label="Department" onChange={(e) => setDept(e.target.value)}>
+              <option value="all">Department: All</option>
+              {DEPTS.map((d) => (
+                <option key={d}>{d}</option>
+              ))}
+            </select>
+          )}
+          {!personal && (
+            <select className="f" value={project} aria-label="Project" onChange={(e) => setProject(e.target.value)}>
+              <option value="all">Project: All</option>
+              {state.projects.map((p) => (
+                <option key={p}>{p}</option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
+
+      {personal && inMode.length > 0 && (
+        <div className="panel table-scroll">
+          <table className="tasks">
+            <thead>
+              <tr>
+                <th style={{ width: 36 }}>
+                  <VisuallyHidden>Done</VisuallyHidden>
+                </th>
+                <th>Task</th>
+                <th>Priority</th>
+                <th>Due</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {flat.map(row)}
+              {flat.length === 0 && (
+                <tr>
+                  <td colSpan={COLUMNS - 2} className="muted" style={{ padding: 16 }}>
+                    No tasks match.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {!personal && inMode.length > 0 && SECTIONS.map((sec) => {
         const inSection = list.filter((t) => t.pri === sec.key);
         const open = inSection.filter(isMine).sort(byDue);
         // High priority shows everything; the others show the next 48 hours and fold the rest away.

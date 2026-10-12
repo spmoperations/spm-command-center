@@ -57,7 +57,7 @@ function LogToday({ app, clock, parents }: { app: App; clock: MonthClock; parent
         {parents.map((p) => {
           const fields = [...(p.sum ? [] : [p]), ...state.metrics.filter((k) => k.parent === p.id && !k.sum)];
           return [
-            <div className="grp label" key={p.id}>
+            <div className="grp label" key={`group-${p.id}`}>
               {p.name}
             </div>,
             ...fields.map((f) => (
@@ -101,7 +101,7 @@ function EditTargets({ app }: { app: App }) {
           Save targets
         </button>
       </div>
-      <p className="set-intro">The number each one should reach by the end of the month. A target made up of parts is the total of its parts.</p>
+      <p className="set-intro">The number each one should reach by the end of the month. These starting numbers were copied from your prototype, so change them to your real targets.</p>
       <div className="tgt-edit">
         {editable.map((m) => (
           <label key={m.id} htmlFor={`target-${m.id}`}>

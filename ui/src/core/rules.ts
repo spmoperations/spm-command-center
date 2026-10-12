@@ -1,9 +1,11 @@
-// Sorting rules for the inbox. This is plain logic on purpose: what is urgent and
-// which business line a chat belongs to are decided by rules the owner sets, not by AI.
-import type { Conversation, Line, Priority, Rule } from "./types";
+// Sorting rules for the inbox. This is plain logic on purpose: what is urgent, whether a
+// chat is personal or professional, and which business line it belongs to are decided by
+// rules the owner sets, not by AI.
+import type { Conversation, Line, Mode, Priority, Rule } from "./types";
 
 export const DEFAULT_PRIORITY: Priority = "low";
 export const DEFAULT_LINE: Line = "agency";
+export const DEFAULT_MODE: Mode = "professional";
 
 /** Lower-cased with punctuation collapsed, so "#Consulting-" matches "#consulting cohort". */
 export const norm = (x: unknown) =>
@@ -31,17 +33,19 @@ export function ruleMatches(rule: Rule, c: Sortable): boolean {
 export const firstMatch = (rules: Rule[], c: Sortable) => rules.find((r) => ruleMatches(r, c)) ?? null;
 
 export function sortConversation(c: Sortable, labelRules: Rule[], priorityRules: Rule[]) {
+  const label = firstMatch(labelRules, c);
   return {
-    line: firstMatch(labelRules, c)?.line ?? DEFAULT_LINE,
+    mode: label?.mode ?? DEFAULT_MODE,
+    line: label?.line ?? DEFAULT_LINE,
     pri: firstMatch(priorityRules, c)?.pri ?? DEFAULT_PRIORITY,
   };
 }
 
-/** Re-sorts every conversation. A priority set by hand in the inbox is kept. */
+/** Re-sorts every conversation. A priority or a side set by hand in the inbox is kept. */
 export function applyRules(inbox: Conversation[], labelRules: Rule[], priorityRules: Rule[]): Conversation[] {
   return inbox.map((c) => {
     const sorted = sortConversation(c, labelRules, priorityRules);
-    return { ...c, line: sorted.line, pri: c.manualPri ? c.pri : sorted.pri };
+    return { ...c, line: sorted.line, mode: c.manualMode ? c.mode : sorted.mode, pri: c.manualPri ? c.pri : sorted.pri };
   });
 }
 

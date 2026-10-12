@@ -33,8 +33,27 @@ export function candidates(team: Person[], t: Delegable, all: boolean): Candidat
 /** On the owner's plate: neither done nor handed to someone. */
 export const isMine = (t: Task) => !t.done && !t.delegatedTo;
 
-export const canDelegate = (team: Person[], t: Task) =>
-  isMine(t) && t.delegable && candidates(team, t, false).length > 0;
+/**
+ * Whether a task can be assigned to someone else. Personal tasks stay with the owner, and so
+ * does anything marked as only theirs to do. Who it can go to is the form's business: anyone
+ * on the team list or in Slack.
+ */
+export const canAssign = (t: Task) => isMine(t) && t.mode === "professional" && t.delegable;
+
+/** How the form names someone picked straight from Slack, before they are on the team list. */
+export const SLACK_PICK = "slack:";
+
+/** Where the person is told: a direct message, or the chat the task came from. */
+export type AssignWhere = "dm" | "chat";
+
+/** A channel or a group message can carry an assignment. A one-to-one chat cannot: the person assigned is not in it. */
+export const canAssignInChat = (c: { ctx: string }) => c.ctx.startsWith("#") || c.ctx === "Group message";
+
+/** The message that tells someone a task is theirs. In a chat it starts by tagging them. */
+export function assignmentText(o: { where: AssignWhere; who: string; title: string; due: string; note: string }): string {
+  const task = `${o.title} (due ${o.due})${o.note ? `\n\n${o.note}` : ""}`;
+  return o.where === "chat" ? `${o.who} new task for you: ${task}` : `New task for you: ${task}`;
+}
 
 export type TaskStatus = "done" | "overdue" | "ontrack";
 

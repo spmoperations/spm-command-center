@@ -14,7 +14,7 @@ export function SuggestionRow({ g, app }: { g: Suggestion; app: App }) {
         <div className="sg-meta">
           <SourceLink src={g.src} app={app} />
           {g.example && <span className="chip">Example</span>}
-          <span className="chip">{g.project}</span>
+          {g.project && g.mode === "professional" && <span className="chip">{g.project}</span>}
         </div>
       </div>
       <div className="sg-ctrl">

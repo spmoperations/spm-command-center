@@ -1,0 +1,27 @@
+// Shared pieces for the API routes.
+import { sessionOf } from "./session";
+
+/**
+ * Requests that change something must come from the dashboard itself. This stops another
+ * website open in the same browser from quietly posting to the local server.
+ */
+export function fromDashboard(request: Request): boolean {
+  return sameSite(request) && (request.headers.get("content-type") ?? "").startsWith("application/json");
+}
+
+/** True when the browser says the request was made by one of the dashboard's own pages. */
+export function sameSite(request: Request): boolean {
+  const site = request.headers.get("sec-fetch-site");
+  if (site && site !== "same-origin" && site !== "none") return false;
+  const origin = request.headers.get("origin");
+  return !origin || new URL(origin).host === request.headers.get("host");
+}
+
+export const refused = () => Response.json({ error: "This request did not come from the dashboard." }, { status: 403 });
+
+/** Every route that reads or changes data checks this first: the data is one person's. */
+export const signedIn = (request: Request) => sessionOf(request) !== null;
+
+export const signInFirst = () => Response.json({ error: "Please sign in." }, { status: 401 });
+
+export const failed = (error: unknown, status = 400) => Response.json({ error: error instanceof Error ? error.message : String(error) }, { status });

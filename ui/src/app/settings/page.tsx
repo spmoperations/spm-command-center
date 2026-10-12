@@ -1,47 +1,17 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { DEPTS, LINE_NAME, PRIORITY_NAME, SOURCE_NAME, SOURCES } from "@/core/config";
+import { ago } from "@/core/dates";
 import { describeInterval, JOBS, jobById, type Connection } from "@/core/jobs";
+import { PROVIDER_NAME } from "@/core/providers";
 import { ruleHits } from "@/core/rules";
-import type { JobSetting, Line, Person, Priority, Rule, Source } from "@/core/types";
+import type { JobSetting, Person, Priority, Rule, Source } from "@/core/types";
 import {
-  addHandle, addPerson, addRule, clearManualPriorities, deleteRule, moveRule, removeHandle, removePerson,
-  setJobEnabled, setJobInterval, toast, togglePersonDept, useApp, type App, type RuleKind,
+  addHandle, addPerson, addRule, clearManualPriorities, deleteRule, moveRule, removeHandle, removePerson, runJobNow,
+  setChannelSelected, setJobEnabled, setJobInterval, toast, togglePersonDept, useApp, type App, type RuleKind,
 } from "@/store/store";
-
-// Nothing is connected yet. Each of these switches on when its key or login arrives.
-const CONNECTIONS: { id: Connection; name: string; what: string; waiting: string }[] = [
-  { id: "slack", name: "Slack", what: "Reads your messages and sends your replies from your own account.", waiting: "Waiting for Jeremy's Slack token" },
-  { id: "telegram", name: "Telegram", what: "Reads the chats you choose.", waiting: "Jeremy logs in once the dashboard is live" },
-  { id: "fathom", name: "Fathom", what: "Your recorded calls with notes, transcript and action items.", waiting: "Waiting for the Fathom API key" },
-  { id: "ai", name: "AI", what: "Finds the tasks in new messages. Nothing else uses AI.", waiting: "Waiting for an AI API key" },
-];
-const CONNECTION_NAME = Object.fromEntries(CONNECTIONS.map((c) => [c.id, c.name])) as Record<Connection, string>;
-
-function Connections() {
-  return (
-    <div className="panel set-sec" id="connections">
-      <div className="panel-head">
-        <h3>Connections</h3>
-      </div>
-      <p className="set-intro">Where your messages and calls come from. Until these are connected, the dashboard shows sample data.</p>
-      <ul className="conn">
-        {CONNECTIONS.map((c) => (
-          <li key={c.id}>
-            <div>
-              <div style={{ fontWeight: 600 }}>{c.name}</div>
-              <div className="what">{c.what}</div>
-            </div>
-            <span className="chip" title={c.waiting}>
-              Not connected
-            </span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
 
 function IntervalInput({ setting }: { setting: JobSetting }) {
   const job = jobById(setting.id);
@@ -62,13 +32,19 @@ function IntervalInput({ setting }: { setting: JobSetting }) {
 }
 
 function Timers({ app }: { app: App }) {
+  /** What a job is still waiting for, or null when it can run. */
+  const waitingFor = (needs: Connection | null): string | null => {
+    if (!needs) return null;
+    if (needs === "ai") return app.state.aiConfigured ? null : "Waiting for the AI key";
+    return app.state.connections[needs].connected ? null : `Waiting for ${PROVIDER_NAME[needs]}`;
+  };
   return (
     <div className="panel set-sec" id="timers">
       <div className="panel-head">
         <h3>Timers</h3>
       </div>
       <p className="set-intro">
-        Each check is its own small program with its own timer. Change how often it runs, or switch it off. Every timer has a fastest allowed value, so a check can never run often enough to get blocked by Slack, Telegram or Fathom.
+        Each check is its own small program with its own timer. Change how often it runs, or switch it off. Every timer has a fastest allowed value, so a check can never run often enough to get blocked by Slack, Telegram or Fathom. A check waits until its source is connected on the <Link href="/connections">Connections</Link> tab.
       </p>
       <div className="table-scroll">
         <table className="set">
@@ -80,12 +56,15 @@ function Timers({ app }: { app: App }) {
               <th>Fastest</th>
               <th>Uses AI</th>
               <th>On</th>
-              <th>Status</th>
+              <th>Last run</th>
+              <th />
             </tr>
           </thead>
           <tbody>
             {JOBS.map((job) => {
               const setting = app.state.jobs.find((j) => j.id === job.id) ?? { id: job.id, intervalMin: job.defaultMin, enabled: true };
+              const status = app.state.jobStatus[job.id];
+              const waiting = waitingFor(job.needs);
               return (
                 <tr key={job.id}>
                   <td style={{ fontWeight: 600 }}>{job.name}</td>
@@ -98,7 +77,16 @@ function Timers({ app }: { app: App }) {
                     <input type="checkbox" checked={setting.enabled} aria-label={`${job.name}: on`} onChange={(e) => setJobEnabled(job.id, e.target.checked)} />
                   </td>
                   <td>
-                    <span className="waiting">{!setting.enabled ? "Switched off" : job.needs ? `Waiting for ${CONNECTION_NAME[job.needs]}` : "Ready"}</span>
+                    <span className="waiting" style={status?.ok === false && !waiting ? { color: "var(--bad)" } : undefined}>
+                      {!setting.enabled
+                        ? "Switched off"
+                        : (waiting ?? (status?.lastRunAt ? `${ago(status.lastRunAt, app.now.getTime())} ago: ${status.message ?? (status.ok ? "done" : "failed")}` : "Not run yet"))}
+                    </span>
+                  </td>
+                  <td style={{ textAlign: "right" }}>
+                    <button className="btn" disabled={Boolean(waiting) || app.ui.running.includes(job.id)} onClick={() => void runJobNow(job.id)}>
+                      {app.ui.running.includes(job.id) ? "Running…" : "Run now"}
+                    </button>
                   </td>
                 </tr>
               );
@@ -106,6 +94,46 @@ function Timers({ app }: { app: App }) {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+function Channels({ app }: { app: App }) {
+  const [filter, setFilter] = useState("");
+  const { channels } = app.state;
+  const shown = channels.filter((c) => c.name.toLowerCase().includes(filter.trim().toLowerCase()));
+  const selected = channels.filter((c) => c.selected).length;
+  return (
+    <div className="panel set-sec" id="channels">
+      <div className="panel-head">
+        <h3>Slack channels</h3>
+        <span className="muted" style={{ fontSize: 13 }}>
+          {selected} of {channels.length} read
+        </span>
+      </div>
+      <p className="set-intro">
+        Direct and group messages are always read, and so is any message that tags you, wherever it is. Tick the channels you also want read in full. A change applies from the next check.
+      </p>
+      {channels.length === 0 ? (
+        <p className="empty">Your channels appear here once Slack is connected and the channel list has been read.</p>
+      ) : (
+        <>
+          <div style={{ padding: "0 16px 10px" }}>
+            <input className="f" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Find a channel" aria-label="Find a channel" style={{ width: "min(100%, 320px)" }} />
+          </div>
+          <ul className="channel-list">
+            {shown.map((c) => (
+              <li key={c.id}>
+                <label>
+                  <input type="checkbox" checked={c.selected} onChange={(e) => setChannelSelected(c.id, e.target.checked)} />
+                  <span>#{c.name}</span>
+                  {c.kind === "private" && <span className="chip">Private</span>}
+                </label>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </div>
   );
 }
@@ -118,6 +146,7 @@ function PersonRow({ p }: { p: Person }) {
         <div style={{ fontWeight: 600 }}>{p.name}</div>
         <div className="muted" style={{ fontSize: 13 }}>
           {p.role}
+          {!p.slackUserId && " · no Slack account linked"}
         </div>
       </td>
       <td>
@@ -169,13 +198,14 @@ function Team({ app }: { app: App }) {
   const [role, setRole] = useState("");
   const [dept, setDept] = useState<string>("Operations");
   const [handles, setHandles] = useState("");
+  const [slackUserId, setSlackUserId] = useState("");
   return (
     <div className="panel set-sec" id="team">
       <div className="panel-head">
         <h3>Team and responsibilities</h3>
       </div>
       <p className="set-intro">
-        Who could own which work. When you delegate a task, people in its department are offered first, and anyone whose responsibilities match the task is marked as the best fit.
+        Who could own which work. When you assign a task, people in its department are offered first, and anyone whose responsibilities match the task is marked as the best fit. You can also assign to anyone on Slack; they are added here the first time. Pick each person&apos;s Slack account so an assigned task can reach them.
       </p>
       <div className="table-scroll">
         <table className="set">
@@ -199,12 +229,31 @@ function Team({ app }: { app: App }) {
         onSubmit={(e) => {
           e.preventDefault();
           if (!name.trim()) return;
-          addPerson({ name: name.trim(), role: role.trim() || "Team member", depts: [dept], handles: handles.split(",").map((x) => x.trim()).filter(Boolean) });
+          addPerson({ name: name.trim(), role: role.trim() || "Team member", depts: [dept], handles: handles.split(",").map((x) => x.trim()).filter(Boolean), slackUserId: slackUserId || null });
           setName("");
           setRole("");
           setHandles("");
+          setSlackUserId("");
         }}
       >
+        <select
+          className="f"
+          value={slackUserId}
+          aria-label="Their Slack account"
+          onChange={(e) => {
+            setSlackUserId(e.target.value);
+            // Picking the Slack account fills in the name.
+            const person = app.state.slackPeople.find((p) => p.id === e.target.value);
+            if (person) setName(person.name);
+          }}
+        >
+          <option value="">Slack account…</option>
+          {app.state.slackPeople.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
         <input className="f" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" required aria-label="Name" maxLength={60} />
         <input className="f" value={role} onChange={(e) => setRole(e.target.value)} placeholder="Role" aria-label="Role" maxLength={60} />
         <select className="f" value={dept} aria-label="Department" onChange={(e) => setDept(e.target.value)}>
@@ -344,7 +393,7 @@ function RuleList<T extends string>({ app, kind, id, title, intro, outcomes, out
 export default function SettingsPage() {
   const app = useApp();
   if (!app) return null;
-  const manual = app.state.inbox.filter((c) => c.manualPri).length;
+  const manual = app.state.inbox.filter((c) => c.manualPri || c.manualMode).length;
 
   return (
     <section className="view">
@@ -352,20 +401,20 @@ export default function SettingsPage() {
         <div>
           <h2>Settings</h2>
           <div className="muted" style={{ fontSize: 14 }}>
-            What is connected, how often it checks, and the rules the dashboard follows.
+            How often it checks, who is on the team, and the rules the dashboard follows.
           </div>
         </div>
       </div>
       <nav className="set-nav" aria-label="Settings sections">
-        <a href="#connections">Connections</a>
         <a href="#timers">Timers</a>
+        <a href="#channels">Channels</a>
         <a href="#team">Team</a>
         <a href="#urgent">What is urgent</a>
-        <a href="#labels">Agency or Consulting</a>
+        <a href="#labels">Personal or Professional</a>
       </nav>
 
-      <Connections />
       <Timers app={app} />
+      <Channels app={app} />
       <Team app={app} />
 
       <RuleList<Priority>
@@ -374,27 +423,27 @@ export default function SettingsPage() {
         id="urgent"
         title="What is urgent"
         intro="Rules that decide how urgent a message is. They run top to bottom and the first match wins. A message that matches no rule is Low. A priority you set by hand in the inbox keeps your choice."
-        outcomes={[["high", "High"], ["mid", "Mid"], ["low", "Low"]]}
+        outcomes={[["high", PRIORITY_NAME.high], ["mid", PRIORITY_NAME.mid], ["low", PRIORITY_NAME.low]]}
         outcomeOf={(r) => PRIORITY_NAME[r.pri ?? "low"]}
         makeOutcome={(pri) => ({ pri })}
         footer={
           manual > 0 ? (
             <button className="linkbtn" onClick={clearManualPriorities}>
-              Reset {manual} hand-set {manual === 1 ? "priority" : "priorities"} to the rules
+              Reset {manual} hand-sorted {manual === 1 ? "chat" : "chats"} to the rules
             </button>
           ) : null
         }
       />
 
-      <RuleList<Line>
+      <RuleList<"personal" | "agency" | "consulting">
         app={app}
         kind="labelRules"
         id="labels"
-        title="Agency or Consulting"
-        intro="Rules that label a chat as Agency or Consulting. They run top to bottom and the first match wins. A chat that matches no rule is Agency."
-        outcomes={[["consulting", "Consulting"], ["agency", "Agency"]]}
-        outcomeOf={(r) => LINE_NAME[r.line ?? "agency"]}
-        makeOutcome={(line) => ({ line })}
+        title="Personal or Professional"
+        intro="Rules that decide which side of the dashboard a chat belongs to, and whether a professional chat is Agency or Consulting. They run top to bottom and the first match wins. A chat that matches no rule is Professional, Agency. A chat you move by hand in the inbox keeps your choice."
+        outcomes={[["personal", "Personal"], ["consulting", "Professional · Consulting"], ["agency", "Professional · Agency"]]}
+        outcomeOf={(r) => (r.mode === "personal" ? "Personal" : `Professional · ${LINE_NAME[r.line ?? "agency"]}`)}
+        makeOutcome={(to) => (to === "personal" ? { mode: "personal" } : { mode: "professional", line: to })}
       />
     </section>
   );

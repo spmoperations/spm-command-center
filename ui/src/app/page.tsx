@@ -5,6 +5,7 @@ import { useState } from "react";
 import { DueText, Pill, PriPill, SrcBadge } from "@/components/bits";
 import { PRIORITY_RANK } from "@/core/config";
 import { ago, daysInMonth, isoDay, parseDay, weekStart } from "@/core/dates";
+import { plainPreview } from "@/core/message-format";
 import { isMine } from "@/core/delegation";
 import { evalMetric, formatValue, STATUS_TEXT, type MetricEval } from "@/core/targets";
 import type { Task } from "@/core/types";
@@ -16,7 +17,7 @@ import {
 function FocusColumn({ app, scope, title, when, placeholder }: { app: App; scope: FocusScope; title: string; when: string; placeholder: string }) {
   const [text, setText] = useState("");
   const key = scope === "day" ? app.today : weekStart(app.now);
-  const items = app.state.focus[scope][key] ?? [];
+  const items = app.state.focus[app.ui.mode][scope][key] ?? [];
   return (
     <div className="focus-col">
       <div className="focus-head">
@@ -80,7 +81,7 @@ const host = (url: string) => {
 function LinksPanel({ app }: { app: App }) {
   const [label, setLabel] = useState("");
   const [url, setUrl] = useState("");
-  const links = app.state.links;
+  const links = app.state.links.filter((k) => k.mode === app.ui.mode);
   return (
     <div className="panel">
       <div className="panel-head">
@@ -106,7 +107,7 @@ function LinksPanel({ app }: { app: App }) {
           ))}
         </ul>
       ) : (
-        <p className="empty">No links yet. Add the resources you open every day.</p>
+        <p className="empty">No links yet. Add the pages you open every day.</p>
       )}
       <form
         className="link-add"
@@ -157,9 +158,7 @@ function TodayTask({ task, today }: { task: Task; today: string }) {
       <input type="checkbox" checked={task.done} aria-label={`Mark done: ${task.title}`} onChange={(e) => toggleTask(task.id, e.target.checked)} />
       <div className="grow">
         <div className="who">{task.title}</div>
-        <div className="txt">
-          {task.project} · {task.dept}
-        </div>
+        {task.mode === "professional" && <div className="txt">{[task.project, task.dept].filter(Boolean).join(" · ")}</div>}
       </div>
       <div style={{ display: "grid", gap: 4, justifyItems: "end" }}>
         <PriPill p={task.pri} />
@@ -172,13 +171,19 @@ function TodayTask({ task, today }: { task: Task; today: string }) {
 export default function TodayPage() {
   const app = useApp();
   if (!app) return null;
-  const { state, now, today } = app;
+  const { state, ui, now, today } = app;
+  const personal = ui.mode === "personal";
 
-  const waiting = state.inbox.filter((c) => !c.done && !c.replied && c.pri === "high").sort((a, b) => b.at - a.at);
-  const due = state.tasks.filter((t) => isMine(t) && t.due <= today);
-  const handedOff = state.tasks.filter((t) => !t.done && t.delegatedTo && t.due <= today);
+  // Professional shows what is urgent; Personal has fewer messages, so it shows them all.
+  const unanswered = state.inbox.filter((c) => c.mode === ui.mode && !c.done && !c.replied);
+  const waiting = personal
+    ? [...unanswered].sort((a, b) => PRIORITY_RANK[a.pri] - PRIORITY_RANK[b.pri] || b.at - a.at)
+    : unanswered.filter((c) => c.pri === "high").sort((a, b) => b.at - a.at);
+  const tasks = state.tasks.filter((t) => t.mode === ui.mode);
+  const due = tasks.filter((t) => isMine(t) && t.due <= today);
+  const handedOff = tasks.filter((t) => !t.done && t.delegatedTo && t.due <= today);
   // Tasks finished today stay in the list, ticked off, below the open ones.
-  const doneToday = state.tasks.filter((t) => t.done && (t.doneAt ? isoDay(new Date(t.doneAt)) === today : t.due === today));
+  const doneToday = tasks.filter((t) => t.done && (t.doneAt ? isoDay(new Date(t.doneAt)) === today : t.due === today));
   const list = [...due, ...handedOff, ...doneToday].sort(
     (a, b) =>
       Number(a.done) - Number(b.done) ||
@@ -188,7 +193,7 @@ export default function TodayPage() {
 
   const clock = { day: now.getDate(), dim: daysInMonth(now) };
   const pace = state.metrics.filter((m) => !m.parent).map((m) => evalMetric(m, state.metrics, state.logs, clock));
-  const suggested = state.suggestions.filter((g) => g.status === "new").length;
+  const suggested = state.suggestions.filter((g) => g.status === "new" && g.mode === ui.mode).length;
   const monthName = now.toLocaleString("en-US", { month: "long" });
 
   return (
@@ -203,25 +208,27 @@ export default function TodayPage() {
         </div>
       </div>
 
-      <div className="split-row">
-        <div className="panel pace-panel">
-          <div className="panel-head">
-            <h3>{monthName} pace</h3>
-            <Link href="/targets">Targets</Link>
+      {!personal && (
+        <div className="split-row">
+          <div className="panel pace-panel">
+            <div className="panel-head">
+              <h3>{monthName} pace</h3>
+              <Link href="/targets">Targets</Link>
+            </div>
+            <div className="wt-grid">
+              {pace.map((e) => (
+                <PaceRow key={e.metric.id} e={e} />
+              ))}
+            </div>
           </div>
-          <div className="wt-grid">
-            {pace.map((e) => (
-              <PaceRow key={e.metric.id} e={e} />
-            ))}
-          </div>
+          <LinksPanel app={app} />
         </div>
-        <LinksPanel app={app} />
-      </div>
+      )}
 
       <div className="today-grid">
         <div className="panel">
           <div className="panel-head">
-            <h3>Needs a reply</h3>
+            <h3>{personal ? "Messages" : "Needs a reply"}</h3>
             <Link href="/inbox">Open inbox</Link>
           </div>
           {waiting.length > 0 ? (
@@ -230,8 +237,10 @@ export default function TodayPage() {
                 <li key={c.id}>
                   <SrcBadge source={c.source} />
                   <div className="grow">
-                    <div className="who">{c.from}</div>
-                    <div className="txt">{c.text}</div>
+                    <div className="who">
+                      {c.from} {personal && <PriPill p={c.pri} />}
+                    </div>
+                    <div className="txt">{plainPreview(c.text)}</div>
                   </div>
                   <div style={{ display: "grid", gap: 4, justifyItems: "end" }}>
                     <span className="num muted" style={{ fontSize: 12 }}>
@@ -245,13 +254,13 @@ export default function TodayPage() {
               ))}
             </ul>
           ) : (
-            <p className="empty">No high-priority messages waiting.</p>
+            <p className="empty">{personal ? "No personal messages waiting." : "No high-priority messages waiting."}</p>
           )}
         </div>
 
         <div className="panel">
           <div className="panel-head">
-            <h3>Tasks due today</h3>
+            <h3>{personal ? "Personal tasks due" : "Tasks due today"}</h3>
             <span className="muted" style={{ fontSize: 13 }}>
               {doneToday.length} of {due.length + doneToday.length} done · <Link href="/tasks">All tasks</Link>
             </span>
@@ -272,6 +281,12 @@ export default function TodayPage() {
           )}
         </div>
       </div>
+
+      {personal && (
+        <div style={{ marginTop: 18 }}>
+          <LinksPanel app={app} />
+        </div>
+      )}
     </section>
   );
 }

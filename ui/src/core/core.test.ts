@@ -1,14 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { addDays, dueLabel, weekStart } from "./dates";
-import { candidates, canDelegate, fitFor, taskStatus } from "./delegation";
+import { assignmentText, candidates, canAssign, canAssignInChat, fitFor, taskStatus } from "./delegation";
 import { clampInterval, describeInterval, isDue, JOBS, nextRunAt, waitUntil } from "./jobs";
+import { looksLikeRequest, requestDue, requestSummary, whereAsked } from "./requests";
+import { checkFathomKey, checkPhone, checkSlackToken, checkTelegramCode, maskPhone, normalizePhone, SLACK_CREATE_APP_URL } from "./providers";
 import { applyRules, ruleHits, ruleMatches, sortConversation } from "./rules";
 import { evalMetric } from "./targets";
 import type { Conversation, JobSetting, Metric, Person, Rule, Task } from "./types";
 
 const conv = (over: Partial<Conversation>): Conversation => ({
   id: "c1", source: "slack", from: "Maya Chen", ctx: "#harbor-realty-content", direct: false, tagged: false,
-  text: "hi", at: 0, pri: "low", line: "agency", project: "Harbor Realty", done: false, replied: false, thread: [], ...over,
+  text: "hi", at: 0, pri: "low", line: "agency", mode: "professional", project: "Harbor Realty", done: false, replied: false, thread: [], ...over,
 });
 
 const rule = (over: Partial<Rule>): Rule => ({ id: "r", source: "any", when: "ctx", op: "is", value: "", ...over });
@@ -35,9 +37,9 @@ describe("sorting rules", () => {
   });
 
   it("uses the first matching rule and falls back to Low and Agency", () => {
-    expect(sortConversation(conv({ tagged: true, direct: true }), labelRules, priorityRules)).toEqual({ line: "agency", pri: "high" });
+    expect(sortConversation(conv({ tagged: true, direct: true }), labelRules, priorityRules)).toEqual({ mode: "professional", line: "agency", pri: "high" });
     expect(sortConversation(conv({ ctx: "Direct message", direct: true }), labelRules, priorityRules).pri).toBe("mid");
-    expect(sortConversation(conv({ ctx: "#sales" }), labelRules, priorityRules)).toEqual({ line: "agency", pri: "low" });
+    expect(sortConversation(conv({ ctx: "#sales" }), labelRules, priorityRules)).toEqual({ mode: "professional", line: "agency", pri: "low" });
     expect(sortConversation(conv({ ctx: "#consulting-omar" }), labelRules, priorityRules).line).toBe("consulting");
   });
 
@@ -49,6 +51,13 @@ describe("sorting rules", () => {
     );
     expect(kept.pri).toBe("high");
     expect(resorted.pri).toBe("low");
+  });
+
+  it("files a chat under Personal when a rule says so, and keeps a side that was picked by hand", () => {
+    const withMom = [rule({ id: "l0", when: "from", value: "Mom", mode: "personal" }), ...labelRules];
+    expect(sortConversation(conv({ from: "Mom", ctx: "Direct message", direct: true }), withMom, priorityRules).mode).toBe("personal");
+    const [kept, resorted] = applyRules([conv({ id: "a", mode: "personal", manualMode: true }), conv({ id: "b", mode: "personal" })], withMom, priorityRules);
+    expect([kept.mode, resorted.mode]).toEqual(["personal", "professional"]);
   });
 
   it("counts each conversation against the first rule it matches", () => {
@@ -64,7 +73,7 @@ describe("delegation", () => {
     { id: "u3", name: "Rene Park", role: "Bookkeeper", depts: ["Finances"], handles: ["Invoices"] },
   ];
   const task = (over: Partial<Task>): Task => ({
-    id: "t", title: "Swap hook on Harbor clip #4", dept: "Client Sales", project: "Harbor Realty", pri: "high",
+    id: "t", title: "Swap hook on Harbor clip #4", mode: "professional", dept: "Client Sales", project: "Harbor Realty", pri: "high",
     due: "2026-10-09", done: false, delegable: true, ...over,
   });
 
@@ -79,18 +88,64 @@ describe("delegation", () => {
     expect(candidates(team, task({}), true)).toHaveLength(3);
   });
 
-  it("does not offer delegation for owner-only, done or already delegated tasks", () => {
-    expect(canDelegate(team, task({}))).toBe(true);
-    expect(canDelegate(team, task({ delegable: false }))).toBe(false);
-    expect(canDelegate(team, task({ done: true }))).toBe(false);
-    expect(canDelegate(team, task({ delegatedTo: { personId: "u1", name: "Luis Ramos", role: "", note: "", at: 0 } }))).toBe(false);
-    expect(canDelegate([], task({}))).toBe(false);
+  it("lets any open work task be assigned, but not one that is owner-only, done or already assigned", () => {
+    expect(canAssign(task({}))).toBe(true);
+    expect(canAssign(task({ dept: "Finances", title: "Something nobody on the team list covers" }))).toBe(true);
+    expect(canAssign(task({ delegable: false }))).toBe(false);
+    expect(canAssign(task({ done: true }))).toBe(false);
+    expect(canAssign(task({ delegatedTo: { personId: "u1", name: "Luis Ramos", role: "", note: "", at: 0 } }))).toBe(false);
+  });
+
+  it("keeps personal tasks with the owner", () => {
+    expect(canAssign(task({ mode: "personal" }))).toBe(false);
+  });
+
+  it("can announce an assignment in a channel or a group message, but not in a one-to-one chat", () => {
+    expect([canAssignInChat({ ctx: "#sales" }), canAssignInChat({ ctx: "Group message" }), canAssignInChat({ ctx: "Direct message" }), canAssignInChat({ ctx: "App notification" })]).toEqual([true, true, false, false]);
+  });
+
+  it("words the message for a direct message, and tags the person when it goes in a chat", () => {
+    const about = { title: "Swap the hook", due: "2026-10-12" };
+    expect(assignmentText({ ...about, where: "dm", who: "Luis Ramos", note: "" })).toBe("New task for you: Swap the hook (due 2026-10-12)");
+    expect(assignmentText({ ...about, where: "chat", who: "<@ULUIS>", note: "Use the new one." })).toBe("<@ULUIS> new task for you: Swap the hook (due 2026-10-12)\n\nUse the new one.");
   });
 
   it("marks a task overdue only before its due day", () => {
     expect(taskStatus(task({ due: "2026-10-08" }), "2026-10-08")).toBe("ontrack");
     expect(taskStatus(task({ due: "2026-10-07" }), "2026-10-08")).toBe("overdue");
     expect(taskStatus(task({ due: "2026-10-07", done: true }), "2026-10-08")).toBe("done");
+  });
+});
+
+describe("requests in messages", () => {
+  it("spots a question or an ask, and ignores chatter, pings and links", () => {
+    expect(looksLikeRequest("Are you joining the call tomorrow?")).toBe(true);
+    expect(looksLikeRequest("when you get a chance could you please send Dana the contract")).toBe(true);
+    expect(looksLikeRequest("lmk what you think")).toBe(true);
+    expect(looksLikeRequest("Following up on the contract")).toBe(true);
+    expect(looksLikeRequest("Hey @Jeremy Moser")).toBe(false);
+    expect(looksLikeRequest("Booked 2 more discovery calls for tomorrow.")).toBe(false);
+    expect(looksLikeRequest("here it is https://docs.google.com/spreadsheets/d/abc/edit?gid=42")).toBe(false);
+    expect(looksLikeRequest("ok?")).toBe(false);
+  });
+
+  it("takes the due day from the message, and says tomorrow when it names none", () => {
+    const thursday = new Date("2026-10-08T12:00:00");
+    expect(requestDue("need this asap", thursday)).toBe("2026-10-08");
+    expect(requestDue("can we talk tomorrow", thursday)).toBe("2026-10-09");
+    expect(requestDue("Can we swap the hook before Friday?", thursday)).toBe("2026-10-09");
+    expect(requestDue("by monday please", thursday)).toBe("2026-10-12");
+    expect(requestDue("thoughts on this", thursday)).toBe("2026-10-09");
+  });
+
+  it("sums the request up without links or the owner's own tag", () => {
+    expect(requestSummary("https://docs.google.com/spreadsheets/d/abc/edit?gid=42 @Jeremy Moser when you get a chance could you please send Dana the contract", "@Jeremy Moser")).toBe("when you get a chance could you please send Dana the contract");
+    expect(requestSummary("@Jeremy Moser https://a.co/x", "@Jeremy Moser")).toBe("@Jeremy Moser a.co/x");
+    expect(requestSummary("word ".repeat(40), "@Jeremy Moser", 20)).toBe("word word word word…");
+  });
+
+  it("says where the request was made", () => {
+    expect([whereAsked("#sales"), whereAsked("Direct message"), whereAsked("Group message")]).toEqual(["in #sales", "in a direct message", "in a group message"]);
   });
 });
 
@@ -183,5 +238,47 @@ describe("dates", () => {
     expect(dueLabel("2026-10-06", today)).toEqual({ text: "2d overdue", tone: "over" });
     expect(dueLabel("2026-10-12", today).text).toBe("Mon");
     expect(dueLabel("2026-10-20", today).text).toBe("Oct 20");
+  });
+});
+
+describe("connection forms", () => {
+  it("accepts only a Slack user token", () => {
+    expect(checkSlackToken("xoxp-1234567890-abcdefghij")).toBeNull();
+    expect(checkSlackToken("  ")).toMatch(/Paste the token/);
+    expect(checkSlackToken("xoxb-1234567890-abcdefghij")).toMatch(/bot token/);
+    expect(checkSlackToken("1234567890-abcdefghij")).toMatch(/starts with xoxp-/);
+    expect(checkSlackToken("xoxp-123")).toMatch(/cut off/);
+  });
+
+  it("rejects an empty or cut-off Fathom key", () => {
+    expect(checkFathomKey("a1b2c3d4e5f6g7h8")).toBeNull();
+    expect(checkFathomKey("")).toMatch(/Paste the API key/);
+    expect(checkFathomKey("abc 123 def 456")).toMatch(/cut off/);
+  });
+
+  it("reads a phone number with its country code, however it is spaced", () => {
+    expect(normalizePhone("+44 7700 900123")).toBe("+447700900123");
+    expect(normalizePhone("+1 (415) 555-0100")).toBe("+14155550100");
+    expect(checkPhone("07700 900123")).toMatch(/country code/);
+    expect(checkPhone("+44 7700 900123")).toBeNull();
+  });
+
+  it("masks a phone number so it can be recognised but not copied", () => {
+    expect(maskPhone("+44 7700 900123")).toBe("+44 •••• 0123");
+    expect(maskPhone("not a number")).toBe("");
+  });
+
+  it("takes a 5-digit Telegram code", () => {
+    expect(checkTelegramCode(" 12345 ")).toBeNull();
+    expect(checkTelegramCode("1234")).toMatch(/5 digits/);
+    expect(checkTelegramCode("12a45")).toMatch(/5 digits/);
+  });
+
+  it("builds a Slack link that carries the whole manifest", () => {
+    const manifest = decodeURIComponent(SLACK_CREATE_APP_URL.split("manifest_yaml=")[1]);
+    expect(SLACK_CREATE_APP_URL.startsWith("https://api.slack.com/apps?new_app=1&manifest_yaml=")).toBe(true);
+    expect(manifest).toContain("name: SPM Command Center");
+    for (const scope of ["im:history", "chat:write", "im:write", "search:read"]) expect(manifest).toContain(`- ${scope}`);
+    expect(manifest).not.toContain("bot");
   });
 });

@@ -1,8 +1,10 @@
 // The checks the Command Center runs. Each one is its own small script with its own timer,
 // set from Settings. Only `task-suggest` calls an AI model; everything else is plain code.
-import type { JobId, JobSetting } from "./types";
+// Listed in the order they run: sorting before the request finder, which uses the priority.
+import type { JobId, JobSetting, Provider } from "./types";
 
-export type Connection = "slack" | "telegram" | "fathom" | "ai";
+/** What a job needs before it can run: a provider the person connects, or the AI key set on the server. */
+export type Connection = Provider | "ai";
 
 export interface JobDefinition {
   id: JobId;
@@ -25,7 +27,8 @@ export const JOBS: JobDefinition[] = [
   { id: "telegram-pull", name: "Gets new Telegram messages", tab: "Inbox", defaultMin: 60, minMin: 30, usesAI: false, needs: "telegram" },
   { id: "fathom-pull", name: "Gets new calls from Fathom", tab: "Meetings", defaultMin: 60, minMin: 15, usesAI: false, needs: "fathom" },
   { id: "inbox-rules", name: "Marks what is urgent, adds labels", tab: "Inbox", defaultMin: 60, minMin: 5, usesAI: false, needs: null, follows: ["slack-pull", "telegram-pull"] },
-  { id: "task-suggest", name: "Finds tasks in your messages", tab: "Tasks", defaultMin: 60, minMin: 15, usesAI: true, needs: "ai" },
+  { id: "request-finder", name: "Finds messages that ask you for something", tab: "Tasks", defaultMin: 60, minMin: 5, usesAI: false, needs: null, follows: ["slack-pull", "telegram-pull"] },
+  { id: "task-suggest", name: "Finds other tasks in your messages", tab: "Tasks", defaultMin: 60, minMin: 15, usesAI: true, needs: "ai" },
   { id: "slack-directory-sync", name: "Updates your channel and team list", tab: "Settings", defaultMin: 1440, minMin: 60, usesAI: false, needs: "slack" },
   { id: "outbox-retry", name: "Retries anything that failed to send", tab: "Inbox", defaultMin: 1, minMin: 1, usesAI: false, needs: null },
 ];
