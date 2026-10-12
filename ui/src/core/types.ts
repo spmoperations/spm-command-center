@@ -251,6 +251,8 @@ export interface AppState {
   channels: Channel[];
   /** People in the Slack workspace, for linking team members. */
   slackPeople: { id: string; name: string }[];
+  /** Profile picture addresses by the name a person's messages carry. A name with no entry gets initials. */
+  avatars: Record<string, string>;
   owner: { name: string };
   /** False while replies are held in the outbox and not sent. */
   sendingEnabled: boolean;

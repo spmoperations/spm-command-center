@@ -8,7 +8,16 @@ import type { Db } from "@/server/db";
 import { RateLimited, type SlackClient } from "@/server/slack";
 import type { JobContext, JobResult } from "./runner";
 
-interface SlackUser { id: string; name?: string; real_name?: string; deleted?: boolean; is_bot?: boolean; is_app_user?: boolean; profile?: { real_name?: string; display_name?: string; email?: string } }
+interface SlackUser { id: string; name?: string; real_name?: string; deleted?: boolean; is_bot?: boolean; is_app_user?: boolean; profile?: { real_name?: string; display_name?: string; email?: string; image_72?: string; image_48?: string } }
+
+/** People outside the workspace whose picture is looked up in one run. Each is one request to Slack. */
+const PICTURES_PER_RUN = 60;
+
+/** The address of a person's profile picture, at a size that suits a small round icon. Only https addresses are kept. */
+const pictureOf = (u: SlackUser): string | null => {
+  const url = u.profile?.image_72 || u.profile?.image_48 || "";
+  return url.startsWith("https://") ? url : null;
+};
 interface SlackChannel { id: string; name?: string; user?: string; is_im?: boolean; is_mpim?: boolean; is_private?: boolean; is_group?: boolean }
 
 export async function slackDirectorySync({ db, ownerId }: JobContext, slack: SlackClient): Promise<JobResult> {
@@ -23,13 +32,14 @@ export async function slackDirectorySync({ db, ownerId }: JobContext, slack: Sla
       email: u.profile?.email ?? null,
       is_bot: Boolean(u.is_bot || u.is_app_user) || u.id === "USLACKBOT",
       deleted: Boolean(u.deleted),
+      image: pictureOf(u),
     }]),
   );
   await db.run(
-    `insert into slack_users (owner_id, id, name, email, is_bot, deleted)
-     select $1, r.id, r.name, r.email, r.is_bot, r.deleted
-     from jsonb_to_recordset($2::jsonb) as r(id text, name text, email text, is_bot boolean, deleted boolean)
-     on conflict (owner_id, id) do update set name = excluded.name, email = excluded.email, is_bot = excluded.is_bot, deleted = excluded.deleted`,
+    `insert into slack_users (owner_id, id, name, email, is_bot, deleted, image)
+     select $1, r.id, r.name, r.email, r.is_bot, r.deleted, r.image
+     from jsonb_to_recordset($2::jsonb) as r(id text, name text, email text, is_bot boolean, deleted boolean, image text)
+     on conflict (owner_id, id) do update set name = excluded.name, email = excluded.email, is_bot = excluded.is_bot, deleted = excluded.deleted, image = excluded.image`,
     [ownerId, JSON.stringify([...people.values()])],
   );
   const self = users.find((u) => u.id === me.user_id);
@@ -45,6 +55,22 @@ export async function slackDirectorySync({ db, ownerId }: JobContext, slack: Sla
      on conflict (owner_id, id) do update set name = excluded.name, kind = excluded.kind, user_id = excluded.user_id`,
     [ownerId, JSON.stringify([...places.values()])],
   );
+  // People from other companies, in shared channels, are not in the member list. They were
+  // looked up one at a time when first seen; those still without a picture get another look.
+  // An empty address means "asked, and there is none", so nobody is asked about twice.
+  const strangers = await db.query<{ id: string }>(
+    "select id from slack_users where owner_id = $1 and image is null and not deleted and id not in (select jsonb_array_elements_text($2::jsonb)) limit $3",
+    [ownerId, JSON.stringify([...people.keys()]), PICTURES_PER_RUN],
+  );
+  for (const { id } of strangers) {
+    let image = "";
+    try {
+      image = pictureOf((await slack.call<{ user: SlackUser }>("users.info", { user: id })).user) ?? "";
+    } catch (error) {
+      if (error instanceof RateLimited) throw error;
+    }
+    await db.run("update slack_users set image = $1 where owner_id = $2 and id = $3", [image, ownerId, id]);
+  }
   return { items: users.length + channels.length, message: `${users.length} people, ${channels.length} conversations` };
 }
 
@@ -59,7 +85,7 @@ interface SearchMatch {
   permalink?: string;
   channel: { id: string; name?: string; is_im?: boolean; is_mpim?: boolean; is_private?: boolean; is_group?: boolean };
 }
-interface HistoryMessage { ts: string; thread_ts?: string; text?: string; user?: string; username?: string; subtype?: string; bot_id?: string; user_profile?: { real_name?: string; display_name?: string }; files?: unknown[]; attachments?: unknown }
+interface HistoryMessage { ts: string; thread_ts?: string; reply_count?: number; text?: string; user?: string; username?: string; subtype?: string; bot_id?: string; user_profile?: { real_name?: string; display_name?: string }; files?: unknown[]; attachments?: unknown }
 
 // How far back the first read goes, and how many pages of 100 messages one run may read.
 // Both can be turned down in the environment while developing.
@@ -110,7 +136,7 @@ async function learnName(db: Db, ownerId: string, look: Lookup, slack: SlackClie
     const { user } = await slack.call<{ user: SlackUser }>("users.info", { user: userId });
     name = user.profile?.real_name || user.real_name || user.profile?.display_name || user.name || name;
     const app = Boolean(user.is_bot || user.is_app_user);
-    await db.run("insert into slack_users (owner_id, id, name, is_bot) values ($1, $2, $3, $4) on conflict (owner_id, id) do update set name = excluded.name", [ownerId, userId, name, app]);
+    await db.run("insert into slack_users (owner_id, id, name, is_bot, image) values ($1, $2, $3, $4, $5) on conflict (owner_id, id) do update set name = excluded.name, image = excluded.image", [ownerId, userId, name, app, pictureOf(user)]);
     if (app) look.apps.add(userId);
   } catch (error) {
     // A person Slack will not describe is shown as "Someone"; a rate limit still stops the job.
@@ -160,6 +186,57 @@ export async function refreshConversation(db: Db, conversationId: string, look: 
       conversationId,
     ],
   );
+}
+
+/** Messages of an open conversation that are checked for replies, newest first. */
+const CHECKED_MESSAGES = 40;
+/** Threads read in one check. Each is one request to Slack. */
+const CHECKED_THREADS = 10;
+
+/**
+ * Reads the threads under the messages of one conversation, when a person opens it.
+ *
+ * The hourly check only brings in a thread when the owner is tagged in it or it is in a chat
+ * they follow. The other messages on screen may have replies in Slack too. This asks Slack
+ * once which of them do, and reads the threads the dashboard does not have in full yet.
+ * Returns how many messages were added.
+ */
+export async function slackReadThreads({ db, ownerId }: Pick<JobContext, "db" | "ownerId">, slack: SlackClient, conversationId: string): Promise<number> {
+  const [conversation] = await db.query<{ external_id: string }>("select external_id from conversations where owner_id = $1 and id = $2 and source = 'slack'", [ownerId, conversationId]);
+  if (!conversation) return 0;
+  // The messages that could have a thread under them, with how many replies are here already.
+  const onScreen = await db.query<{ external_id: string; replies: number }>(
+    `select m.external_id,
+            (select count(*)::int from messages r where r.conversation_id = m.conversation_id and r.thread_ts = m.external_id and r.external_id <> m.external_id) as replies
+     from messages m
+     where m.conversation_id = $1 and m.external_id is not null and (m.thread_ts is null or m.thread_ts = m.external_id)
+     order by m.at desc limit $2`,
+    [conversationId, CHECKED_MESSAGES],
+  );
+  if (!onScreen.length) return 0;
+
+  const oldest = onScreen.reduce((min, m) => (Number(m.external_id) < Number(min) ? m.external_id : min), onScreen[0].external_id);
+  const history = await slack.call<{ messages: HistoryMessage[] }>("conversations.history", { channel: conversation.external_id, oldest, inclusive: true, limit: 200 });
+  const inSlack = new Map(history.messages.map((m) => [m.ts, m.reply_count ?? 0]));
+  const behind = onScreen.filter((m) => (inSlack.get(m.external_id) ?? 0) > m.replies).slice(0, CHECKED_THREADS);
+  if (!behind.length) return 0;
+
+  const look = await lookup(db, ownerId);
+  let added = 0;
+  for (const m of behind) {
+    const res = await slack.call<{ messages: HistoryMessage[] }>("conversations.replies", { channel: conversation.external_id, ts: m.external_id, limit: 200 });
+    for (const reply of res.messages) {
+      if (reply.subtype && reply.subtype !== "thread_broadcast") continue;
+      for (const id of [reply.user, ...mentionedIds(reply.text ?? "")]) await learnName(db, ownerId, look, slack, id);
+      if (await storeMessage(db, ownerId, conversationId, look, reply, m.external_id)) added++;
+    }
+  }
+  if (added) {
+    const known = look.channels.get(conversation.external_id);
+    const kind = known?.kind ?? "public";
+    await refreshConversation(db, conversationId, { kind, partner: kind === "im" ? (look.names.get(known?.userId ?? "") ?? null) : null }, false);
+  }
+  return added;
 }
 
 export async function slackPull({ db, ownerId, now, cursor }: JobContext, slack: SlackClient): Promise<JobResult> {

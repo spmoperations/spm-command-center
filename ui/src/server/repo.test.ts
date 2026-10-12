@@ -24,7 +24,7 @@ beforeEach(async () => {
 
 describe("database", () => {
   it("applies each migration once and records it", async () => {
-    expect(await db.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }]);
+    expect(await db.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }]);
     expect(await migrate(db)).toEqual([]);
   });
 
@@ -60,8 +60,8 @@ describe("database", () => {
   it("accepts a first schema that was run by hand, then applies what came after", async () => {
     const fresh = await openDb(undefined, { migrate: false });
     for (const statement of splitStatements(fs.readFileSync("db/migrations/0001_init.sql", "utf8"))) await fresh.run(statement);
-    expect(await migrate(fresh)).toEqual(["0002_row_level_security.sql", "0003_personal_and_requests.sql", "0004_threads.sql"]);
-    expect(await fresh.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }]);
+    expect(await migrate(fresh)).toEqual(["0002_row_level_security.sql", "0003_personal_and_requests.sql", "0004_threads.sql", "0005_slack_pictures.sql"]);
+    expect(await fresh.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }]);
     expect(await fresh.query("select relrowsecurity from pg_class where relname = 'messages'")).toEqual([{ relrowsecurity: true }]);
     await fresh.close();
   });
@@ -73,7 +73,7 @@ describe("database", () => {
     }
     await migrate(fresh);
     expect(await fresh.query("select relname from pg_class where relnamespace = 'public'::regnamespace and relkind = 'r' and not relrowsecurity")).toEqual([]);
-    expect(await fresh.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }]);
+    expect(await fresh.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }]);
     expect(await fresh.query("select mode, asked from messages m join conversations c on c.id = m.conversation_id")).toEqual([]);
     await fresh.close();
   });
@@ -513,6 +513,20 @@ describe("reading the inbox", () => {
     expect(long).toHaveLength(30);
     expect([long[0].text, long.at(-1)!.text]).toEqual(["update 10", "update 39"]);
     expect(inbox.find((c) => c.id === "slack:D1")!.thread).toHaveLength(1);
+  });
+});
+
+describe("profile pictures", () => {
+  it("hands the screens each person's picture by the name on their messages, preferring someone current", async () => {
+    await db.run(
+      `insert into slack_users (owner_id, id, name, is_bot, deleted, image) values
+         ($1, 'U1', 'Maya Chen', false, false, 'https://pics.example/maya.png'),
+         ($1, 'U2', 'Priya', false, true, 'https://pics.example/priya-who-left.png'),
+         ($1, 'U3', 'Priya', false, false, 'https://pics.example/priya.png'),
+         ($1, 'U4', 'Luis Ramos', false, false, null)`,
+      [OWNER_ID],
+    );
+    expect((await state()).avatars).toEqual({ "Maya Chen": "https://pics.example/maya.png", Priya: "https://pics.example/priya.png" });
   });
 });
 

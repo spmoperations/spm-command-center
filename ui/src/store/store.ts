@@ -25,6 +25,8 @@ export interface UiState {
   saving: number;
   /** True while "Sync now" is reading everything. */
   syncing: boolean;
+  /** Conversations whose threads are being read from Slack right now. */
+  checking: string[];
 }
 
 export interface App {
@@ -38,7 +40,7 @@ export interface App {
 const REFRESH_MS = 60_000;
 
 let app: App | null = null;
-let ui: UiState = { mode: "professional", openConversation: null, openTask: null, openMeetings: [], toast: null, running: [], saving: 0, syncing: false };
+let ui: UiState = { mode: "professional", openConversation: null, openTask: null, openMeetings: [], toast: null, running: [], saving: 0, syncing: false, checking: [] };
 let started = false;
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((l) => l());
@@ -193,6 +195,29 @@ const inSuggestions = (id: string, patch: Partial<Suggestion>) => (s: AppState):
 // ---------- Inbox ----------
 
 export const openConversation = (id: string | null) => setUi({ openConversation: id });
+
+// When each conversation's threads were last read, so opening and closing it does not ask Slack every time.
+const threadsRead = new Map<string, number>();
+const THREADS_EVERY_MS = 2 * 60_000;
+
+/**
+ * Reads the threads under an open conversation's messages from Slack. The hourly check only
+ * brings in threads the owner is part of; this fills in the rest for the one being looked at.
+ */
+export async function readThreads(id: string) {
+  if (!id.startsWith("slack:") || Date.now() - (threadsRead.get(id) ?? 0) < THREADS_EVERY_MS) return;
+  threadsRead.set(id, Date.now());
+  setUi({ checking: [...ui.checking, id] });
+  try {
+    const { state } = await request<{ added: number; state?: AppState }>("/api/threads", { id });
+    if (state) setState(state);
+  } catch {
+    // Not worth interrupting the person: what is already on screen stays, and it is tried again later.
+    threadsRead.delete(id);
+  } finally {
+    setUi({ checking: ui.checking.filter((x) => x !== id) });
+  }
+}
 
 export const setConversationPriority = (id: string, pri: Priority) => void act("setConversationPriority", [id, pri], undefined, inInbox(id, { pri }));
 export const setConversationMode = (id: string, mode: Mode) => void act("setConversationMode", [id, mode], mode === "personal" ? "Moved to Personal" : "Moved to Professional", inInbox(id, { mode }));

@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { DueText, Pill, PriPill, SrcBadge } from "@/components/bits";
+import { Avatar } from "@/components/MessageText";
+import { DueText, Pill, PriPill } from "@/components/bits";
 import { DEPARTMENTS, PRIORITY_RANK, TARGETS } from "@/core/config";
 import { ago, daysInMonth, isoDay, parseDay, weekStart } from "@/core/dates";
 import { plainPreview } from "@/core/message-format";
@@ -237,7 +238,7 @@ export default function TodayPage() {
             <ul className="mini-list">
               {waiting.slice(0, 4).map((c) => (
                 <li key={c.id}>
-                  <SrcBadge source={c.source} />
+                  <Avatar name={c.from} src={state.avatars[c.from]} small />
                   <div className="grow">
                     <div className="who">
                       {c.from} {personal && <PriPill p={c.pri} />}

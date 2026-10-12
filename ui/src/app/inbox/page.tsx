@@ -3,8 +3,8 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { DelegateForm } from "@/components/DelegateForm";
-import { MessageText } from "@/components/MessageText";
-import { PriPill, PrioritySelect, Seg, SrcBadge } from "@/components/bits";
+import { Avatar, MessageText } from "@/components/MessageText";
+import { PriPill, PrioritySelect, Seg } from "@/components/bits";
 import { LINE_NAME, LIVE_SOURCES, MODE_NAME, MODES, PERSONAL_SIDE, PRIORITIES, PRIORITY_NAME, SOURCE_NAME } from "@/core/config";
 import { ago, stamp } from "@/core/dates";
 import { plainPreview } from "@/core/message-format";
@@ -13,18 +13,22 @@ import { groupByThread, threadToAnswer } from "@/core/threads";
 import { canAssignInChat } from "@/core/delegation";
 import type { Conversation, Line, Mode, Priority, Source, ThreadMessage } from "@/core/types";
 import {
-  conversationToTask, delegateConversation, markConversationDone, openConversation, restoreInbox, sendReply,
+  conversationToTask, delegateConversation, markConversationDone, openConversation, readThreads, restoreInbox, sendReply,
   setConversationMode, setConversationPriority, toast, useApp, type App,
 } from "@/store/store";
 
 /** One message in the conversation. */
 function Bubble({ b, c, app }: { b: ThreadMessage; c: Conversation; app: App }) {
+  const who = b.me ? app.state.owner.name : (b.from ?? c.from);
   return (
-    <div className={`bubble ${b.me ? "me" : ""}`}>
-      <MessageText text={b.text} />
-      <div className="bmeta">
-        {b.me ? "You" : (b.from ?? c.from)} · {stamp(b.at, app.now)}
-        {b.status === "queued" && <span className="queued">{app.state.sendingEnabled ? "Sending" : "Saved, not sent"}</span>}
+    <div className={`brow ${b.me ? "me" : ""}`}>
+      {!b.me && <Avatar name={who} src={app.state.avatars[who]} small />}
+      <div className={`bubble ${b.me ? "me" : ""}`}>
+        <MessageText text={b.text} />
+        <div className="bmeta">
+          {b.me ? "You" : who} · {stamp(b.at, app.now)}
+          {b.status === "queued" && <span className="queued">{app.state.sendingEnabled ? "Sending" : "Saved, not sent"}</span>}
+        </div>
       </div>
     </div>
   );
@@ -46,8 +50,13 @@ function Thread({ c, app, draft, onDraft }: { c: Conversation; app: App; draft: 
   useEffect(() => {
     field.current?.focus({ preventScroll: true });
   }, []);
+  // The other messages here may have replies in Slack that were never read: fetch them now.
+  useEffect(() => {
+    void readThreads(c.id);
+  }, [c.id]);
 
   const groups = groupByThread(c.thread);
+  const checking = app.ui.checking.includes(c.id);
   // By default a reply goes where the latest message from someone else is: into its thread.
   const target = picked ?? threadToAnswer(c.thread) ?? "";
   const into = target ? groups.find((g) => g.key === target) : undefined;
@@ -71,6 +80,7 @@ function Thread({ c, app, draft, onDraft }: { c: Conversation; app: App; draft: 
     <div className="thread">
       <div className="bubbles" ref={box}>
         {groups.length === 0 && <p className="muted">No messages in this conversation yet.</p>}
+        {checking && <p className="checking">Checking Slack for replies under these messages…</p>}
         {groups.map((g) => (
           <div className={`tgroup ${into?.key === g.key ? "answering" : ""}`} key={g.key}>
             {g.first && <Bubble b={g.first} c={c} app={app} />}
@@ -160,7 +170,7 @@ function MessageRow({ c, app, open, draft, onDraft }: { c: Conversation; app: Ap
   const canDelegate = c.mode === "professional";
   return (
     <div className={`msg ${c.replied ? "replied" : ""} ${open || delegating ? "open" : ""}`} ref={row}>
-      <SrcBadge source={c.source} />
+      <Avatar name={c.from} src={app.state.avatars[c.from]} />
       <div style={{ minWidth: 0 }}>
         <div className="line1">
           <span className="who">{c.from}</span>

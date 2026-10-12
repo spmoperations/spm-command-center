@@ -192,6 +192,7 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     connections,
     channels,
     slackPeople,
+    pictures,
     projects,
     inbox,
     meetings,
@@ -217,6 +218,8 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     db.query<{ provider: Provider; label: string | null; connected_at: number }>("select provider, label, connected_at from connections where owner_id = $1", [ownerId]),
     db.query<{ id: string; name: string; kind: "public" | "private"; selected: boolean }>("select id, name, kind, selected from slack_channels where owner_id = $1 and kind in ('public', 'private') order by name", [ownerId]),
     db.query<{ id: string; name: string }>("select id, name from slack_users where owner_id = $1 and not is_bot and not deleted order by name", [ownerId]),
+    // Apps and people who have left come first, so someone current with the same name wins.
+    db.query<{ name: string; image: string }>("select name, image from slack_users where owner_id = $1 and image <> '' order by (not deleted) asc, (not is_bot) asc", [ownerId]),
     db.query<{ project: string }>(
       "select distinct project from (select project from tasks where owner_id = $1 union select project from meetings where owner_id = $1 union select project from conversations where owner_id = $1) p where project <> '' order by project",
       [ownerId],
@@ -263,6 +266,7 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     jobStatus,
     channels,
     slackPeople,
+    avatars: Object.fromEntries(pictures.map((p) => [p.name, p.image])),
     owner: { name: owner?.name ?? "You" },
     sendingEnabled: sendingEnabled(),
     aiConfigured: aiConfigured(),

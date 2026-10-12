@@ -1,3 +1,6 @@
+"use client";
+
+import { useState } from "react";
 import { formatMessage, hueFor, initials, type Inline } from "@/core/message-format";
 
 function Pieces({ row }: { row: Inline[] }) {
@@ -60,10 +63,21 @@ export function MessageText({ text }: { text: string }) {
   );
 }
 
-/** A person's initials on their own steady color. */
-export function Avatar({ name, small }: { name: string; small?: boolean }) {
+/**
+ * A person's Slack profile picture. Without one, or if it will not load, their initials on
+ * their own steady color.
+ */
+export function Avatar({ name, src, small }: { name: string; src?: string; small?: boolean }) {
+  const [broken, setBroken] = useState<string | null>(null);
+  if (src && broken !== src) {
+    return (
+      // A small picture straight from Slack's own servers: nothing to resize or cache here.
+      // eslint-disable-next-line @next/next/no-img-element
+      <img className={`avatar ${small ? "small" : ""}`} src={src} alt="" title={name} loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken(src)} />
+    );
+  }
   return (
-    <span className={`avatar ${small ? "small" : ""}`} style={{ "--hue": hueFor(name) } as React.CSSProperties} aria-hidden="true">
+    <span className={`avatar ${small ? "small" : ""}`} style={{ "--hue": hueFor(name) } as React.CSSProperties} title={name} aria-hidden="true">
       {initials(name)}
     </span>
   );

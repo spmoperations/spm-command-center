@@ -13,7 +13,7 @@ import { outboxSend } from "./outbox";
 import { requestFinder } from "./request-finder";
 import { JOBS } from "@/core/jobs";
 import { runJob, runNow, syncAll, tick, type JobContext } from "./runner";
-import { slackDirectorySync, slackPull, wanted } from "./slack";
+import { slackDirectorySync, slackPull, slackReadThreads, wanted } from "./slack";
 import { taskSuggest } from "./task-suggest";
 
 let db: Db;
@@ -53,12 +53,12 @@ describe("Slack text", () => {
 });
 
 describe("Slack jobs", () => {
-  const directory = () =>
-    fakeSlack({
-      "auth.test": () => ({ user_id: "UME" }),
-      "users.list": () => ({ members: [{ id: "UME", real_name: "Jeremy Moser", profile: { email: "jeremy@example.com" } }, { id: "U1", profile: { real_name: "Maya Chen" } }, { id: "UBOT", name: "helper", is_bot: true }] }),
-      "users.conversations": () => ({ channels: [{ id: "D1", is_im: true, user: "U1" }, { id: "C1", name: "sales" }, { id: "C2", name: "ops", is_private: true }] }),
-    });
+  const directoryRoutes = {
+    "auth.test": () => ({ user_id: "UME" }),
+    "users.list": () => ({ members: [{ id: "UME", real_name: "Jeremy Moser", profile: { email: "jeremy@example.com" } }, { id: "U1", profile: { real_name: "Maya Chen" } }, { id: "UBOT", name: "helper", is_bot: true }] }),
+    "users.conversations": () => ({ channels: [{ id: "D1", is_im: true, user: "U1" }, { id: "C1", name: "sales" }, { id: "C2", name: "ops", is_private: true }] }),
+  };
+  const directory = () => fakeSlack(directoryRoutes);
 
   const match = (ts: number, channel: Record<string, unknown>, user: string, text: string): Record<string, unknown> => ({ ts: `${ts}.000100`, channel, user, text });
   const T = Math.floor(NOW / 1000);
@@ -160,6 +160,75 @@ describe("Slack jobs", () => {
       const parent = { ts: first, thread_ts: first, user: "U1", text: "<@UME> who signs off the pay change?" };
       await slackPull(ctx({ lastTs: first }), slackWith([{ ts: reply, channel: ops, user: "U1", text: "<@UME> bump", permalink: link(reply, first) }], [parent, { ts: reply, thread_ts: first, user: "U1", text: "<@UME> bump" }]));
       expect((await inThread()).map((m) => [m.text, m.thread])).toEqual([["@Jeremy Moser who signs off the pay change?", first], ["@Jeremy Moser bump", first]]);
+    });
+  });
+
+  it("keeps each person's picture address, and only an https one", async () => {
+    const withPictures = fakeSlack({
+      "auth.test": () => ({ user_id: "UME" }),
+      "users.list": () => ({ members: [
+        { id: "UME", real_name: "Jeremy Moser", profile: { image_72: "https://pics.example/jeremy-72.png", image_48: "https://pics.example/jeremy-48.png" } },
+        { id: "U1", profile: { real_name: "Maya Chen", image_48: "https://pics.example/maya-48.png" } },
+        { id: "U2", profile: { real_name: "Odd One", image_72: "http://pics.example/plain.png" } },
+        { id: "U3", profile: { real_name: "No Picture" } },
+      ] }),
+      "users.conversations": () => ({ channels: [] }),
+    });
+    await slackDirectorySync(ctx(), withPictures);
+    expect((await loadState(db)).avatars).toEqual({ "Jeremy Moser": "https://pics.example/jeremy-72.png", "Maya Chen": "https://pics.example/maya-48.png" });
+  });
+
+  it("looks up the picture of someone from another company once, whether or not they have one", async () => {
+    await slackDirectorySync(ctx(), directory());
+    await db.run("insert into slack_users (owner_id, id, name, is_bot) values ($1, 'UEXT', 'Dana Okafor', false), ($1, 'UGONE', 'No Longer There', false)", [OWNER_ID]);
+    const lookUps = { "users.info": (p: Record<string, unknown>) => { if (p.user === "UGONE") throw new Error("user_not_found"); return { user: { id: "UEXT", profile: { image_72: "https://pics.example/dana.png" } } }; } };
+    const first = fakeSlack({ ...directoryRoutes, ...lookUps });
+    await slackDirectorySync(ctx(), first);
+    expect(first.calls.filter(([m]) => m === "users.info").map(([, p]) => p.user).sort()).toEqual(["UEXT", "UGONE"]);
+    expect((await loadState(db)).avatars).toEqual({ "Dana Okafor": "https://pics.example/dana.png" });
+    const second = fakeSlack({ ...directoryRoutes, ...lookUps });
+    await slackDirectorySync(ctx(), second);
+    expect(second.calls.filter(([m]) => m === "users.info")).toEqual([]);
+  });
+
+  describe("threads under the other messages of an open conversation", () => {
+    const first = `${T - 300}.000100`;
+    const plain = `${T - 200}.000100`;
+    const reply = `${T - 250}.000100`;
+    const setUp = async () => {
+      await slackDirectorySync(ctx(), directory());
+      await db.run("insert into conversations (id, owner_id, source, external_id, from_name, ctx, last_at) values ('slack:C2', $1, 'slack', 'C2', 'Maya Chen', '#ops', $2)", [OWNER_ID, (T - 200) * 1000]);
+      for (const [ts, body] of [[first, "Who signs off the pay change?"], [plain, "Lunch is here"]]) {
+        await db.run("insert into messages (id, conversation_id, owner_id, external_id, sender_name, body, at) values ($1, 'slack:C2', $2, $3, 'Maya Chen', $4, $5)", [`slack:C2:${ts}`, OWNER_ID, ts, body, Math.floor(Number(ts)) * 1000]);
+      }
+    };
+    const slack = () =>
+      fakeSlack({
+        "conversations.history": () => ({ messages: [{ ts: plain, user: "U1", text: "Lunch is here" }, { ts: first, thread_ts: first, reply_count: 1, user: "U1", text: "Who signs off the pay change?" }] }),
+        "conversations.replies": () => ({ messages: [{ ts: first, thread_ts: first, user: "U1", text: "Who signs off the pay change?" }, { ts: reply, thread_ts: first, user: "U1", text: "Finance says it needs an owner" }] }),
+      });
+
+    it("asks Slack once which messages have replies, and reads only the threads that are missing", async () => {
+      await setUp();
+      const s = slack();
+      expect(await slackReadThreads({ db, ownerId: OWNER_ID }, s, "slack:C2")).toBe(1);
+      expect(s.calls).toEqual([
+        ["conversations.history", { channel: "C2", oldest: first, inclusive: true, limit: 200 }],
+        ["conversations.replies", { channel: "C2", ts: first, limit: 200 }],
+      ]);
+      const thread = (await loadState(db)).inbox.find((c) => c.id === "slack:C2")!.thread;
+      expect(thread.map((m) => [m.text, m.thread])).toEqual([["Who signs off the pay change?", first], ["Finance says it needs an owner", first], ["Lunch is here", undefined]]);
+    });
+
+    it("reads nothing a second time, and nothing for a conversation that is not there", async () => {
+      await setUp();
+      await slackReadThreads({ db, ownerId: OWNER_ID }, slack(), "slack:C2");
+      const again = slack();
+      expect(await slackReadThreads({ db, ownerId: OWNER_ID }, again, "slack:C2")).toBe(0);
+      expect(again.calls.map(([m]) => m)).toEqual(["conversations.history"]);
+      const none = slack();
+      expect(await slackReadThreads({ db, ownerId: OWNER_ID }, none, "slack:NOPE")).toBe(0);
+      expect(none.calls).toEqual([]);
     });
   });
 

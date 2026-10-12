@@ -2,7 +2,7 @@
 
 One place for Jeremy's messages, calls and tasks. It connects Slack and Fathom call recordings, sorts what comes in, suggests tasks, and lets him reply or assign from one page.
 
-Slack and Fathom are live: the app reads real messages and calls into its own database. The screens show only what works today; see "Switched off for now" below for the rest. Sending to Slack is switched off.
+Slack and Fathom are live: the app reads real messages and calls into its own database. The screens show only what works today; see "Switched off for now" below for the rest. Replies and assignments are sent from the owner's own Slack account when `SENDING_ENABLED=true`; without it they wait in the outbox.
 
 ## Where things are
 
@@ -64,7 +64,8 @@ Off for now (see above). When it is on, the switch next to the title shows one s
 1. **Connect** Slack and Fathom on the Connections tab. Each key is checked with its service and stored encrypted.
 2. **Checks** read what is new. Each one is its own file in `ui/src/jobs/` with its own timer and bookmark.
 3. **Rules** mark what is urgent, label each chat and find requests waiting for a reply. No AI is involved.
-   Slack threads are kept whole: when the owner is tagged in a reply, the message that started the thread and the other replies come in with it, and later replies to that thread keep coming in. A reply written in the dashboard goes into the thread it answers.
+   Slack threads are kept whole: when the owner is tagged in a reply, the message that started the thread and the other replies come in with it, and later replies to that thread keep coming in. A reply written in the dashboard goes into the thread it answers. Opening a conversation asks Slack once which of its other messages have replies, and reads those threads too.
+   Each person's Slack profile picture shows beside their messages. Only the picture's address is stored; the picture itself stays with Slack.
 4. **Suggested tasks** appear on the Tasks tab: the owner's action items from calls, and messages that ask for something. Nothing becomes a task until Add task is clicked.
 5. **You act** on the screens. Any work task or conversation can be assigned to someone on the team list or to anyone in Slack; a person picked from Slack is added to the team list the first time. The person is told in a direct message, or, when the task came from a channel or a group message, in that chat with a tag. A reply or a delegation goes into the outbox and is sent from the owner's own Slack account, once sending is switched on.
 
@@ -153,7 +154,7 @@ To move to the hosted database: put the string in `ui/.env.local`, run `npm run 
 | What | What it needs |
 | --- | --- |
 | Finding tasks in messages with AI | Credit on the Claude account. The check is built and tested, and fails today with "no credit". Requests waiting for a reply are found without it. |
-| Sending replies and delegations | A decision to switch `SENDING_ENABLED` on. The sending code is tested against a fake Slack only. |
+| Sending, fully proven | Switched on with `SENDING_ENABLED=true`. A reply into a thread has been sent and read back from Slack. An assignment by direct message and a post to a channel have only run against a fake Slack so far. |
 | Telegram | Telegram app keys from my.telegram.org, then the login screen and `telegram-pull` |
 | A login per person | Supabase sign-in, in place of the one fixed login. The hosted database is in use already (see Database). |
 | Personal: Payments, Goals, Health | The tabs from the prototype's Personal side that are not built. |

@@ -557,3 +557,10 @@ button.t-title:hover, .task-link:hover { color: var(--accent); text-decoration: 
 .reply-to { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
 .reply-to span { overflow-wrap: anywhere; }
 
+/* A message with its writer's picture beside it */
+.brow { display: flex; gap: 8px; align-items: flex-start; }
+.brow.me { justify-content: flex-end; }
+.brow .bubble { align-self: auto; min-width: 0; }
+img.avatar { object-fit: cover; background: var(--surface-2); }
+.checking { margin: 0; font-size: 12.5px; color: var(--muted); }
+
