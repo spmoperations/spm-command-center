@@ -187,7 +187,7 @@ export function describeDbError(error: unknown): string {
   const e = error as { code?: string; message?: string };
   const text = `${e?.code ?? ""} ${e?.message ?? ""}`;
   if (/28P01|password authentication failed/i.test(text)) return "The database refused the password. Copy the connection string again from Supabase, Connect, and put the database password in place of [YOUR-PASSWORD].";
-  if (/ENOTFOUND|ENETUNREACH|EHOSTUNREACH|EAI_AGAIN/i.test(text)) return "The database address could not be reached. Supabase's direct connection needs IPv6; use the Session pooler connection string instead.";
+  if (/ENOTFOUND|ENETUNREACH|EHOSTUNREACH|EAI_AGAIN/i.test(text)) return "The database address could not be reached. Supabase's direct connection needs IPv6, which most hosts and many networks do not have. Use a pooler connection string instead: the Transaction pooler on a host such as Vercel, the Session pooler on your own machine.";
   if (/CONNECT_TIMEOUT|ETIMEDOUT|ECONNREFUSED/i.test(text)) return "The database did not answer. Check the connection string, and that the Supabase project is not paused.";
   if (/Tenant or user not found|XX000/i.test(text)) return "Supabase does not know this project or user. Copy the pooler connection string again from Supabase, Connect.";
   if (/Invalid URL/i.test(text)) return "DATABASE_URL is not a valid address. If the password has symbols such as @ # / in it, they must be percent-encoded.";
