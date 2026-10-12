@@ -1,4 +1,5 @@
 // Shared pieces for the API routes.
+import crypto from "node:crypto";
 import { sessionOf } from "./session";
 
 /**
@@ -23,5 +24,16 @@ export const refused = () => Response.json({ error: "This request did not come f
 export const signedIn = (request: Request) => sessionOf(request) !== null;
 
 export const signInFirst = () => Response.json({ error: "Please sign in." }, { status: 401 });
+
+/**
+ * True when the request carries the host scheduler's secret (CRON_SECRET), which Vercel sends
+ * as "Authorization: Bearer <secret>". With no secret set, nobody gets through.
+ */
+export function fromScheduler(request: Request): boolean {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return false;
+  const digest = (v: string) => crypto.createHash("sha256").update(v).digest();
+  return crypto.timingSafeEqual(digest(request.headers.get("authorization") ?? ""), digest(`Bearer ${secret}`));
+}
 
 export const failed = (error: unknown, status = 400) => Response.json({ error: error instanceof Error ? error.message : String(error) }, { status });

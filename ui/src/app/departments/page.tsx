@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { Pill, PriPill, Seg, SourceLink, VisuallyHidden } from "@/components/bits";
-import { DEPT_ABOUT, DEPTS, PRIORITY_RANK } from "@/core/config";
+import Link from "next/link";
+import { DEPARTMENTS, DEPT_ABOUT, DEPTS, PRIORITY_RANK } from "@/core/config";
 import { dueLabel, shortDate } from "@/core/dates";
 import { taskStatus, type TaskStatus } from "@/core/delegation";
 import { toggleTask, useApp, type App } from "@/store/store";
@@ -122,6 +123,15 @@ export default function DepartmentsPage() {
   const app = useApp();
   const [dept, setDept] = useState<string | null>(null);
   if (!app) return null;
+  if (!DEPARTMENTS) {
+    return (
+      <section className="view">
+        <div className="panel hint-panel">
+          <strong>Departments are switched off for now.</strong> Every task is on the <Link href="/tasks">Tasks</Link> tab.
+        </div>
+      </section>
+    );
+  }
   const { state, today } = app;
   if (dept) return <Department key={dept} dept={dept} app={app} onBack={() => setDept(null)} />;
 

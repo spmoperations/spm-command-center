@@ -11,8 +11,31 @@ export const DEPT_ABOUT: Record<string, string> = {
   Finances: "Invoices, payments, payroll and taxes.",
 };
 
-/** Message sources connected in Phase 1. */
+/** Every message source the dashboard is built to hold. */
 export const SOURCES: Source[] = ["slack", "telegram"];
+/** The ones that work today. Telegram joins this list when it is connected; until then the screens leave it out. */
+export const LIVE_SOURCES: Source[] = ["slack"];
+
+/**
+ * Departments (the Departments tab, and the department on tasks and team members) are
+ * switched off for now: nothing yet says which department a task or a person belongs to, so
+ * everything would sit under "Operations". Change this to `true` to bring them back.
+ */
+export const DEPARTMENTS: boolean = false;
+
+/**
+ * Targets (the Targets tab, and the month's pace on Today) are switched off for now: the
+ * numbers are the prototype's examples and nothing fills them in yet. Change this to `true`
+ * to bring them back.
+ */
+export const TARGETS: boolean = false;
+
+/**
+ * The Personal side (the Professional / Personal switch in the header, and everything that
+ * goes with it) is built but switched off for now. Change this to `true` to bring it back.
+ * While it is off, everything shows as Professional and nothing is hidden.
+ */
+export const PERSONAL_SIDE: boolean = false;
 export const SOURCE_NAME: Record<Source, string> = { slack: "Slack", telegram: "Telegram" };
 export const SOURCE_SHORT: Record<Source, string> = { slack: "SL", telegram: "TG" };
 

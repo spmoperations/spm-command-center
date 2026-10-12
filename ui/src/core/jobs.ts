@@ -20,18 +20,28 @@ export interface JobDefinition {
   needs: Connection | null;
   /** Runs right after other jobs rather than on its own timer. */
   follows?: JobId[];
+  /**
+   * False for a check that cannot work yet. It is left off the Timers screen and is not run
+   * on a timer. Set it to true once the thing it waits for is there.
+   */
+  live: boolean;
 }
 
 export const JOBS: JobDefinition[] = [
-  { id: "slack-pull", name: "Gets new Slack messages", tab: "Inbox", defaultMin: 60, minMin: 5, usesAI: false, needs: "slack" },
-  { id: "telegram-pull", name: "Gets new Telegram messages", tab: "Inbox", defaultMin: 60, minMin: 30, usesAI: false, needs: "telegram" },
-  { id: "fathom-pull", name: "Gets new calls from Fathom", tab: "Meetings", defaultMin: 60, minMin: 15, usesAI: false, needs: "fathom" },
-  { id: "inbox-rules", name: "Marks what is urgent, adds labels", tab: "Inbox", defaultMin: 60, minMin: 5, usesAI: false, needs: null, follows: ["slack-pull", "telegram-pull"] },
-  { id: "request-finder", name: "Finds messages that ask you for something", tab: "Tasks", defaultMin: 60, minMin: 5, usesAI: false, needs: null, follows: ["slack-pull", "telegram-pull"] },
-  { id: "task-suggest", name: "Finds other tasks in your messages", tab: "Tasks", defaultMin: 60, minMin: 15, usesAI: true, needs: "ai" },
-  { id: "slack-directory-sync", name: "Updates your channel and team list", tab: "Settings", defaultMin: 1440, minMin: 60, usesAI: false, needs: "slack" },
-  { id: "outbox-retry", name: "Retries anything that failed to send", tab: "Inbox", defaultMin: 1, minMin: 1, usesAI: false, needs: null },
+  { id: "slack-pull", name: "Gets new Slack messages", tab: "Inbox", defaultMin: 60, minMin: 5, usesAI: false, needs: "slack", live: true },
+  // Not built yet: needs Telegram app keys.
+  { id: "telegram-pull", name: "Gets new Telegram messages", tab: "Inbox", defaultMin: 60, minMin: 30, usesAI: false, needs: "telegram", live: false },
+  { id: "fathom-pull", name: "Gets new calls from Fathom", tab: "Meetings", defaultMin: 60, minMin: 15, usesAI: false, needs: "fathom", live: true },
+  { id: "inbox-rules", name: "Marks what is urgent, adds labels", tab: "Inbox", defaultMin: 60, minMin: 5, usesAI: false, needs: null, follows: ["slack-pull", "telegram-pull"], live: true },
+  { id: "request-finder", name: "Finds messages that ask you for something", tab: "Tasks", defaultMin: 60, minMin: 5, usesAI: false, needs: null, follows: ["slack-pull", "telegram-pull"], live: true },
+  // Built and tested, but the Claude account has no credit, so every run fails. Set live to true once it has.
+  { id: "task-suggest", name: "Finds other tasks in your messages", tab: "Tasks", defaultMin: 60, minMin: 15, usesAI: true, needs: "ai", live: false },
+  { id: "slack-directory-sync", name: "Updates your channel and team list", tab: "Settings", defaultMin: 1440, minMin: 60, usesAI: false, needs: "slack", live: true },
+  { id: "outbox-retry", name: "Retries anything that failed to send", tab: "Inbox", defaultMin: 1, minMin: 1, usesAI: false, needs: null, live: true },
 ];
+
+/** The checks that work today. */
+export const LIVE_JOBS = JOBS.filter((j) => j.live);
 
 export const jobById = (id: JobId) => JOBS.find((j) => j.id === id)!;
 

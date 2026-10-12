@@ -3,7 +3,7 @@ import { NextRequest } from "next/server";
 import { POST as login } from "@/app/api/login/route";
 import { POST as logout } from "@/app/api/logout/route";
 import { proxy } from "@/proxy";
-import { fromDashboard, signedIn } from "./http";
+import { fromDashboard, fromScheduler, signedIn } from "./http";
 import {
   checkLogin, clearedCookie, clearFailures, createSession, isHttps, lockedFor, loginConfigured, readSession, recordFailure, SESSION_COOKIE, sessionCookie, sessionOf,
 } from "./session";
@@ -99,6 +99,11 @@ describe("the gate in front of every page", () => {
     expect(passes(visit("/api/login"))).toBe(true);
   });
 
+  it("lets the host's scheduler through to its own route, which checks its own secret", () => {
+    expect(passes(visit("/api/cron"))).toBe(true);
+    expect(visit("/api/cron/extra").status).toBe(401);
+  });
+
   it("lets a signed-in person through, and straight past the login page", () => {
     const token = createSession("jeremy@example.com");
     expect(passes(visit("/inbox", token))).toBe(true);
@@ -169,6 +174,25 @@ describe("the login request", () => {
   it("signs out by clearing the cookie", async () => {
     const res = await logout(new Request(`${SITE}/api/logout`, { method: "POST", headers: { host: "127.0.0.1:3210", origin: SITE, "content-type": "application/json" }, body: "{}" }));
     expect(res.headers.get("set-cookie")).toContain("cc_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
+  });
+});
+
+describe("the scheduler's route", () => {
+  const sent = (authorization?: string) => fromScheduler(new Request("https://app.example.com/api/cron", authorization ? { headers: { authorization } } : undefined));
+
+  it("lets nobody through while no secret is set", () => {
+    delete process.env.CRON_SECRET;
+    expect([sent(), sent("Bearer "), sent("Bearer undefined")]).toEqual([false, false, false]);
+  });
+
+  it("lets through only a request that carries the secret the way the host sends it", () => {
+    process.env.CRON_SECRET = "a-long-random-secret";
+    try {
+      expect(sent("Bearer a-long-random-secret")).toBe(true);
+      expect([sent(), sent("Bearer nope"), sent("a-long-random-secret"), sent("bearer a-long-random-secret")]).toEqual([false, false, false, false]);
+    } finally {
+      delete process.env.CRON_SECRET;
+    }
   });
 });
 

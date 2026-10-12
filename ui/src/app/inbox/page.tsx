@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { DelegateForm } from "@/components/DelegateForm";
 import { MessageText } from "@/components/MessageText";
 import { PriPill, PrioritySelect, Seg, SrcBadge } from "@/components/bits";
-import { LINE_NAME, MODE_NAME, MODES, PRIORITIES, PRIORITY_NAME, SOURCE_NAME, SOURCES } from "@/core/config";
+import { LINE_NAME, LIVE_SOURCES, MODE_NAME, MODES, PERSONAL_SIDE, PRIORITIES, PRIORITY_NAME, SOURCE_NAME } from "@/core/config";
 import { ago, stamp } from "@/core/dates";
 import { plainPreview } from "@/core/message-format";
 import { requestSummary } from "@/core/requests";
@@ -129,13 +129,15 @@ function MessageRow({ c, app, open, draft, onDraft }: { c: Conversation; app: Ap
           >
             {open ? "Close" : "Reply"}
           </button>
-          <select className="f" value={c.mode} aria-label="Personal or Professional" onChange={(e) => setConversationMode(c.id, e.target.value as Mode)}>
-            {MODES.map((m) => (
-              <option key={m} value={m}>
-                {MODE_NAME[m]}
-              </option>
-            ))}
-          </select>
+          {PERSONAL_SIDE && (
+            <select className="f" value={c.mode} aria-label="Personal or Professional" onChange={(e) => setConversationMode(c.id, e.target.value as Mode)}>
+              {MODES.map((m) => (
+                <option key={m} value={m}>
+                  {MODE_NAME[m]}
+                </option>
+              ))}
+            </select>
+          )}
           <PrioritySelect value={c.pri} onChange={(p) => setConversationPriority(c.id, p)} />
           <button className="btn" title="Adds a task to reply, due today, and clears this from the inbox" onClick={() => conversationToTask(c.id, app.today)}>
             Make task
@@ -163,6 +165,7 @@ function MessageRow({ c, app, open, draft, onDraft }: { c: Conversation; app: Ap
           <DelegateForm
             team={app.state.team}
             slackPeople={app.state.slackPeople}
+            channels={app.state.channels}
             today={app.today}
             subject={{ title: `From ${c.from}: ${requestSummary(c.text, `@${app.state.owner.name}`)}`, project: c.project, dept: "", due: app.today }}
             chat={canAssignInChat(c) ? (c.ctx.startsWith("#") ? c.ctx : "this group message") : null}
@@ -193,7 +196,7 @@ export default function InboxPage() {
   const list = byLineAndSource.filter((c) => pri === "all" || c.pri === pri);
   const cleared = mine.length - open.length;
   const queued = state.outbox.filter((o) => o.status === "queued").length;
-  const connected = SOURCES.filter((s) => state.connections[s].connected);
+  const connected = LIVE_SOURCES.filter((s) => state.connections[s].connected);
   const other = MODES.find((m) => m !== mode)!;
   const elsewhere = state.inbox.filter((c) => c.mode === other && !c.done).length;
 
@@ -209,7 +212,7 @@ export default function InboxPage() {
         <div>
           <h2>Inbox</h2>
           <div className="muted" style={{ fontSize: 14 }}>
-            {MODE_NAME[mode]} conversations from {connected.length ? connected.map((s) => SOURCE_NAME[s]).join(" and ") : "your chat apps"}, sorted by priority. Reply without leaving the page.
+            {PERSONAL_SIDE ? `${MODE_NAME[mode]} conversations` : "Conversations"} from {connected.length ? connected.map((s) => SOURCE_NAME[s]).join(" and ") : "Slack"}, sorted by priority. Reply without leaving the page.
           </div>
         </div>
         <div className="brand-meta">

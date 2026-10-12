@@ -262,6 +262,11 @@ describe("connections and secrets", () => {
 describe("personal and professional", () => {
   const chat = async (id: string) => (await state()).inbox.find((c) => c.id === id)!;
 
+  it("says when each task was added", async () => {
+    await act("addTask", { title: "Plan November", dept: "Operations", project: "", pri: "mid", due: "2026-10-20" });
+    expect((await state()).tasks.find((x) => x.title === "Plan November")!.createdAt).toBe(now.getTime());
+  });
+
   it("starts everything on the Professional side", async () => {
     const s = await state();
     expect(s.inbox.map((c) => c.mode)).toEqual(["professional", "professional"]);
@@ -445,6 +450,55 @@ describe("assigning in the chat", () => {
     expect(s.tasks.map((x) => x.id)).toEqual(["t_hook"]);
     expect(s.tasks[0].delegatedTo).toBeNull();
     expect(s.inbox.find((c) => c.id === "slack:D1")!.done).toBe(false);
+    expect(await outbox()).toEqual([]);
+  });
+});
+
+describe("assigning in a Slack channel", () => {
+  beforeEach(async () => {
+    await db.run("insert into slack_channels (owner_id, id, name, kind, selected) values ($1, 'C1', 'sales', 'public', true), ($1, 'C7', 'ops-team', 'private', false)", [OWNER_ID]);
+  });
+  const outbox = () => db.query<{ target: string | null; to_name: string; ctx: string; body: string; conversation_id: string | null }>("select target, to_name, ctx, body, conversation_id from outbox order by created_at, id");
+  const hook = async () => (await state()).tasks.find((x) => x.id === "t_hook")!;
+
+  it("posts a task to any channel with nobody tagged: the channel takes it", async () => {
+    await act("delegateTask", "t_hook", "", "Whoever is free.", "2026-10-12", "channel:C7");
+    expect((await hook()).delegatedTo).toMatchObject({ personId: "channel:C7", name: "#ops-team", role: "Slack channel", note: "Whoever is free." });
+    expect(await outbox()).toEqual([{ target: "C7", to_name: "#ops-team", ctx: "#ops-team", conversation_id: null, body: "New task: Swap hook on Harbor clip 4 (due 2026-10-12)\n\nWhoever is free." }]);
+    await act("undelegateTask", "t_hook");
+    expect((await hook()).delegatedTo).toBeNull();
+    expect(await outbox()).toEqual([]);
+  });
+
+  it("tags the person when one is picked, and the task is theirs", async () => {
+    await act("delegateTask", "t_hook", "u_luis", "", "2026-10-12", "channel:C7");
+    expect((await hook()).delegatedTo).toMatchObject({ personId: "u_luis", name: "Luis Ramos" });
+    expect((await outbox())[0]).toMatchObject({ target: "C7", to_name: "Luis Ramos", body: "<@ULUIS> new task for you: Swap hook on Harbor clip 4 (due 2026-10-12)" });
+  });
+
+  it("shows the post in the thread when the dashboard follows that channel", async () => {
+    await act("delegateTask", "t_hook", "", "", "2026-10-12", "channel:C1");
+    expect((await outbox())[0]).toMatchObject({ target: "C1", conversation_id: "slack:C1" });
+    expect((await state()).inbox.find((c) => c.id === "slack:C1")!.thread.at(-1)).toMatchObject({ me: true, status: "queued", text: "New task: Swap hook on Harbor clip 4 (due 2026-10-12)" });
+  });
+
+  it("assigns a conversation to a channel without picking anyone", async () => {
+    await act("delegateConversation", "slack:D1", "", "", "2026-10-09", "channel:C7");
+    const [task] = (await state()).tasks.filter((x) => x.src?.id === "slack:D1");
+    expect(task).toMatchObject({ dept: "Operations", delegatedTo: { name: "#ops-team" } });
+    expect((await outbox())[0].body).toBe("New task: From Maya Chen: Can we swap the hook on clip 4 before Friday? (due 2026-10-09)");
+  });
+
+  it("adds a new task straight into a channel", async () => {
+    await act("addTask", { title: "Draft the proposal", dept: "SPM Sales", project: "", pri: "mid", due: "2026-10-14", assignTo: "channel:C7" });
+    expect((await state()).tasks.find((x) => x.title === "Draft the proposal")!.delegatedTo).toMatchObject({ name: "#ops-team" });
+    expect((await outbox()).map((o) => o.body)).toEqual(["New task: Draft the proposal (due 2026-10-14)"]);
+  });
+
+  it("needs a person for a direct message, and a channel from the owner's own list", async () => {
+    await expect(act("delegateTask", "t_hook", "", "", "2026-10-12")).rejects.toThrow("Pick who should get the direct message");
+    await expect(act("delegateTask", "t_hook", "", "", "2026-10-12", "channel:CNOTMINE")).rejects.toThrow("not on your channel list");
+    expect((await hook()).delegatedTo).toBeNull();
     expect(await outbox()).toEqual([]);
   });
 });

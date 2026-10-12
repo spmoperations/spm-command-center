@@ -1,8 +1,8 @@
 # SPM Command Center
 
-One place for Jeremy's messages, calls and tasks. Phase 1 connects Slack, Telegram and Fathom call recordings, sorts what comes in, suggests tasks, and lets him reply or delegate from one page. A switch in the header shows the Professional or the Personal side.
+One place for Jeremy's messages, calls and tasks. It connects Slack and Fathom call recordings, sorts what comes in, suggests tasks, and lets him reply or assign from one page.
 
-Slack and Fathom are live: the app reads real messages and calls into its own database. Telegram is not connected yet, and sending is switched off.
+Slack and Fathom are live: the app reads real messages and calls into its own database. The screens show only what works today; see "Switched off for now" below for the rest. Sending to Slack is switched off.
 
 ## Where things are
 
@@ -35,9 +35,23 @@ There is one fixed login for now: `LOGIN_EMAIL` and `LOGIN_PASSWORD` in `ui/.env
 
 A login per person (Supabase sign-in) replaces this when more people use the dashboard.
 
+## Switched off for now
+
+These are built or planned but left off the screens for now. Each has one line to change.
+
+| What | Why it is off | To bring it back |
+| --- | --- | --- |
+| The Personal side | Asked to be parked for now | `PERSONAL_SIDE = true` in `ui/src/core/config.ts` |
+| Departments (the tab, and the department on tasks and team members) | Nothing yet says which department a task or person belongs to | `DEPARTMENTS = true` in `ui/src/core/config.ts` |
+| Targets (the tab, and the month's pace on Today) | The numbers are the prototype's examples; nothing fills them in yet | `TARGETS = true` in `ui/src/core/config.ts` |
+| Finding tasks with AI | The Claude account has no credit, so every run fails | `live: true` on `task-suggest` in `ui/src/core/jobs.ts` |
+| Telegram | Not built: needs Telegram app keys | Add it to `LIVE_SOURCES` and `LIVE_PROVIDERS`, and set `live: true` on `telegram-pull`, once it exists |
+
+While the Personal side is off, everything shows as Professional, including anything that was moved to Personal earlier.
+
 ## Professional and Personal
 
-The switch next to the title shows one side at a time. Each conversation, task, suggested task, focus item and quick link belongs to one side; everything starts as Professional.
+Off for now (see above). When it is on, the switch next to the title shows one side at a time. Each conversation, task, suggested task, focus item and quick link belongs to one side; everything starts as Professional.
 
 - **Move a chat:** change its "Professional" box to "Personal" in the inbox. It stays where you put it.
 - **Move chats by rule:** Settings, "Personal or Professional". For example, direct messages from one person can always go to Personal.
@@ -63,7 +77,27 @@ The switch next to the title shows one side at a time. Each conversation, task, 
 | `outbox-retry` | Sends what is waiting in the outbox | No |
 | `telegram-pull` | Not built yet | No |
 
-Run one by hand with `npm run job -- slack-pull` (with the local database, stop the app first: it allows one process at a time), or press Run now in Settings, Timers.
+Run one by hand with `npm run job -- slack-pull` (with the local database, stop the app first: it allows one process at a time), or press Run now beside it in Settings. **Sync now** in Settings runs every working check at once.
+
+## Automatic sync
+
+The checks run by themselves. How depends on where the app runs.
+
+| Where | What runs the timers |
+| --- | --- |
+| Your own machine or a server that stays up | A timer inside the server, once a minute. `TICKER=off` in `.env.local` stops it. |
+| Vercel | Vercel Cron calls `GET /api/cron` (see `ui/vercel.json`), which runs whichever checks are due by the timers set in Settings. |
+
+To deploy on Vercel:
+
+1. Set the project's **Root Directory** to `ui`.
+2. Add the variables from `.env.local` to the project, plus `CRON_SECRET` (any long random text). Vercel sends it with each cron call, and the route refuses anything else.
+3. For `DATABASE_URL` use Supabase's **Transaction pooler** string (port 6543). The direct string needs IPv6, which Vercel does not have.
+4. Leave `TICKER` out.
+
+Vercel's **Hobby plan runs a cron job once a day at most**, and refuses to deploy a schedule that is more frequent. `ui/vercel.json` asks for every 5 minutes, which needs the Pro plan. On Hobby, change the schedule to once a day (for example `0 6 * * *`) and use Sync now in between, or have any other scheduler call `/api/cron` with the header `Authorization: Bearer <CRON_SECRET>`.
+
+A check never runs twice at once, even if two servers start it together: the second one sees the first is running and steps aside.
 
 ## Safety switches
 
@@ -83,6 +117,7 @@ Anything that looks like an access key is stripped from message text before it i
 | `ui/src/core/` | Plain logic with no UI and no network: sorting rules, delegation matching, timers, target math, Slack text |
 | `ui/src/server/` | Database access, every action a person can take, the Slack, Fathom and Claude clients, key encryption |
 | `ui/src/jobs/` | One file per check, and the runner that times them |
+| `ui/src/prompts/` | Every instruction given to an AI model, one file per prompt, with a README that lists them |
 | `ui/src/app/api/` | The routes the screens call |
 | `ui/src/app/`, `ui/src/components/` | One folder per tab, and the shared pieces |
 | `ui/src/store/store.ts` | The browser's copy of the data: reads `/api/state`, sends each action to the server |
@@ -120,4 +155,4 @@ To move to the hosted database: put the string in `ui/.env.local`, run `npm run 
 | Telegram | Telegram app keys from my.telegram.org, then the login screen and `telegram-pull` |
 | A login per person | Supabase sign-in, in place of the one fixed login. The hosted database is in use already (see Database). |
 | Personal: Payments, Goals, Health | The tabs from the prototype's Personal side that are not built. |
-| Hosting | A host, plus a scheduled request to `POST /api/jobs` with `{"id":"tick"}` once a minute. That request needs its own key first: today the route accepts only a signed-in browser. |
+| Hosting | Deploying it. The route for the host's scheduler and `vercel.json` are in place (see Automatic sync); it has been tested on this machine, not on Vercel. |

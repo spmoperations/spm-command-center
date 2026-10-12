@@ -3,10 +3,10 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
-import { MODE_NAME, MODES } from "@/core/config";
+import { DEPARTMENTS, MODE_NAME, MODES, PERSONAL_SIDE, TARGETS } from "@/core/config";
 import { daysInMonth } from "@/core/dates";
 import { isMine } from "@/core/delegation";
-import { PROVIDERS } from "@/core/providers";
+import { LIVE_PROVIDERS } from "@/core/providers";
 import { evalMetric } from "@/core/targets";
 import type { Mode } from "@/core/types";
 import { PROFESSIONAL_ONLY, refresh, setMode, signOut, useApp, useMode, useToast, type App } from "@/store/store";
@@ -33,12 +33,12 @@ function navCounts({ state, now, today }: App, mode: Mode): Record<string, Count
   const lagging = state.metrics
     .filter((m) => !m.parent)
     .filter((m) => evalMetric(m, state.metrics, state.logs, clock).status !== "ok").length;
-  const connected = PROVIDERS.filter((p) => state.connections[p].connected).length;
+  const connected = LIVE_PROVIDERS.filter((p) => state.connections[p].connected).length;
   return {
     inbox: { text: open.length, hot: open.some((c) => c.pri === "high"), title: `${open.length} waiting for a reply` },
     tasks: { text: mine.length, hot: mine.some((t) => t.due <= today), title: `${mine.length} on your plate` },
     targets: { text: lagging ? `${lagging} off` : "OK", hot: lagging > 0, title: lagging ? `${lagging} behind pace` : "All on pace" },
-    connections: { text: `${connected} of ${PROVIDERS.length}`, hot: false, title: `${connected} of ${PROVIDERS.length} apps connected` },
+    connections: { text: `${connected} of ${LIVE_PROVIDERS.length}`, hot: false, title: `${connected} of ${LIVE_PROVIDERS.length} apps connected` },
   };
 }
 
@@ -56,7 +56,9 @@ function Chrome({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const counts = app ? navCounts(app, mode) : {};
-  const tabs = TABS.filter((tab) => mode === "professional" || !PROFESSIONAL_ONLY.includes(tab.href));
+  // Tabs that are switched off for now are left out (see core/config).
+  const off: string[] = [...(DEPARTMENTS ? [] : ["departments"]), ...(TARGETS ? [] : ["targets"])];
+  const tabs = TABS.filter((tab) => (mode === "professional" || !PROFESSIONAL_ONLY.includes(tab.href)) && !off.includes(tab.key));
 
   // The Personal side has its own accent color, as in the prototype.
   useEffect(() => {
@@ -82,13 +84,15 @@ function Chrome({ children }: { children: React.ReactNode }) {
                   {app ? app.now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" }) : " "}
                 </div>
               </div>
-              <div className="seg mode-seg" role="group" aria-label="Which side of the dashboard to show">
-                {MODES.map((m) => (
-                  <button key={m} aria-pressed={mode === m} onClick={() => pick(m)}>
-                    {MODE_NAME[m]}
-                  </button>
-                ))}
-              </div>
+              {PERSONAL_SIDE && (
+                <div className="seg mode-seg" role="group" aria-label="Which side of the dashboard to show">
+                  {MODES.map((m) => (
+                    <button key={m} aria-pressed={mode === m} onClick={() => pick(m)}>
+                      {MODE_NAME[m]}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="brand-meta">
               {app && !app.state.sendingEnabled && (

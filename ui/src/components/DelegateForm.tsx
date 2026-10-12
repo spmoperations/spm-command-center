@@ -1,32 +1,44 @@
 "use client";
 
 import { useId, useState } from "react";
-import { assignmentText, candidates, SLACK_PICK, type AssignWhere } from "@/core/delegation";
-import type { Person } from "@/core/types";
+import { assignmentText, candidates, CHANNEL_PICK, SLACK_PICK, type AssignWhere } from "@/core/delegation";
+import type { Channel, Person } from "@/core/types";
 import { toast } from "@/store/store";
+import { Combo } from "./Combo";
 
 interface Props {
   team: Person[];
   /** Everyone in the Slack workspace. Anyone here can be picked, on the team list or not. */
   slackPeople: { id: string; name: string }[];
+  /** The Slack channels the owner is in. The task can be announced in any of them. */
+  channels: Channel[];
   /** What is being assigned. An empty `dept` offers the whole team. */
   subject: { title: string; project: string; dept: string; due: string };
   today: string;
-  /** The chat this came from, e.g. "#sales", when the person can be told there. Leave out for a direct message only. */
+  /** The chat this came from, e.g. "#sales", when the task can be announced there. */
   chat?: string | null;
   onDelegate(personId: string, note: string, due: string, where: AssignWhere): void;
   onCancel(): void;
 }
 
-/** Assigns a task to someone: a person from the team list, or anyone else in Slack. */
-export function DelegateForm({ team, slackPeople, subject, today, chat, onDelegate, onCancel }: Props) {
-  const [where, setWhere] = useState<AssignWhere>("dm");
+/** Value of the channel picker that means "the chat this came from". */
+const SOURCE_CHAT = "source";
+
+/**
+ * Assigns a task. It goes to a person by direct message, or into a Slack channel, where
+ * tagging a person is optional: a task can belong to the channel as a whole.
+ */
+export function DelegateForm({ team, slackPeople, channels, subject, today, chat, onDelegate, onCancel }: Props) {
   const noteId = useId();
   const dueId = useId();
   const slackId = useId();
+  const channelId = useId();
   const hasDept = subject.dept !== "";
   const [everyone, setEveryone] = useState(!hasDept);
+  /** A team member's id, "slack:<id>", or "" for nobody. Null until the person picks. */
   const [chosen, setChosen] = useState<string | null>(null);
+  const [inChannel, setInChannel] = useState(false);
+  const [channel, setChannel] = useState(chat ? SOURCE_CHAT : "");
   const [note, setNote] = useState("");
   const [due, setDue] = useState(subject.due < today ? today : subject.due);
 
@@ -34,12 +46,14 @@ export function DelegateForm({ team, slackPeople, subject, today, chat, onDelega
   // With nobody suggested for this task, the whole team is shown straight away.
   const people = everyone || suggested.length === 0 ? candidates(team, subject, true) : suggested;
   const others = slackPeople.filter((p) => !team.some((t) => t.slackUserId === p.id));
-  const selected = chosen ?? people[0]?.id ?? null;
-  const fromSlack = selected?.startsWith(SLACK_PICK) ? selected : "";
-  const selectedName = team.find((p) => p.id === selected)?.name ?? others.find((p) => `${SLACK_PICK}${p.id}` === selected)?.name ?? "the person you pick";
-  const inChat = Boolean(chat) && where === "chat";
+  // A direct message needs someone, so the best fit starts picked. A channel does not.
+  const selected = chosen ?? (inChannel ? "" : (people[0]?.id ?? ""));
+  const fromSlack = selected.startsWith(SLACK_PICK) ? selected : "";
+  const selectedName = team.find((p) => p.id === selected)?.name ?? others.find((p) => `${SLACK_PICK}${p.id}` === selected)?.name ?? "";
+  const place = channel === SOURCE_CHAT ? (chat ?? "") : channel ? `#${channels.find((c) => c.id === channel)?.name ?? ""}` : "";
+  const canPost = Boolean(chat) || channels.length > 0;
 
-  if (team.length === 0 && others.length === 0) {
+  if (team.length === 0 && others.length === 0 && !canPost) {
     return (
       <div className="dg-form">
         <h4>Assign to</h4>
@@ -60,13 +74,56 @@ export function DelegateForm({ team, slackPeople, subject, today, chat, onDelega
       className="dg-form"
       onSubmit={(e) => {
         e.preventDefault();
-        if (!selected) return toast("Pick who should take it");
-        onDelegate(selected, note.trim(), due || subject.due, inChat ? "chat" : "dm");
+        if (inChannel && !channel) return toast("Pick the channel to post in");
+        if (!inChannel && !selected) return toast("Pick who should take it");
+        const where: AssignWhere = !inChannel ? "dm" : channel === SOURCE_CHAT ? "chat" : `${CHANNEL_PICK}${channel}`;
+        onDelegate(selected, note.trim(), due || subject.due, where);
       }}
     >
-      <h4>Assign to</h4>
+      {canPost && (
+        <div className="dg-where" role="radiogroup" aria-label="How to assign it">
+          <span className="label">Send it</span>
+          <label className="person">
+            <input type="radio" name={`${noteId}-where`} checked={!inChannel} onChange={() => setInChannel(false)} />
+            <span>
+              To a person <small>a direct message only they see</small>
+            </span>
+          </label>
+          <label className="person">
+            <input type="radio" name={`${noteId}-where`} checked={inChannel} onChange={() => setInChannel(true)} />
+            <span>
+              In a Slack channel <small>everyone there sees it</small>
+            </span>
+          </label>
+        </div>
+      )}
+
+      {inChannel && (
+        <div className="dg-slack">
+          <label className="label" htmlFor={channelId} style={{ margin: 0 }}>
+            Channel
+          </label>
+          <Combo
+            id={channelId}
+            value={channel}
+            onChange={setChannel}
+            placeholder="Type or pick a channel…"
+            choices={[...(chat ? [{ value: SOURCE_CHAT, label: `${chat} (where this came from)` }] : []), ...channels.map((c) => ({ value: c.id, label: `#${c.name}` }))]}
+          />
+        </div>
+      )}
+
+      <h4>{inChannel ? "Tag someone (optional)" : "Assign to"}</h4>
       {people.length > 0 && (
         <div className="people" role="radiogroup" aria-label="Team member">
+          {inChannel && (
+            <label className="person">
+              <input type="radio" name={`${noteId}-to`} checked={selected === ""} onChange={() => setChosen("")} />
+              <span>
+                Nobody <small>the channel takes it</small>
+              </span>
+            </label>
+          )}
           {people.map((p) => (
             <label className="person" key={p.id}>
               <input type="radio" name={`${noteId}-to`} checked={p.id === selected} onChange={() => setChosen(p.id)} />
@@ -95,37 +152,21 @@ export function DelegateForm({ team, slackPeople, subject, today, chat, onDelega
       {others.length > 0 && (
         <div className="dg-slack">
           <label className="label" htmlFor={slackId} style={{ margin: 0 }}>
-            {people.length > 0 ? "Or anyone else on Slack" : "Pick anyone on Slack"}
+            {people.length > 0 ? "Or anyone else on Slack" : "Anyone on Slack"}
           </label>
-          <select className="f" id={slackId} value={fromSlack} onChange={(e) => setChosen(e.target.value || null)}>
-            <option value="">Choose a person…</option>
-            {others.map((p) => (
-              <option key={p.id} value={`${SLACK_PICK}${p.id}`}>
-                {p.name}
-              </option>
-            ))}
-          </select>
+          <Combo
+            id={slackId}
+            value={fromSlack}
+            onChange={setChosen}
+            placeholder="Type or pick a person…"
+            none={inChannel ? "Nobody: the channel takes it" : undefined}
+            choices={others.map((p) => ({ value: `${SLACK_PICK}${p.id}`, label: p.name }))}
+          />
         </div>
       )}
-      {chat && (
-        <div className="dg-where" role="radiogroup" aria-label="Where to tell them">
-          <span className="label">Tell them</span>
-          <label className="person">
-            <input type="radio" name={`${noteId}-where`} checked={!inChat} onChange={() => setWhere("dm")} />
-            <span>
-              In a direct message <small>only they see it</small>
-            </span>
-          </label>
-          <label className="person">
-            <input type="radio" name={`${noteId}-where`} checked={inChat} onChange={() => setWhere("chat")} />
-            <span>
-              In {chat} <small>everyone in that chat sees it</small>
-            </span>
-          </label>
-        </div>
-      )}
+
       <label className="label" htmlFor={noteId}>
-        Note for them (optional)
+        Note (optional)
       </label>
       <textarea id={noteId} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Context, what done looks like, and anything they need from you" />
       <div className="dg-actions">
@@ -140,13 +181,15 @@ export function DelegateForm({ team, slackPeople, subject, today, chat, onDelega
           Cancel
         </button>
         <span className="hint">
-          {inChat ? `You post in ${chat}, tagging them, with the task, the due date and your note.` : "They get a Slack direct message from you with the task, the due date and your note."}
+          {inChannel
+            ? `You post in ${place || "the channel"}${selectedName ? ", tagging them," : ""} with the task, the due date and your note.`
+            : "They get a Slack direct message from you with the task, the due date and your note."}
         </span>
       </div>
-      {inChat && (
+      {inChannel && place && (
         <div className="dg-preview">
-          <span className="label">What will be posted in {chat}</span>
-          <p>{assignmentText({ where: "chat", who: `@${selectedName}`, title: subject.title, due: due || subject.due, note: note.trim() })}</p>
+          <span className="label">What will be posted in {place}</span>
+          <p>{assignmentText({ where: "chat", who: selectedName ? `@${selectedName}` : "", title: subject.title, due: due || subject.due, note: note.trim() })}</p>
         </div>
       )}
     </form>

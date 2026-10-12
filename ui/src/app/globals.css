@@ -512,3 +512,38 @@ a.btn:hover { color: var(--accent); }
 .dg-preview { display: grid; gap: 4px; padding: 10px 12px; border: 1px dashed var(--line); border-radius: 8px; background: var(--surface); max-width: 760px; }
 .dg-preview p { margin: 0; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .saving { font-size: 12.5px; color: var(--accent); font-weight: 600; }
+/* A rule reads as a sentence, whichever word it happens to start with. */
+.rules .when::first-letter { text-transform: uppercase; }
+.rule-add { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+
+/* A pick list you can type in */
+.combo { position: relative; min-width: 0; }
+.combo input.f { width: 100%; padding-right: 26px; text-overflow: ellipsis; }
+.combo input.f::placeholder { color: var(--ink); opacity: 0.85; }
+.combo input.f:focus::placeholder { color: var(--muted); opacity: 1; }
+.combo-caret { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); font-size: 11px; color: var(--muted); pointer-events: none; }
+.combo-list { position: fixed; z-index: 40; margin: 0; padding: 4px; list-style: none; max-height: 280px; overflow-y: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 30px rgb(0 0 0 / 0.25); font-size: 14px; }
+.combo-option { padding: 6px 10px; border-radius: 6px; cursor: pointer; overflow-wrap: anywhere; }
+.combo-option.active { background: var(--accent-soft); color: var(--accent); }
+.combo-option[aria-selected="true"] { font-weight: 600; }
+.combo-group { padding: 8px 10px 3px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+.combo-empty { padding: 8px 10px; color: var(--muted); }
+.dg-slack .combo { flex: 1 1 260px; max-width: 380px; }
+
+/* A task, opened */
+button.t-title { background: none; border: 0; padding: 0; text-align: left; cursor: pointer; font-size: inherit; }
+button.t-title:hover, .task-link:hover { color: var(--accent); text-decoration: underline; }
+.task-link { text-decoration: none; color: inherit; display: block; }
+.task-detail { display: grid; gap: 16px; max-width: 900px; }
+.task-detail .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px 20px; margin: 0; }
+.task-detail dt { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+.task-detail dd { margin: 2px 0 0; font-size: 14.5px; }
+.td-block { display: grid; gap: 6px; }
+.td-block p { margin: 0; font-size: 14.5px; }
+.td-quote { border-left: 3px solid var(--line); padding-left: 10px; white-space: pre-wrap; }
+.td-thread { display: grid; gap: 8px; }
+.td-msg { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; font-size: 14.5px; max-width: 720px; overflow-wrap: anywhere; }
+.td-msg.me { background: var(--accent-soft); border-color: transparent; }
+.td-msg .bmeta { font: 11.5px var(--f-mono); color: var(--muted); margin-bottom: 3px; }
+.td-links { display: flex; gap: 14px; flex-wrap: wrap; }
+.set-add { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }

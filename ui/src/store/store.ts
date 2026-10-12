@@ -4,6 +4,7 @@
 // /api/state, and every action below is one request to the server, which answers with the
 // fresh state. Nothing but small screen preferences lives only in the browser.
 import { useSyncExternalStore } from "react";
+import { PERSONAL_SIDE } from "@/core/config";
 import { isoDay } from "@/core/dates";
 import { jobById } from "@/core/jobs";
 import { PROVIDER_NAME } from "@/core/providers";
@@ -14,12 +15,16 @@ export interface UiState {
   /** Which side of the dashboard is showing. Remembered in this browser. */
   mode: Mode;
   openConversation: string | null;
+  /** The task whose details are showing on the Tasks tab. */
+  openTask: string | null;
   openMeetings: string[];
   toast: string | null;
   /** Checks that are running because the person pressed "Run now". */
   running: JobId[];
   /** Changes on their way to the server. The header says "Saving…" while this is above zero. */
   saving: number;
+  /** True while "Sync now" is reading everything. */
+  syncing: boolean;
 }
 
 export interface App {
@@ -33,14 +38,23 @@ export interface App {
 const REFRESH_MS = 60_000;
 
 let app: App | null = null;
-let ui: UiState = { mode: "professional", openConversation: null, openMeetings: [], toast: null, running: [], saving: 0 };
+let ui: UiState = { mode: "professional", openConversation: null, openTask: null, openMeetings: [], toast: null, running: [], saving: 0, syncing: false };
 let started = false;
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((l) => l());
 
+/**
+ * While the Personal side is switched off, everything shows as Professional, so a chat or
+ * task that was moved to Personal earlier does not vanish from the screens.
+ */
+function oneSide(state: AppState): AppState {
+  const work = <T extends { mode: Mode }>(item: T): T => (item.mode === "professional" ? item : { ...item, mode: "professional" });
+  return { ...state, inbox: state.inbox.map(work), tasks: state.tasks.map(work), suggestions: state.suggestions.map(work), links: state.links.map(work) };
+}
+
 function setState(state: AppState) {
   const now = new Date();
-  app = { state, ui, now, today: isoDay(now) };
+  app = { state: PERSONAL_SIDE ? state : oneSide(state), ui, now, today: isoDay(now) };
   emit();
 }
 
@@ -83,7 +97,7 @@ export const PROFESSIONAL_ONLY = ["/departments", "/meetings", "/targets"];
 
 function rememberedMode(): Mode {
   // A link straight to a professional page wins over what was last picked.
-  if (PROFESSIONAL_ONLY.includes(window.location.pathname)) return "professional";
+  if (!PERSONAL_SIDE || PROFESSIONAL_ONLY.includes(window.location.pathname)) return "professional";
   try {
     return window.localStorage.getItem(MODE_KEY) === "personal" ? "personal" : "professional";
   } catch {
@@ -204,6 +218,8 @@ export function delegateConversation(id: string, personId: string, note: string,
 
 // ---------- Tasks ----------
 
+export const openTask = (id: string | null) => setUi({ openTask: id });
+
 /** `assignTo` is a team member's id, or "slack:<id>" for someone picked straight from Slack. */
 export const addTask = (input: Pick<Task, "title" | "dept" | "project" | "pri" | "due" | "mode"> & { assignTo?: string }) =>
   void act("addTask", [input], input.assignTo ? `Task added. ${delegated()}` : "Task added");
@@ -272,6 +288,22 @@ export async function runJobNow(id: JobId) {
     toast((error as Error).message);
   } finally {
     setUi({ running: ui.running.filter((j) => j !== id) });
+  }
+}
+
+/** "Sync now": runs every working check straight away, whatever its timer says. */
+export async function syncNow() {
+  if (ui.syncing) return;
+  setUi({ syncing: true });
+  try {
+    const { runs, state } = await request<{ runs: { ok: boolean; message: string }[]; state: AppState }>("/api/jobs", { id: "sync" });
+    setState(state);
+    const failed = runs.filter((r) => !r.ok).length;
+    toast(runs.length === 0 ? "Nothing to sync yet. Connect Slack or Fathom first." : failed ? `Sync finished, but ${failed} ${failed === 1 ? "check" : "checks"} had a problem. See the list below.` : "Everything is up to date.");
+  } catch (error) {
+    toast((error as Error).message);
+  } finally {
+    setUi({ syncing: false });
   }
 }
 

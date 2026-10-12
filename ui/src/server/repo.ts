@@ -2,7 +2,7 @@
 // holds every change a person can make. Jobs write through their own modules in `src/jobs`.
 import crypto from "node:crypto";
 import { PERSONAL } from "@/core/config";
-import { assignmentText, canAssignInChat, SLACK_PICK, type AssignWhere } from "@/core/delegation";
+import { assignmentText, canAssignInChat, CHANNEL_PICK, SLACK_PICK, type AssignWhere } from "@/core/delegation";
 import { addDays, isoDay, monthKey, pad } from "@/core/dates";
 import { clampInterval, defaultJobSettings, JOBS } from "@/core/jobs";
 import { requestSummary } from "@/core/requests";
@@ -65,6 +65,7 @@ interface TaskRow {
   id: string; title: string; mode: Mode; dept: string; project: string; pri: Priority; due: string; done: boolean; done_at: number | null;
   src_type: "message" | "meeting" | null; src_id: string | null; delegable: boolean;
   delegated_to: string | null; delegated_name: string | null; delegated_role: string | null; delegated_note: string | null; delegated_at: number | null;
+  created_at: number;
 }
 interface RuleRow { id: string; kind: "priority" | "label"; source: Rule["source"]; match_on: Rule["when"]; op: Rule["op"]; value: string; pri: Priority | null; line: Rule["line"] | null; mode: Mode | null }
 
@@ -73,7 +74,7 @@ const THREAD_LENGTH = 30;
 const toRule = (r: RuleRow): Rule => ({ id: r.id, source: r.source, when: r.match_on, op: r.op, value: r.value, pri: r.pri ?? undefined, line: r.line ?? undefined, mode: r.mode ?? undefined });
 
 const toTask = (t: TaskRow): Task => ({
-  id: t.id, title: t.title, mode: t.mode, dept: t.dept, project: t.project, pri: t.pri, due: t.due, done: t.done, doneAt: t.done_at,
+  id: t.id, title: t.title, mode: t.mode, dept: t.dept, project: t.project, pri: t.pri, due: t.due, done: t.done, doneAt: t.done_at, createdAt: Number(t.created_at),
   src: t.src_type && t.src_id ? { type: t.src_type, id: t.src_id } : null,
   delegable: t.delegable,
   delegatedTo: t.delegated_to ? { personId: t.delegated_to, name: t.delegated_name ?? "", role: t.delegated_role ?? "", note: t.delegated_note ?? "", at: t.delegated_at ?? 0 } : null,
@@ -321,38 +322,59 @@ async function assignee(c: ActionContext, personId: string): Promise<Assignee> {
 }
 
 /**
- * Assigns a task to someone and queues the Slack message that tells them. The note is optional.
- * With `where` "chat" the message goes into the chat the task came from, tagging the person,
- * and shows in that conversation's thread; otherwise it is a direct message to them.
+ * Assigns a task and queues the Slack message that announces it. The note is optional.
+ *   "dm"            a direct message to the person, who must be picked.
+ *   "chat"          the chat the task came from; shows in that conversation's thread.
+ *   "channel:<id>"  any Slack channel the owner is in.
+ * In a chat or channel the person is optional. With one, they are tagged and the task is
+ * theirs; without, the task belongs to the channel.
  */
 async function delegate(c: ActionContext, taskId: string, personId: string, note: string, due: string, where: AssignWhere = "dm") {
-  const person = await assignee(c, personId);
+  const person = personId ? await assignee(c, personId) : null;
   const [task] = await c.db.query<{ title: string; src_type: string | null; src_id: string | null }>("select title, src_type, src_id from tasks where owner_id = $1 and id = $2", [c.ownerId, taskId]);
   if (!task) throw new Error("That task or person no longer exists.");
   const text = (who: string) => assignmentText({ where, who, title: task.title, due, note });
   const now = c.now.getTime();
+  let holder = person ? { id: person.id, name: person.name, role: person.role } : null;
 
-  if (where === "chat") {
-    const [chat] = task.src_type === "message"
-      ? await c.db.query<{ id: string; source: string; external_id: string; ctx: string }>("select id, source, external_id, ctx from conversations where owner_id = $1 and id = $2", [c.ownerId, task.src_id])
-      : [];
-    if (!chat || !canAssignInChat(chat)) throw new Error("This task did not come from a channel or a group message, so it can only go as a direct message.");
-    const [owner] = await c.db.query<{ name: string }>("select name from users where id = $1", [c.ownerId]);
-    const messageId = uid("m");
-    // In the dashboard the tag reads as a name; Slack needs the person's id to notify them.
-    await c.db.run("insert into messages (id, conversation_id, owner_id, sender_name, me, body, at, status, scanned, asked) values ($1, $2, $3, $4, true, $5, $6, 'queued', true, true)", [messageId, chat.id, c.ownerId, owner?.name ?? "You", text(`@${person.name}`), now]);
-    await c.db.run("update conversations set replied = true where id = $1", [chat.id]);
-    await c.db.run(
-      "insert into outbox (id, owner_id, source, target, to_name, ctx, body, conversation_id, message_id, task_id, created_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
-      [uid("o"), c.ownerId, chat.source, chat.external_id, person.name, chat.ctx, text(person.slack_user_id ? `<@${person.slack_user_id}>` : person.name), chat.id, messageId, taskId, now],
-    );
-  } else {
+  if (where === "dm") {
+    if (!person) throw new Error("Pick who should get the direct message.");
     await c.db.run(
       "insert into outbox (id, owner_id, source, target, to_name, ctx, body, task_id, created_at) values ($1, $2, 'slack', $3, $4, 'Direct message', $5, $6, $7)",
       [uid("o"), c.ownerId, person.slack_user_id, person.name, text(person.name), taskId, now],
     );
+  } else {
+    // Where it is posted, and the conversation it shows in when the dashboard follows that chat.
+    let place: { target: string; label: string; conversationId: string | null };
+    if (where === "chat") {
+      const [chat] = task.src_type === "message"
+        ? await c.db.query<{ id: string; external_id: string; ctx: string }>("select id, external_id, ctx from conversations where owner_id = $1 and id = $2", [c.ownerId, task.src_id])
+        : [];
+      if (!chat || !canAssignInChat(chat)) throw new Error("This task did not come from a channel or a group message. Pick a Slack channel, or send a direct message.");
+      place = { target: chat.external_id, label: chat.ctx, conversationId: chat.id };
+    } else {
+      const channelId = where.slice(CHANNEL_PICK.length);
+      const [channel] = await c.db.query<{ id: string; name: string }>("select id, name from slack_channels where owner_id = $1 and id = $2", [c.ownerId, channelId]);
+      if (!channel) throw new Error("That Slack channel is not on your channel list.");
+      const [followed] = await c.db.query<{ id: string }>("select id from conversations where owner_id = $1 and source = 'slack' and external_id = $2", [c.ownerId, channel.id]);
+      place = { target: channel.id, label: `#${channel.name}`, conversationId: followed?.id ?? null };
+    }
+    holder ??= { id: `${CHANNEL_PICK}${place.target}`, name: place.label, role: "Slack channel" };
+
+    let messageId: string | null = null;
+    if (place.conversationId) {
+      const [owner] = await c.db.query<{ name: string }>("select name from users where id = $1", [c.ownerId]);
+      messageId = uid("m");
+      // In the dashboard the tag reads as a name; Slack needs the person's id to notify them.
+      await c.db.run("insert into messages (id, conversation_id, owner_id, sender_name, me, body, at, status, scanned, asked) values ($1, $2, $3, $4, true, $5, $6, 'queued', true, true)", [messageId, place.conversationId, c.ownerId, owner?.name ?? "You", text(person ? `@${person.name}` : ""), now]);
+      await c.db.run("update conversations set replied = true where id = $1", [place.conversationId]);
+    }
+    await c.db.run(
+      "insert into outbox (id, owner_id, source, target, to_name, ctx, body, conversation_id, message_id, task_id, created_at) values ($1, $2, 'slack', $3, $4, $5, $6, $7, $8, $9, $10)",
+      [uid("o"), c.ownerId, place.target, holder.name, place.label, text(person ? (person.slack_user_id ? `<@${person.slack_user_id}>` : person.name) : ""), place.conversationId, messageId, taskId, now],
+    );
   }
-  await c.db.run("update tasks set due = $1, delegated_to = $2, delegated_name = $3, delegated_role = $4, delegated_note = $5, delegated_at = $6 where id = $7", [due, person.id, person.name, person.role, note, now, taskId]);
+  await c.db.run("update tasks set due = $1, delegated_to = $2, delegated_name = $3, delegated_role = $4, delegated_note = $5, delegated_at = $6 where id = $7", [due, holder!.id, holder!.name, holder!.role, note, now, taskId]);
 }
 
 /** The task still open for a conversation, if there is one. One is enough. */
@@ -416,18 +438,21 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
     const existing = await openTaskFor(c, id);
     // Already assigned: this is a second click on Assign.
     if (existing?.delegated_to) return;
-    const person = await assignee(c, personId);
-    const [team] = await c.db.query<{ depts: string[] }>("select depts from team_members where owner_id = $1 and id = $2", [c.ownerId, person.id]);
+    // The person is optional when the task goes to a chat or a channel.
+    const person = personId ? await assignee(c, personId) : null;
+    const [team] = person ? await c.db.query<{ depts: string[] }>("select depts from team_members where owner_id = $1 and id = $2", [c.ownerId, person.id]) : [];
     const taskId = existing?.id ?? (await insertTask(c, { title: await replyTitle(c, `From ${conv.from_name}`, conv.last_text), dept: team?.depts?.[0] ?? "Operations", project: conv.project, pri: conv.pri, due, src: { type: "message", id } }));
-    await delegate(c, taskId, person.id, note, due, where);
+    await delegate(c, taskId, person?.id ?? "", note, due, where);
     await c.db.run("update conversations set done = true where id = $1", [id]);
   },
 
   // Tasks
-  /** `assignTo` hands the new task straight to someone. Personal tasks stay with the owner. */
+  /** `assignTo` hands the new task straight to a person, or to a channel ("channel:<id>"). Personal tasks stay with the owner. */
   async addTask(c, input: { title: string; dept: string; project: string; pri: Priority; due: string; mode?: Mode; assignTo?: string }) {
     const id = await insertTask(c, input);
-    if (input.assignTo && asMode(input.mode) === "professional") await delegate(c, id, input.assignTo, "", input.due);
+    if (!input.assignTo || asMode(input.mode) !== "professional") return;
+    if (input.assignTo.startsWith(CHANNEL_PICK)) await delegate(c, id, "", "", input.due, input.assignTo as AssignWhere);
+    else await delegate(c, id, input.assignTo, "", input.due);
   },
   /** Turns one action item from a call into a task, once. Someone else's becomes a follow-up. */
   async actionItemToTask(c, meetingId: string, index: number) {

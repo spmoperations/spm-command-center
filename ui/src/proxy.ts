@@ -4,7 +4,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { readSession, SESSION_COOKIE } from "@/server/session";
 
-const OPEN = new Set(["/login", "/api/login"]);
+// The login page and its request are open to everyone. So is the scheduler's route: it has
+// no session, and checks its own secret instead.
+const OPEN = new Set(["/login", "/api/login", "/api/cron"]);
 
 export function proxy(request: NextRequest) {
   const { pathname, protocol, host } = request.nextUrl;

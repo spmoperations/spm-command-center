@@ -3,6 +3,8 @@
 import type { Provider } from "./types";
 
 export const PROVIDERS: Provider[] = ["slack", "telegram", "fathom"];
+/** The ones that can be connected today. The Connections tab shows only these. */
+export const LIVE_PROVIDERS: Provider[] = ["slack", "fathom"];
 
 export const PROVIDER_NAME: Record<Provider, string> = { slack: "Slack", telegram: "Telegram", fathom: "Fathom" };
 

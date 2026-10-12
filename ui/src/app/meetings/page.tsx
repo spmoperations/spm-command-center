@@ -1,12 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { Markdown } from "@/components/Markdown";
 import { SuggestionRow } from "@/components/SuggestionRow";
 import { DueText, PriPill } from "@/components/bits";
 import { daysBetween, parseDay } from "@/core/dates";
 import type { Meeting } from "@/core/types";
-import { actionItemToTask, loadTranscript, toast, toggleMeeting, toggleTask, useApp, type App } from "@/store/store";
+import { actionItemToTask, loadTranscript, openTask, toast, toggleMeeting, toggleTask, useApp, type App } from "@/store/store";
 
 function dayText(m: Meeting, today: string) {
   const diff = daysBetween(today, m.date);
@@ -119,7 +120,9 @@ function MeetingRow({ m, app }: { m: Meeting; app: App }) {
                     <li key={t.id} className={t.done ? "done" : ""}>
                       <input type="checkbox" checked={t.done} aria-label={`Done: ${t.title}`} onChange={(e) => toggleTask(t.id, e.target.checked)} />
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div className="t-name">{t.title}</div>
+                        <Link className="t-name task-link" href="/tasks" onClick={() => openTask(t.id)} title="Open this task">
+                          {t.title}
+                        </Link>
                       </div>
                       <PriPill p={t.pri} />
                       <DueText task={t} today={today} />

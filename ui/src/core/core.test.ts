@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { addDays, dueLabel, weekStart } from "./dates";
 import { assignmentText, candidates, canAssign, canAssignInChat, fitFor, taskStatus } from "./delegation";
-import { clampInterval, describeInterval, isDue, JOBS, nextRunAt, waitUntil } from "./jobs";
+import { clampInterval, describeInterval, isDue, JOBS, LIVE_JOBS, nextRunAt, waitUntil } from "./jobs";
 import { looksLikeRequest, requestDue, requestSummary, whereAsked } from "./requests";
+import { findChoices } from "./search";
 import { checkFathomKey, checkPhone, checkSlackToken, checkTelegramCode, maskPhone, normalizePhone, SLACK_CREATE_APP_URL } from "./providers";
 import { applyRules, ruleHits, ruleMatches, sortConversation } from "./rules";
 import { evalMetric } from "./targets";
@@ -74,7 +75,7 @@ describe("delegation", () => {
   ];
   const task = (over: Partial<Task>): Task => ({
     id: "t", title: "Swap hook on Harbor clip #4", mode: "professional", dept: "Client Sales", project: "Harbor Realty", pri: "high",
-    due: "2026-10-09", done: false, delegable: true, ...over,
+    due: "2026-10-09", done: false, createdAt: 0, delegable: true, ...over,
   });
 
   it("finds responsibilities named in the title or project, singular or plural", () => {
@@ -108,6 +109,11 @@ describe("delegation", () => {
     const about = { title: "Swap the hook", due: "2026-10-12" };
     expect(assignmentText({ ...about, where: "dm", who: "Luis Ramos", note: "" })).toBe("New task for you: Swap the hook (due 2026-10-12)");
     expect(assignmentText({ ...about, where: "chat", who: "<@ULUIS>", note: "Use the new one." })).toBe("<@ULUIS> new task for you: Swap the hook (due 2026-10-12)\n\nUse the new one.");
+  });
+
+  it("addresses the channel as a whole when nobody is tagged", () => {
+    expect(assignmentText({ where: "channel:C9", who: "", title: "Swap the hook", due: "2026-10-12", note: "" })).toBe("New task: Swap the hook (due 2026-10-12)");
+    expect(assignmentText({ where: "channel:C9", who: "@Luis Ramos", title: "Swap the hook", due: "2026-10-12", note: "" })).toBe("@Luis Ramos new task for you: Swap the hook (due 2026-10-12)");
   });
 
   it("marks a task overdue only before its due day", () => {
@@ -149,6 +155,27 @@ describe("requests in messages", () => {
   });
 });
 
+describe("type-to-find pick lists", () => {
+  const channels = ["#acme-corp-sales-metrics", "#sales", "#02-team-sales", "#ops-team", "#Sales-Pipeline"].map((label, k) => ({ value: `C${k}`, label }));
+  const found = (typed: string) => findChoices(channels, typed).map((c) => c.label);
+
+  it("shows everything until something is typed", () => {
+    expect(found("")).toHaveLength(5);
+    expect(found("  ")).toHaveLength(5);
+  });
+
+  it("finds a name by any of its words, in any order, whatever the case or punctuation", () => {
+    expect(found("acme sales")).toEqual(["#acme-corp-sales-metrics"]);
+    expect(found("SALES acme")).toEqual(["#acme-corp-sales-metrics"]);
+    expect(found("#ops")).toEqual(["#ops-team"]);
+    expect(found("zzz")).toEqual([]);
+  });
+
+  it("puts the names that start with what was typed first", () => {
+    expect(found("sales")).toEqual(["#sales", "#Sales-Pipeline", "#acme-corp-sales-metrics", "#02-team-sales"]);
+  });
+});
+
 describe("timers", () => {
   const setting = (over: Partial<JobSetting> = {}): JobSetting => ({ id: "slack-pull", intervalMin: 60, enabled: true, ...over });
   const HOUR = 3_600_000;
@@ -157,6 +184,11 @@ describe("timers", () => {
     expect(new Set(JOBS.map((j) => j.id)).size).toBe(JOBS.length);
     for (const job of JOBS) expect(job.defaultMin).toBeGreaterThanOrEqual(job.minMin);
     expect(JOBS.filter((j) => j.usesAI).map((j) => j.id)).toEqual(["task-suggest"]);
+  });
+
+  it("leaves out the checks that cannot work yet", () => {
+    expect(JOBS.filter((j) => !j.live).map((j) => j.id)).toEqual(["telegram-pull", "task-suggest"]);
+    expect(LIVE_JOBS.map((j) => j.id)).toEqual(["slack-pull", "fathom-pull", "inbox-rules", "request-finder", "slack-directory-sync", "outbox-retry"]);
   });
 
   it("keeps a timer at or above the fastest allowed", () => {

@@ -3,14 +3,14 @@
 import Link from "next/link";
 import { useState } from "react";
 import { DueText, Pill, PriPill, SrcBadge } from "@/components/bits";
-import { PRIORITY_RANK } from "@/core/config";
+import { DEPARTMENTS, PRIORITY_RANK, TARGETS } from "@/core/config";
 import { ago, daysInMonth, isoDay, parseDay, weekStart } from "@/core/dates";
 import { plainPreview } from "@/core/message-format";
 import { isMine } from "@/core/delegation";
 import { evalMetric, formatValue, STATUS_TEXT, type MetricEval } from "@/core/targets";
 import type { Task } from "@/core/types";
 import {
-  addFocus, addLink, openConversation, removeFocus, removeLink, toast, toggleFocus, toggleTask, useApp,
+  addFocus, addLink, openConversation, openTask, removeFocus, removeLink, toast, toggleFocus, toggleTask, useApp,
   type App, type FocusScope,
 } from "@/store/store";
 
@@ -157,8 +157,10 @@ function TodayTask({ task, today }: { task: Task; today: string }) {
     <li className={task.done ? "done" : ""} style={handedOff ? { opacity: 0.6 } : undefined}>
       <input type="checkbox" checked={task.done} aria-label={`Mark done: ${task.title}`} onChange={(e) => toggleTask(task.id, e.target.checked)} />
       <div className="grow">
-        <div className="who">{task.title}</div>
-        {task.mode === "professional" && <div className="txt">{[task.project, task.dept].filter(Boolean).join(" · ")}</div>}
+        <Link className="who task-link" href="/tasks" onClick={() => openTask(task.id)} title="Open this task">
+          {task.title}
+        </Link>
+        {task.mode === "professional" && <div className="txt">{[task.project, DEPARTMENTS ? task.dept : ""].filter(Boolean).join(" · ")}</div>}
       </div>
       <div style={{ display: "grid", gap: 4, justifyItems: "end" }}>
         <PriPill p={task.pri} />
@@ -208,7 +210,7 @@ export default function TodayPage() {
         </div>
       </div>
 
-      {!personal && (
+      {!personal && TARGETS && (
         <div className="split-row">
           <div className="panel pace-panel">
             <div className="panel-head">
@@ -282,7 +284,8 @@ export default function TodayPage() {
         </div>
       </div>
 
-      {personal && (
+      {/* Quick links sit beside the month's pace when that is showing, and below otherwise. */}
+      {(personal || !TARGETS) && (
         <div style={{ marginTop: 18 }}>
           <LinksPanel app={app} />
         </div>

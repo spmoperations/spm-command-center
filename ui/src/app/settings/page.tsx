@@ -2,15 +2,16 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { DEPTS, LINE_NAME, PRIORITY_NAME, SOURCE_NAME, SOURCES } from "@/core/config";
+import { Combo } from "@/components/Combo";
+import { DEPARTMENTS, DEPTS, LINE_NAME, LIVE_SOURCES, PERSONAL_SIDE, PRIORITY_NAME, SOURCE_NAME } from "@/core/config";
 import { ago } from "@/core/dates";
-import { describeInterval, JOBS, jobById, type Connection } from "@/core/jobs";
+import { describeInterval, jobById, LIVE_JOBS, type Connection } from "@/core/jobs";
 import { PROVIDER_NAME } from "@/core/providers";
 import { ruleHits } from "@/core/rules";
-import type { JobSetting, Person, Priority, Rule, Source } from "@/core/types";
+import type { JobSetting, Line, Person, Priority, Rule, Source } from "@/core/types";
 import {
   addHandle, addPerson, addRule, clearManualPriorities, deleteRule, moveRule, removeHandle, removePerson, runJobNow,
-  setChannelSelected, setJobEnabled, setJobInterval, toast, togglePersonDept, useApp, type App, type RuleKind,
+  setChannelSelected, setJobEnabled, setJobInterval, syncNow, toast, togglePersonDept, useApp, type App, type RuleKind,
 } from "@/store/store";
 
 function IntervalInput({ setting }: { setting: JobSetting }) {
@@ -38,13 +39,19 @@ function Timers({ app }: { app: App }) {
     if (needs === "ai") return app.state.aiConfigured ? null : "Waiting for the AI key";
     return app.state.connections[needs].connected ? null : `Waiting for ${PROVIDER_NAME[needs]}`;
   };
+  // Only the checks that work today. The one that sends has nothing to do while sending is off.
+  const jobs = LIVE_JOBS.filter((job) => job.id !== "outbox-retry" || app.state.sendingEnabled);
+  const anyAI = jobs.some((job) => job.usesAI);
   return (
     <div className="panel set-sec" id="timers">
       <div className="panel-head">
-        <h3>Timers</h3>
+        <h3>Sync</h3>
+        <button className="btn primary" disabled={app.ui.syncing} onClick={() => void syncNow()}>
+          {app.ui.syncing ? "Syncing…" : "Sync now"}
+        </button>
       </div>
       <p className="set-intro">
-        Each check is its own small program with its own timer. Change how often it runs, or switch it off. Every timer has a fastest allowed value, so a check can never run often enough to get blocked by Slack, Telegram or Fathom. A check waits until its source is connected on the <Link href="/connections">Connections</Link> tab.
+        New messages and calls come in by themselves, each check on its own timer. <strong>Sync now</strong> runs all of them straight away; <strong>Run now</strong> runs just one. Change how often a check runs, or switch it off. Every timer has a fastest allowed value, so a check can never run often enough to get blocked by Slack or Fathom. A check waits until its source is connected on the <Link href="/connections">Connections</Link> tab.
       </p>
       <div className="table-scroll">
         <table className="set">
@@ -54,14 +61,14 @@ function Timers({ app }: { app: App }) {
               <th>Shows up in</th>
               <th>How often</th>
               <th>Fastest</th>
-              <th>Uses AI</th>
+              {anyAI && <th>Uses AI</th>}
               <th>On</th>
               <th>Last run</th>
               <th />
             </tr>
           </thead>
           <tbody>
-            {JOBS.map((job) => {
+            {jobs.map((job) => {
               const setting = app.state.jobs.find((j) => j.id === job.id) ?? { id: job.id, intervalMin: job.defaultMin, enabled: true };
               const status = app.state.jobStatus[job.id];
               const waiting = waitingFor(job.needs);
@@ -72,7 +79,7 @@ function Timers({ app }: { app: App }) {
                   {/* Keyed by the saved value, so the field shows the clamped number after a save. */}
                   <td>{job.follows ? <span className="waiting">After each message check</span> : <IntervalInput key={setting.intervalMin} setting={setting} />}</td>
                   <td className="num">{job.follows ? "–" : describeInterval(job.minMin)}</td>
-                  <td>{job.usesAI ? <strong>Yes</strong> : "No"}</td>
+                  {anyAI && <td>{job.usesAI ? <strong>Yes</strong> : "No"}</td>}
                   <td>
                     <input type="checkbox" checked={setting.enabled} aria-label={`${job.name}: on`} onChange={(e) => setJobEnabled(job.id, e.target.checked)} />
                   </td>
@@ -84,7 +91,7 @@ function Timers({ app }: { app: App }) {
                     </span>
                   </td>
                   <td style={{ textAlign: "right" }}>
-                    <button className="btn" disabled={Boolean(waiting) || app.ui.running.includes(job.id)} onClick={() => void runJobNow(job.id)}>
+                    <button className="btn" disabled={Boolean(waiting) || app.ui.syncing || app.ui.running.includes(job.id)} onClick={() => void runJobNow(job.id)}>
                       {app.ui.running.includes(job.id) ? "Running…" : "Run now"}
                     </button>
                   </td>
@@ -149,15 +156,17 @@ function PersonRow({ p }: { p: Person }) {
           {!p.slackUserId && " · no Slack account linked"}
         </div>
       </td>
-      <td>
-        <div className="tagset">
-          {DEPTS.map((d) => (
-            <button key={d} className="deptchip" aria-pressed={p.depts.includes(d)} onClick={() => togglePersonDept(p.id, d)}>
-              {d}
-            </button>
-          ))}
-        </div>
-      </td>
+      {DEPARTMENTS && (
+        <td>
+          <div className="tagset">
+            {DEPTS.map((d) => (
+              <button key={d} className="deptchip" aria-pressed={p.depts.includes(d)} onClick={() => togglePersonDept(p.id, d)}>
+                {d}
+              </button>
+            ))}
+          </div>
+        </td>
+      )}
       <td>
         <div className="tagset">
           {p.handles.map((h, k) => (
@@ -205,14 +214,14 @@ function Team({ app }: { app: App }) {
         <h3>Team and responsibilities</h3>
       </div>
       <p className="set-intro">
-        Who could own which work. When you assign a task, people in its department are offered first, and anyone whose responsibilities match the task is marked as the best fit. You can also assign to anyone on Slack; they are added here the first time. Pick each person&apos;s Slack account so an assigned task can reach them.
+        The people you assign work to. {DEPARTMENTS ? "When you assign a task, people in its department are offered first, and anyone" : "When you assign a task, anyone"} whose responsibilities match the task is marked as the best fit. You can also assign to anyone on Slack; they are added here the first time. Pick each person&apos;s Slack account so an assigned task can reach them.
       </p>
       <div className="table-scroll">
         <table className="set">
           <thead>
             <tr>
               <th>Person</th>
-              <th>Departments</th>
+              {DEPARTMENTS && <th>Departments</th>}
               <th>Can be responsible for</th>
               <th />
             </tr>
@@ -229,38 +238,35 @@ function Team({ app }: { app: App }) {
         onSubmit={(e) => {
           e.preventDefault();
           if (!name.trim()) return;
-          addPerson({ name: name.trim(), role: role.trim() || "Team member", depts: [dept], handles: handles.split(",").map((x) => x.trim()).filter(Boolean), slackUserId: slackUserId || null });
+          addPerson({ name: name.trim(), role: role.trim() || "Team member", depts: DEPARTMENTS ? [dept] : [], handles: handles.split(",").map((x) => x.trim()).filter(Boolean), slackUserId: slackUserId || null });
           setName("");
           setRole("");
           setHandles("");
           setSlackUserId("");
         }}
       >
-        <select
-          className="f"
+        <Combo
           value={slackUserId}
-          aria-label="Their Slack account"
-          onChange={(e) => {
-            setSlackUserId(e.target.value);
+          label="Their Slack account"
+          placeholder="Slack account: type or pick…"
+          none="No Slack account"
+          choices={app.state.slackPeople.map((p) => ({ value: p.id, label: p.name }))}
+          onChange={(id) => {
+            setSlackUserId(id);
             // Picking the Slack account fills in the name.
-            const person = app.state.slackPeople.find((p) => p.id === e.target.value);
+            const person = app.state.slackPeople.find((p) => p.id === id);
             if (person) setName(person.name);
           }}
-        >
-          <option value="">Slack account…</option>
-          {app.state.slackPeople.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
+        />
         <input className="f" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" required aria-label="Name" maxLength={60} />
         <input className="f" value={role} onChange={(e) => setRole(e.target.value)} placeholder="Role" aria-label="Role" maxLength={60} />
-        <select className="f" value={dept} aria-label="Department" onChange={(e) => setDept(e.target.value)}>
-          {DEPTS.map((d) => (
-            <option key={d}>{d}</option>
-          ))}
-        </select>
+        {DEPARTMENTS && (
+          <select className="f" value={dept} aria-label="Department" onChange={(e) => setDept(e.target.value)}>
+            {DEPTS.map((d) => (
+              <option key={d}>{d}</option>
+            ))}
+          </select>
+        )}
         <input className="f" value={handles} onChange={(e) => setHandles(e.target.value)} placeholder="Responsibilities, comma separated" aria-label="Responsibilities" maxLength={200} />
         <button className="btn primary" type="submit">
           Add person
@@ -323,7 +329,9 @@ function RuleList<T extends string>({ app, kind, id, title, intro, outcomes, out
         {rules.map((r, k) => (
           <li key={r.id}>
             <div className="when">
-              {SOURCE_LABEL[r.source]}: <Condition r={r} />
+              {/* With one app connected there is nothing to tell apart, so the app is not named. */}
+              {LIVE_SOURCES.length > 1 && <>{SOURCE_LABEL[r.source]}: </>}
+              <Condition r={r} />
               <span className="arrow">→</span>
               <strong>{outcomeOf(r)}</strong>
             </div>
@@ -353,13 +361,15 @@ function RuleList<T extends string>({ app, kind, id, title, intro, outcomes, out
           setValue("");
         }}
       >
-        <select className="f" value={source} aria-label="App" onChange={(e) => setSource(e.target.value as Source | "any")}>
-          {(["any", ...SOURCES] as const).map((s) => (
-            <option key={s} value={s}>
-              {SOURCE_LABEL[s]}
-            </option>
-          ))}
-        </select>
+        {LIVE_SOURCES.length > 1 && (
+          <select className="f" value={source} aria-label="App" onChange={(e) => setSource(e.target.value as Source | "any")}>
+            {(["any", ...LIVE_SOURCES] as const).map((s) => (
+              <option key={s} value={s}>
+                {SOURCE_LABEL[s]}
+              </option>
+            ))}
+          </select>
+        )}
         <select className="f" value={when} aria-label="Match on" onChange={(e) => setWhen(e.target.value as Rule["when"])}>
           {(Object.keys(WHEN_LABEL) as Rule["when"][]).map((w) => (
             <option key={w} value={w}>
@@ -406,11 +416,11 @@ export default function SettingsPage() {
         </div>
       </div>
       <nav className="set-nav" aria-label="Settings sections">
-        <a href="#timers">Timers</a>
+        <a href="#timers">Sync</a>
         <a href="#channels">Channels</a>
         <a href="#team">Team</a>
         <a href="#urgent">What is urgent</a>
-        <a href="#labels">Personal or Professional</a>
+        <a href="#labels">{PERSONAL_SIDE ? "Personal or Professional" : "Agency or Consulting"}</a>
       </nav>
 
       <Timers app={app} />
@@ -435,16 +445,30 @@ export default function SettingsPage() {
         }
       />
 
-      <RuleList<"personal" | "agency" | "consulting">
-        app={app}
-        kind="labelRules"
-        id="labels"
-        title="Personal or Professional"
-        intro="Rules that decide which side of the dashboard a chat belongs to, and whether a professional chat is Agency or Consulting. They run top to bottom and the first match wins. A chat that matches no rule is Professional, Agency. A chat you move by hand in the inbox keeps your choice."
-        outcomes={[["personal", "Personal"], ["consulting", "Professional · Consulting"], ["agency", "Professional · Agency"]]}
-        outcomeOf={(r) => (r.mode === "personal" ? "Personal" : `Professional · ${LINE_NAME[r.line ?? "agency"]}`)}
-        makeOutcome={(to) => (to === "personal" ? { mode: "personal" } : { mode: "professional", line: to })}
-      />
+      {!PERSONAL_SIDE && (
+        <RuleList<Line>
+          app={app}
+          kind="labelRules"
+          id="labels"
+          title="Agency or Consulting"
+          intro="Rules that label a chat as Agency or Consulting. They run top to bottom and the first match wins. A chat that matches no rule is Agency."
+          outcomes={[["consulting", "Consulting"], ["agency", "Agency"]]}
+          outcomeOf={(r) => LINE_NAME[r.line ?? "agency"]}
+          makeOutcome={(line) => ({ line })}
+        />
+      )}
+      {PERSONAL_SIDE && (
+        <RuleList<"personal" | "agency" | "consulting">
+          app={app}
+          kind="labelRules"
+          id="labels"
+          title="Personal or Professional"
+          intro="Rules that decide which side of the dashboard a chat belongs to, and whether a professional chat is Agency or Consulting. They run top to bottom and the first match wins. A chat that matches no rule is Professional, Agency. A chat you move by hand in the inbox keeps your choice."
+          outcomes={[["personal", "Personal"], ["consulting", "Professional · Consulting"], ["agency", "Professional · Agency"]]}
+          outcomeOf={(r) => (r.mode === "personal" ? "Personal" : `Professional · ${LINE_NAME[r.line ?? "agency"]}`)}
+          makeOutcome={(to) => (to === "personal" ? { mode: "personal" } : { mode: "professional", line: to })}
+        />
+      )}
     </section>
   );
 }

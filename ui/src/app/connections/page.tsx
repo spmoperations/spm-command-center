@@ -5,7 +5,7 @@ import { useState } from "react";
 import { Pill } from "@/components/bits";
 import { ago } from "@/core/dates";
 import {
-  checkFathomKey, checkSlackToken, FATHOM_API_ACCESS_URL, PROVIDER_ABOUT, PROVIDER_NAME, PROVIDERS, SLACK_CREATE_APP_URL, SLACK_USER_SCOPES,
+  checkFathomKey, checkSlackToken, FATHOM_API_ACCESS_URL, LIVE_PROVIDERS, PROVIDER_ABOUT, PROVIDER_NAME, SLACK_CREATE_APP_URL, SLACK_USER_SCOPES,
 } from "@/core/providers";
 import type { JobId, Provider } from "@/core/types";
 import { connectProvider, disconnectProvider, useApp, type App } from "@/store/store";
@@ -193,7 +193,7 @@ function ProviderCard({ provider, app }: { provider: Provider; app: App }) {
 export default function ConnectionsPage() {
   const app = useApp();
   if (!app) return null;
-  const connected = PROVIDERS.filter((p) => app.state.connections[p].connected).length;
+  const connected = LIVE_PROVIDERS.filter((p) => app.state.connections[p].connected).length;
 
   return (
     <section className="view">
@@ -201,12 +201,12 @@ export default function ConnectionsPage() {
         <div>
           <h2>Connections</h2>
           <div className="muted" style={{ fontSize: 14 }}>
-            Connect the places your messages and calls come from. {connected} of {PROVIDERS.length} connected. A key you paste here is checked, stored encrypted, and never shown again.
+            Connect the places your messages and calls come from. {connected} of {LIVE_PROVIDERS.length} connected. A key you paste here is checked, stored encrypted, and never shown again.
           </div>
         </div>
       </div>
       <div className="prov-list">
-        {PROVIDERS.map((p) => (
+        {LIVE_PROVIDERS.map((p) => (
           <ProviderCard key={p} provider={p} app={app} />
         ))}
       </div>

@@ -65,6 +65,8 @@ export interface Task {
   due: string;
   done: boolean;
   doneAt?: number | null;
+  /** When the task was added. */
+  createdAt: number;
   src?: TaskSource | null;
   /** False for decisions and anything only the owner can do. */
   delegable: boolean;

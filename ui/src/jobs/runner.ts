@@ -5,7 +5,7 @@ import type { JobId, JobSetting } from "@/core/types";
 import { aiConfigured } from "@/server/ai";
 import { secretFor } from "@/server/connections";
 import type { Db } from "@/server/db";
-import { OWNER_ID, resortInbox } from "@/server/repo";
+import { OWNER_ID, resortInbox, sendingEnabled } from "@/server/repo";
 import { RateLimited, slackClient } from "@/server/slack";
 import { fathomPull } from "./fathom";
 import { outboxSend } from "./outbox";
@@ -73,6 +73,8 @@ async function execute(jobId: JobId, ctx: JobContext): Promise<JobResult> {
 }
 
 const running = new Set<string>();
+/** A run that never reported back (a crashed server) stops blocking the next one after this long. */
+const STALE_RUN_MS = 6 * 60_000;
 
 /** Runs one job now, whatever its timer says, and records what happened. */
 export async function runJob(db: Db, jobId: JobId, ownerId = OWNER_ID, now = Date.now()): Promise<JobRun> {
@@ -80,8 +82,17 @@ export async function runJob(db: Db, jobId: JobId, ownerId = OWNER_ID, now = Dat
   if (running.has(lock)) return { jobId, ok: false, items: 0, message: "Already running" };
   running.add(lock);
   try {
-    const [job] = await db.query<{ cursor: Record<string, unknown> }>("select cursor from jobs where owner_id = $1 and job_id = $2", [ownerId, jobId]);
-    const [{ id: runId }] = await db.query<{ id: number }>("insert into job_runs (owner_id, job_id, started_at) values ($1, $2, $3) returning id", [ownerId, jobId, now]);
+    // On a host the same check can be started twice at once, by two servers. The job's row is
+    // held while this one claims the run, so only one of them goes ahead.
+    const claimed = await db.transaction(async (tx) => {
+      const [job] = await tx.query<{ cursor: Record<string, unknown> }>("select cursor from jobs where owner_id = $1 and job_id = $2 for update", [ownerId, jobId]);
+      const [busy] = await tx.query<{ id: number }>("select id from job_runs where owner_id = $1 and job_id = $2 and finished_at is null and started_at > $3 limit 1", [ownerId, jobId, now - STALE_RUN_MS]);
+      if (busy) return null;
+      const [{ id }] = await tx.query<{ id: number }>("insert into job_runs (owner_id, job_id, started_at) values ($1, $2, $3) returning id", [ownerId, jobId, now]);
+      return { job, runId: id };
+    });
+    if (!claimed) return { jobId, ok: false, items: 0, message: "Already running" };
+    const { job, runId } = claimed;
     let run: JobRun;
     try {
       const result = await execute(jobId, { db, ownerId, now, cursor: job?.cursor ?? {} });
@@ -113,7 +124,8 @@ export async function tick(db: Db, ownerId = OWNER_ID, now = Date.now()): Promis
   // In the order they are defined: the people and channel list before messages, messages before tasks.
   for (const def of [...JOBS].sort((a, b) => Number(b.id === "slack-directory-sync") - Number(a.id === "slack-directory-sync"))) {
     const row = rows.find((r) => r.job_id === def.id);
-    if (!row || def.follows) continue;
+    // A check that cannot work yet is not run on a timer. It can still be run by hand.
+    if (!row || def.follows || !def.live) continue;
     // A job whose source is not connected is skipped quietly, not logged as a failure every minute.
     if (def.needs && (def.needs === "ai" ? !aiConfigured() : !connected.has(def.needs))) continue;
     const setting: JobSetting = { id: def.id, intervalMin: row.interval_min, enabled: row.enabled };
@@ -122,6 +134,23 @@ export async function tick(db: Db, ownerId = OWNER_ID, now = Date.now()): Promis
     runs.push(run);
     // Jobs that follow another run right after it succeeds.
     if (run.ok) for (const follower of JOBS.filter((j) => j.follows?.includes(def.id))) runs.push(await runJob(db, follower.id, ownerId, now));
+  }
+  return runs;
+}
+
+/**
+ * What "Sync now" does: every working check whose source is connected, whatever its timer
+ * says. The people and channel list goes first, then messages, then calls.
+ */
+export async function syncAll(db: Db, ownerId = OWNER_ID): Promise<JobRun[]> {
+  const connected = new Set((await db.query<{ provider: string }>("select provider from connections where owner_id = $1", [ownerId])).map((r) => r.provider));
+  const runs: JobRun[] = [];
+  for (const def of [...JOBS].sort((a, b) => Number(b.id === "slack-directory-sync") - Number(a.id === "slack-directory-sync"))) {
+    if (!def.live || def.follows) continue;
+    if (def.needs && (def.needs === "ai" ? !aiConfigured() : !connected.has(def.needs))) continue;
+    // Nothing leaves the outbox while sending is switched off.
+    if (def.id === "outbox-retry" && !sendingEnabled()) continue;
+    runs.push(...(await runNow(db, def.id, ownerId)));
   }
   return runs;
 }

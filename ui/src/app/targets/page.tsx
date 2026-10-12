@@ -1,7 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { Pill } from "@/components/bits";
+import { TARGETS } from "@/core/config";
 import { daysInMonth } from "@/core/dates";
 import { elapsedDays, evalMetric, formatValue, STATUS_TEXT, todayLogged, type MetricEval, type MonthClock } from "@/core/targets";
 import type { Metric } from "@/core/types";
@@ -125,6 +127,15 @@ function EditTargets({ app }: { app: App }) {
 export default function TargetsPage() {
   const app = useApp();
   if (!app) return null;
+  if (!TARGETS) {
+    return (
+      <section className="view">
+        <div className="panel hint-panel">
+          <strong>Targets are switched off for now.</strong> Back to <Link href="/">Today</Link>.
+        </div>
+      </section>
+    );
+  }
   const { state, now } = app;
   const clock: MonthClock = { day: now.getDate(), dim: daysInMonth(now) };
   const all = state.metrics.map((m) => evalMetric(m, state.metrics, state.logs, clock));

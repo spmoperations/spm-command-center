@@ -43,16 +43,25 @@ export const canAssign = (t: Task) => isMine(t) && t.mode === "professional" && 
 /** How the form names someone picked straight from Slack, before they are on the team list. */
 export const SLACK_PICK = "slack:";
 
-/** Where the person is told: a direct message, or the chat the task came from. */
-export type AssignWhere = "dm" | "chat";
+/**
+ * Where an assignment is announced: a direct message to the person, the chat the task came
+ * from, or any Slack channel ("channel:<id>"). In a chat or channel the person is optional:
+ * the task can go to the channel as a whole.
+ */
+export type AssignWhere = "dm" | "chat" | `channel:${string}`;
+export const CHANNEL_PICK = "channel:";
 
 /** A channel or a group message can carry an assignment. A one-to-one chat cannot: the person assigned is not in it. */
 export const canAssignInChat = (c: { ctx: string }) => c.ctx.startsWith("#") || c.ctx === "Group message";
 
-/** The message that tells someone a task is theirs. In a chat it starts by tagging them. */
+/**
+ * The message that announces a task. In a chat or channel it starts by tagging the person,
+ * when one was picked; with nobody picked it is addressed to the channel as a whole.
+ */
 export function assignmentText(o: { where: AssignWhere; who: string; title: string; due: string; note: string }): string {
   const task = `${o.title} (due ${o.due})${o.note ? `\n\n${o.note}` : ""}`;
-  return o.where === "chat" ? `${o.who} new task for you: ${task}` : `New task for you: ${task}`;
+  if (o.where === "dm") return `New task for you: ${task}`;
+  return o.who ? `${o.who} new task for you: ${task}` : `New task: ${task}`;
 }
 
 export type TaskStatus = "done" | "overdue" | "ontrack";

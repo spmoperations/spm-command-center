@@ -14,26 +14,37 @@ interface SlackChannel { id: string; name?: string; user?: string; is_im?: boole
 export async function slackDirectorySync({ db, ownerId }: JobContext, slack: SlackClient): Promise<JobResult> {
   const me = await slack.call<{ user_id: string }>("auth.test");
   const users = await slack.list<SlackUser>("users.list", "members", { limit: 200 });
-  for (const u of users) {
-    const name = u.profile?.real_name || u.real_name || u.profile?.display_name || u.name || u.id;
-    await db.run(
-      `insert into slack_users (owner_id, id, name, email, is_bot, deleted) values ($1, $2, $3, $4, $5, $6)
-       on conflict (owner_id, id) do update set name = excluded.name, email = excluded.email, is_bot = excluded.is_bot, deleted = excluded.deleted`,
-      [ownerId, u.id, name, u.profile?.email ?? null, Boolean(u.is_bot || u.is_app_user) || u.id === "USLACKBOT", Boolean(u.deleted)],
-    );
-  }
+  // Saved in one statement: a workspace has hundreds of people and conversations, and one
+  // trip to the database each would take minutes.
+  const people = new Map(
+    users.map((u) => [u.id, {
+      id: u.id,
+      name: u.profile?.real_name || u.real_name || u.profile?.display_name || u.name || u.id,
+      email: u.profile?.email ?? null,
+      is_bot: Boolean(u.is_bot || u.is_app_user) || u.id === "USLACKBOT",
+      deleted: Boolean(u.deleted),
+    }]),
+  );
+  await db.run(
+    `insert into slack_users (owner_id, id, name, email, is_bot, deleted)
+     select $1, r.id, r.name, r.email, r.is_bot, r.deleted
+     from jsonb_to_recordset($2::jsonb) as r(id text, name text, email text, is_bot boolean, deleted boolean)
+     on conflict (owner_id, id) do update set name = excluded.name, email = excluded.email, is_bot = excluded.is_bot, deleted = excluded.deleted`,
+    [ownerId, JSON.stringify([...people.values()])],
+  );
   const self = users.find((u) => u.id === me.user_id);
   await db.run("update users set slack_user_id = $1, name = coalesce($2, name), email = coalesce(email, $3) where id = $4", [me.user_id, self?.profile?.real_name ?? self?.real_name ?? null, self?.profile?.email ?? null, ownerId]);
 
   const channels = await slack.list<SlackChannel>("users.conversations", "channels", { types: "public_channel,private_channel,mpim,im", exclude_archived: true, limit: 200 });
-  for (const c of channels) {
-    // `selected` is the owner's choice, so an update never touches it.
-    await db.run(
-      `insert into slack_channels (owner_id, id, name, kind, user_id) values ($1, $2, $3, $4, $5)
-       on conflict (owner_id, id) do update set name = excluded.name, kind = excluded.kind, user_id = excluded.user_id`,
-      [ownerId, c.id, c.name ?? c.user ?? c.id, channelKind(c), c.user ?? null],
-    );
-  }
+  const places = new Map(channels.map((c) => [c.id, { id: c.id, name: c.name ?? c.user ?? c.id, kind: channelKind(c), user_id: c.user ?? null }]));
+  // `selected` is the owner's choice, so an update never touches it.
+  await db.run(
+    `insert into slack_channels (owner_id, id, name, kind, user_id)
+     select $1, r.id, r.name, r.kind, r.user_id
+     from jsonb_to_recordset($2::jsonb) as r(id text, name text, kind text, user_id text)
+     on conflict (owner_id, id) do update set name = excluded.name, kind = excluded.kind, user_id = excluded.user_id`,
+    [ownerId, JSON.stringify([...places.values()])],
+  );
   return { items: users.length + channels.length, message: `${users.length} people, ${channels.length} conversations` };
 }
 
