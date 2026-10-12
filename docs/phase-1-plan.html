@@ -1,0 +1,609 @@
+<title>Command Center Phase 1</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one reading column (about 70 characters) for prose; figures and tables break out to the full wrap.
+   Every section follows the same pattern: a one-line answer, a picture, then the picture in plain words.
+   Colors and type are taken from the Command Center prototype, so the plan reads as part of the same product. */
+:root {
+  --bg: #ECEEF2; --surface: #FFFFFF; --surface-2: #F5F6F9; --line: #DCE0E7;
+  --ink: #121722; --muted: #5B6474; --accent: #3346D3; --accent-soft: #E3E6FB;
+  --good: #17804F; --good-soft: #DDF1E6; --warn: #9A6200; --warn-soft: #F8ECD2;
+  --f-display: "Bricolage Grotesque", "Avenir Next", system-ui, sans-serif;
+  --f-body: "Instrument Sans", "Helvetica Neue", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --r: 10px;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0D1016; --surface: #151A22; --surface-2: #1B212B; --line: #2A313D;
+  --ink: #E7EAF0; --muted: #97A0AF; --accent: #8E9BFF; --accent-soft: #232A4F;
+  --good: #4CC38A; --good-soft: #15301F; --warn: #E3A63A; --warn-soft: #33270F; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #0D1016; --surface: #151A22; --surface-2: #1B212B; --line: #2A313D;
+  --ink: #E7EAF0; --muted: #97A0AF; --accent: #8E9BFF; --accent-soft: #232A4F;
+  --good: #4CC38A; --good-soft: #15301F; --warn: #E3A63A; --warn-soft: #33270F; color-scheme: dark; }
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 16.5px/1.6 var(--f-body); }
+.wrap { max-width: 1080px; margin: 0 auto; padding-inline: 20px; padding-block: 36px 72px; display: grid; gap: 60px; }
+.wrap > * { min-width: 0; }
+h1, h2, h3 { font-family: var(--f-display); margin: 0; text-wrap: balance; letter-spacing: -0.01em; line-height: 1.2; }
+h1 { font-size: clamp(28px, 4.4vw, 40px); font-weight: 700; }
+h2 { font-size: 27px; font-weight: 700; }
+h3 { font-size: 18px; font-weight: 700; }
+h3.grp { font-size: 22px; margin-top: 6px; }
+p { margin: 0; }
+a { color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.label { font: 600 11.5px var(--f-body); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.muted { color: var(--muted); }
+strong { font-weight: 600; }
+code { font: 13.5px var(--f-mono); background: var(--surface-2); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; overflow-wrap: anywhere; }
+
+/* Header */
+.top { display: grid; gap: 14px; }
+.top .lede { font-size: 18.5px; max-width: 62ch; color: var(--muted); }
+.meta { font: 13px var(--f-mono); color: var(--muted); }
+.toc { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; margin: 6px 0 0; padding: 0; }
+.toc a { display: block; text-decoration: none; font-size: 14px; font-weight: 600; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 99px; padding: 5px 14px; }
+.toc a:hover { border-color: var(--accent); color: var(--accent); }
+
+/* The short version */
+.short { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 22px 24px; display: grid; gap: 12px; }
+.short ul { margin: 0; padding-left: 20px; display: grid; gap: 8px; max-width: 74ch; }
+
+/* Sections */
+section { display: grid; gap: 22px; }
+section > * { min-width: 0; }
+.sec-head { display: grid; gap: 8px; max-width: 66ch; }
+.sec-head p { font-size: 18px; }
+.for { justify-self: start; font: 600 12px var(--f-mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); background: var(--accent-soft); border-radius: 99px; padding: 3px 12px; }
+
+/* The picture in plain words */
+.plain { max-width: 70ch; display: grid; gap: 12px; }
+.plain ul, .plain ol { margin: 0; padding-left: 22px; display: grid; gap: 9px; }
+.note { max-width: 70ch; background: var(--accent-soft); border-radius: 8px; padding: 12px 16px; }
+
+/* Figures */
+figure { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); }
+.fig-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; padding: 14px 18px 0; }
+.fig-top .n { font: 600 12px var(--f-mono); color: var(--muted); letter-spacing: 0.04em; }
+.fig-top .t { font: 700 16px var(--f-display); }
+.fig-scroll { overflow-x: auto; padding: 10px 18px 6px; }
+.fig-scroll svg { display: block; width: 100%; min-width: 860px; height: auto; color: var(--ink); }
+figcaption { padding: 10px max(18px, calc(100% - 92ch)) 16px 18px; font-size: 14.5px; color: var(--muted); border-top: 1px solid var(--line); }
+
+/* Diagram marks */
+.d-box { fill: var(--surface-2); stroke: var(--line); stroke-width: 1.5; }
+.d-chip { fill: var(--surface); stroke: var(--line); stroke-width: 1.25; }
+.d-soft { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+.d-ln { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+.d-ln-acc { fill: none; stroke: var(--accent); stroke-width: 2; }
+.d-ln-dash { fill: none; stroke: var(--muted); stroke-width: 1.25; stroke-dasharray: 4 4; }
+.d-ah { fill: var(--muted); }
+.d-ah-acc { fill: var(--accent); }
+.d-num { fill: var(--ink); }
+.d-numt { fill: var(--surface); font: 600 11px var(--f-mono); }
+.d-t { fill: var(--ink); font: 600 13.5px var(--f-body); }
+.d-s { fill: var(--muted); font: 12.5px var(--f-body); }
+.d-l { fill: var(--muted); font: 600 11px var(--f-mono); letter-spacing: 0.06em; }
+.d-a { fill: var(--accent); font: 600 12.5px var(--f-body); }
+.d-al { fill: var(--muted); font: 11.5px var(--f-body); }
+
+/* Pills */
+.pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 99px; white-space: nowrap; line-height: 1.6; }
+.pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.pill.on { background: var(--good-soft); color: var(--good); }
+.pill.hand { background: var(--warn-soft); color: var(--warn); }
+.pill.off { background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); }
+
+/* Tab map */
+.tabmap { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); padding: 14px 18px 4px; }
+.tm { display: grid; gap: 8px; justify-items: start; align-content: start; padding: 12px 10px 14px; border-bottom: 3px solid var(--accent); min-width: 0; }
+.tm .name { font: 700 15.5px var(--f-display); overflow-wrap: anywhere; }
+.tm.off { border-bottom: 3px dashed var(--line); }
+.tm.off .name { color: var(--muted); text-decoration: line-through; }
+.srcrow { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; padding: 14px 18px 16px; }
+.srcrow .label { margin-right: 4px; }
+.srcrow .label + .pill ~ .label { margin-left: 10px; }
+@media (max-width: 900px) { .tabmap { grid-template-columns: repeat(4, minmax(0, 1fr)); row-gap: 12px; } }
+@media (max-width: 520px) { .tabmap { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* Tables */
+.tbl-scroll { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); }
+figure .tbl-scroll { border: 0; border-radius: 0; background: none; }
+table { width: 100%; border-collapse: collapse; font-size: 15px; min-width: 600px; }
+th { text-align: left; font: 600 11.5px var(--f-body); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); padding: 12px 14px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td { padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+td.name { font-weight: 600; white-space: nowrap; }
+td.num { font: 13px var(--f-mono); white-space: nowrap; }
+.fake { display: inline-block; font-size: 12.5px; font-weight: 600; color: var(--muted); border: 1px dashed var(--line); border-radius: 8px; padding: 2px 10px; white-space: nowrap; }
+
+/* Steps */
+.steps { list-style: none; margin: 0; padding: 0; counter-reset: s; display: grid; gap: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); }
+.steps > li { counter-increment: s; display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 14px; padding: 16px 18px; border-top: 1px solid var(--line); }
+.steps > li:first-child { border-top: 0; }
+.steps > li::before { content: counter(s); width: 30px; height: 30px; border-radius: 50%; background: var(--ink); color: var(--surface); display: grid; place-items: center; font: 600 13px var(--f-mono); }
+.steps .body { display: grid; gap: 8px; min-width: 0; }
+.steps .body > p, .steps .body > ul { max-width: 72ch; }
+.steps .body ul { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+.steps .tag { justify-self: start; }
+.steps.tight > li { padding-block: 13px; }
+.steps.tight .body { gap: 2px; }
+.btn { justify-self: start; display: inline-block; text-decoration: none; font-weight: 600; font-size: 14.5px; background: var(--accent); color: var(--surface); border-radius: 8px; padding: 8px 16px; }
+.btn:hover { filter: brightness(1.1); }
+
+/* Two-up blocks */
+.two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; align-items: start; }
+@media (max-width: 820px) { .two { grid-template-columns: minmax(0, 1fr); } }
+.block { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 20px 22px; display: grid; gap: 12px; align-content: start; min-width: 0; }
+.block ul, .block ol { margin: 0; padding-left: 20px; display: grid; gap: 8px; }
+.check { list-style: none; padding-left: 0 !important; }
+.check li { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 10px; }
+.check li::before { content: ""; width: 16px; height: 16px; margin-top: 5px; border: 1.5px solid var(--muted); border-radius: 4px; }
+
+/* Copy blocks */
+.copy { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); }
+.copy-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 14px 10px 18px; border-bottom: 1px solid var(--line); }
+.copy-head button { font: 600 13px var(--f-body); color: var(--accent); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 5px 12px; cursor: pointer; }
+.copy-head button:hover { border-color: var(--accent); }
+.copy-body { padding: 14px 18px 16px; white-space: pre-wrap; font-size: 15px; max-width: 80ch; }
+pre.copy-body { margin: 0; font: 13px/1.55 var(--f-mono); white-space: pre; overflow-x: auto; max-width: none; }
+details { background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; }
+details summary { cursor: pointer; padding: 9px 14px; font-weight: 600; font-size: 14.5px; }
+details .copy { border: 0; border-top: 1px solid var(--line); border-radius: 0 0 8px 8px; }
+.rule { border: 0; border-top: 1px solid var(--line); margin: 0; }
+</style>
+
+<div class="wrap">
+
+<header class="top">
+  <span class="label">SPM Command Center</span>
+  <h1>Phase 1: your messages and your calls in one place</h1>
+  <p class="lede">This page explains the first version of your Command Center: what it does, what you will see, and what we need to get started.</p>
+  <div class="meta">Prepared by Shruti · 8 October 2026</div>
+  <ul class="toc" aria-label="Sections">
+    <li><a href="#how">How it works</a></li>
+    <li><a href="#ai">Where AI is used</a></li>
+    <li><a href="#tabs">What you will see</a></li>
+    <li><a href="#example">An example</a></li>
+    <li><a href="#timers">How often it checks</a></li>
+    <li><a href="#team">Adding your team</a></li>
+    <li><a href="#order">Build order</a></li>
+    <li><a href="#need">What we need</a></li>
+  </ul>
+</header>
+
+<div class="short">
+  <span class="label">The short version</span>
+  <ul>
+    <li>Phase 1 connects three things: <strong>your Slack</strong>, <strong>your Telegram</strong> and <strong>your Fathom call recordings</strong>.</li>
+    <li>Once an hour it collects what is new and puts the most important things first.</li>
+    <li>It finds the tasks that are yours and gives each one a due date.</li>
+    <li>You reply or delegate from one page. Your reply goes out under your own name.</li>
+    <li>AI is used only where it is really needed. Everything else runs on plain rules, so it is predictable and cheap to run.</li>
+    <li>Anything that is not ready stays hidden, so everything you see works.</li>
+    <li>More people can be added later. Each person gets their own private view.</li>
+  </ul>
+</div>
+
+<!-- 1 -->
+<section id="how">
+  <div class="sec-head">
+    <h2>How it works</h2>
+    <p>Your messages and calls come in. Once an hour the Command Center sorts them. You answer from one page.</p>
+  </div>
+
+  <figure>
+    <div class="fig-top"><span class="t">Phase 1 in one picture</span><span class="n">PICTURE 1</span></div>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 1020 350" role="img" aria-label="Calls from Fathom and messages from Slack and Telegram come in. An hourly check collects what is new. Rules mark what is urgent and AI finds the tasks. The result shows in the Command Center tabs. When Jeremy replies or delegates, it is sent right away under his name.">
+        <defs>
+          <marker id="ah1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" class="d-ah" fill="none"/></marker>
+          <marker id="ah1a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L10 5 L0 10 z" class="d-ah-acc" fill="none"/></marker>
+        </defs>
+
+        <circle cx="31" cy="24" r="10" class="d-num" fill="none"/><text x="31" y="28" text-anchor="middle" class="d-numt">1</text>
+        <text x="48" y="28" class="d-l">COMES IN</text>
+        <circle cx="361" cy="24" r="10" class="d-num" fill="none"/><text x="361" y="28" text-anchor="middle" class="d-numt">2</text>
+        <text x="378" y="28" class="d-l">ONCE AN HOUR</text>
+        <circle cx="601" cy="24" r="10" class="d-num" fill="none"/><text x="601" y="28" text-anchor="middle" class="d-numt">3</text>
+        <text x="618" y="28" class="d-l">GETS SORTED</text>
+        <circle cx="851" cy="24" r="10" class="d-num" fill="none"/><text x="851" y="28" text-anchor="middle" class="d-numt">4</text>
+        <text x="868" y="28" class="d-l">YOU SEE IT</text>
+
+        <rect x="20" y="50" width="230" height="70" rx="8" class="d-box" fill="none"/>
+        <text x="36" y="78" class="d-t">Your calls</text>
+        <text x="36" y="100" class="d-s">Fathom notes and transcript</text>
+
+        <rect x="20" y="140" width="230" height="124" rx="8" class="d-box" fill="none"/>
+        <text x="36" y="166" class="d-t">Your messages</text>
+        <rect x="36" y="178" width="94" height="30" rx="6" class="d-chip" fill="none"/><text x="83" y="198" text-anchor="middle" class="d-s">Slack</text>
+        <rect x="140" y="178" width="94" height="30" rx="6" class="d-chip" fill="none"/><text x="187" y="198" text-anchor="middle" class="d-s">Telegram</text>
+        <text x="36" y="230" class="d-s">The chats you choose and</text>
+        <text x="36" y="247" class="d-s">places you are tagged</text>
+
+        <rect x="350" y="105" width="160" height="104" rx="8" class="d-box" fill="none"/>
+        <text x="430" y="140" text-anchor="middle" class="d-t">Hourly check</text>
+        <text x="430" y="163" text-anchor="middle" class="d-s">Picks up everything</text>
+        <text x="430" y="181" text-anchor="middle" class="d-s">that is new</text>
+
+        <rect x="590" y="92" width="180" height="130" rx="8" class="d-box" fill="none"/>
+        <text x="680" y="118" text-anchor="middle" class="d-t">Sorted for you</text>
+        <rect x="604" y="132" width="152" height="30" rx="6" class="d-chip" fill="none"/><text x="680" y="152" text-anchor="middle" class="d-s">Rules: what is urgent</text>
+        <rect x="604" y="170" width="152" height="30" rx="6" class="d-chip" fill="none"/><text x="680" y="190" text-anchor="middle" class="d-s">AI: finds your tasks</text>
+
+        <rect x="840" y="50" width="160" height="214" rx="8" class="d-box" fill="none"/>
+        <text x="920" y="75" text-anchor="middle" class="d-t">Command Center</text>
+        <rect x="854" y="88" width="132" height="28" rx="6" class="d-chip" fill="none"/><text x="920" y="107" text-anchor="middle" class="d-s">Inbox</text>
+        <rect x="854" y="122" width="132" height="28" rx="6" class="d-chip" fill="none"/><text x="920" y="141" text-anchor="middle" class="d-s">Meetings</text>
+        <rect x="854" y="156" width="132" height="28" rx="6" class="d-chip" fill="none"/><text x="920" y="175" text-anchor="middle" class="d-s">Tasks</text>
+        <rect x="854" y="190" width="132" height="28" rx="6" class="d-chip" fill="none"/><text x="920" y="209" text-anchor="middle" class="d-s">Departments</text>
+        <rect x="854" y="224" width="132" height="28" rx="6" class="d-chip" fill="none"/><text x="920" y="243" text-anchor="middle" class="d-s">Today</text>
+
+        <path d="M250 85 H300 V145 H346" class="d-ln" marker-end="url(#ah1)"/>
+        <text x="300" y="76" text-anchor="middle" class="d-al">new calls</text>
+        <path d="M250 202 H300 V169 H346" class="d-ln" marker-end="url(#ah1)"/>
+        <text x="300" y="221" text-anchor="middle" class="d-al">new messages</text>
+        <path d="M510 157 H586" class="d-ln" marker-end="url(#ah1)"/>
+        <path d="M770 157 H836" class="d-ln" marker-end="url(#ah1)"/>
+
+        <path d="M920 264 V326 H135 V268" class="d-ln-acc" marker-end="url(#ah1a)"/>
+        <circle cx="290" cy="308" r="10" class="d-ah-acc" fill="none"/><text x="290" y="312" text-anchor="middle" class="d-numt">5</text>
+        <text x="308" y="312" class="d-a">You reply or delegate. It is sent right away, under your name.</text>
+      </svg>
+    </div>
+    <figcaption>Follow the numbers 1 to 5. The blue line is the only part that needs you.</figcaption>
+  </figure>
+
+  <div class="plain">
+    <h3>The picture in plain words</h3>
+    <ol>
+      <li><strong>Your messages and calls come in.</strong> Messages from Slack and Telegram. Calls from Fathom, with the notes and the transcript.</li>
+      <li><strong>Once an hour, the Command Center collects what is new.</strong></li>
+      <li><strong>It gets sorted.</strong> Simple rules put the urgent messages on top, for example a direct message or a place where you are tagged. Then the tasks that are yours are picked out, each with a due date.</li>
+      <li><strong>You see it all in one place,</strong> in the tabs you already know from your prototype.</li>
+      <li><strong>You reply or delegate.</strong> It is sent right away from your own Slack or Telegram, under your name.</li>
+    </ol>
+  </div>
+  <p class="note"><strong>Nothing happens without you.</strong> Nothing is sent, and nothing becomes a task, until you click.</p>
+</section>
+
+<!-- 1b -->
+<section id="ai">
+  <div class="sec-head">
+    <h2>Where AI is used, and where it is not</h2>
+    <p>Most of the Command Center runs on plain rules. AI is used for only one job, the one that needs a real understanding of language.</p>
+  </div>
+
+  <div class="two">
+    <div class="block">
+      <h3>Plain rules, no AI</h3>
+      <ul>
+        <li>Collecting new messages and calls.</li>
+        <li>Deciding what is urgent. You set the rules: which people, which channels, and anything where you are tagged.</li>
+        <li>Labelling a chat Agency or Consulting.</li>
+        <li>Call notes, transcript and the tasks from a call. These come ready-made from Fathom.</li>
+        <li>Suggesting who can take a task, by matching it with your team list.</li>
+        <li>Sending your replies and delegations.</li>
+      </ul>
+    </div>
+    <div class="block">
+      <h3>AI, only when needed</h3>
+      <p><strong>Finding tasks in your messages.</strong> Once an hour, and only on new messages that may need something from you.</p>
+      <p class="muted">Why this way: rules give the same result every time, they are quick, and they cost very little to run. It also means less of your message text is ever sent to AI.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 2 -->
+<section id="tabs">
+  <div class="sec-head">
+    <h2>What you will see</h2>
+    <p>The same row of tabs as your prototype. Green tabs work in Phase 1. Grey ones stay hidden for now.</p>
+  </div>
+
+  <figure>
+    <div class="fig-top"><span class="t">Your tabs in Phase 1</span><span class="n">PICTURE 2</span></div>
+    <div class="tabmap">
+      <div class="tm"><span class="name">Today</span><span class="pill on">On</span></div>
+      <div class="tm"><span class="name">Departments</span><span class="pill on">On</span></div>
+      <div class="tm"><span class="name">Inbox</span><span class="pill on">On</span></div>
+      <div class="tm"><span class="name">Meetings</span><span class="pill on">On</span></div>
+      <div class="tm"><span class="name">Tasks</span><span class="pill on">On</span></div>
+      <div class="tm off"><span class="name">Payments</span><span class="pill off">Later</span></div>
+      <div class="tm"><span class="name">Targets</span><span class="pill hand">On · by hand</span></div>
+      <div class="tm"><span class="name">Settings</span><span class="pill on">On</span></div>
+    </div>
+    <div class="srcrow">
+      <span class="label">Connected in Phase 1</span>
+      <span class="pill on">Slack</span><span class="pill on">Telegram</span><span class="pill on">Fathom calls</span>
+      <span class="label">Later</span>
+      <span class="pill off">Email</span><span class="pill off">Calendar</span><span class="pill off">WhatsApp</span><span class="pill off">iMessage</span><span class="pill off">Personal side</span>
+    </div>
+    <figcaption>Seven of the eight tabs are on. "By hand" means you type the numbers in yourself for now.</figcaption>
+  </figure>
+
+  <div class="tbl-scroll">
+    <table>
+      <thead><tr><th>Tab</th><th>What it does in Phase 1</th></tr></thead>
+      <tbody>
+        <tr><td class="name">Today</td><td>What needs you today: your focus, messages waiting for a reply, tasks due today, and how the month is going against your targets.</td></tr>
+        <tr><td class="name">Departments</td><td>Each department's tasks, who is responsible, and whether each task is on time or late.</td></tr>
+        <tr><td class="name">Inbox</td><td>Your Slack and Telegram messages, most important first. Read the conversation, send a reply, turn it into a task, or delegate it.</td></tr>
+        <tr><td class="name">Meetings</td><td>Your recorded calls. Each one has its notes, its transcript and the tasks that came out of it.</td></tr>
+        <tr><td class="name">Tasks</td><td>Suggested tasks from your messages and calls, which you add or dismiss. Plus your own tasks, with a priority and a due date. Delegate any task, or take it back.</td></tr>
+        <tr><td class="name">Targets</td><td>Your monthly targets. You type in the day's numbers and the page shows whether you are on track.</td></tr>
+        <tr><td class="name">Settings</td><td>Your team, which channels and chats to read, and how often each check runs.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="plain">
+    <h3>From our call, now included</h3>
+    <ul>
+      <li>Delegate straight from a message, not only from a task.</li>
+      <li>Places where you are tagged show up in your inbox.</li>
+    </ul>
+    <p class="muted">Hidden for now: Payments, your calendar, email, WhatsApp, iMessage and the Personal side. They come in Phase 2.</p>
+  </div>
+</section>
+
+<!-- 3 -->
+<section id="example">
+  <div class="sec-head">
+    <h2>An example: one message, start to finish</h2>
+    <p>This is the sample message from your prototype. Maya writes: <em>"Approved 3 of the 5 clips. Can we swap the hook on #4 before it goes out Friday?"</em></p>
+  </div>
+
+  <figure>
+    <div class="fig-top"><span class="t">What happens to Maya's message</span><span class="n">PICTURE 3</span></div>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 1090 290" role="img" aria-label="Maya posts a message in Slack at 10:38. The 11:00 hourly check picks it up. It appears in the Inbox marked High because it is from a client channel, and in Tasks as a suggested task due Friday. Jeremy either sends the reply, which goes out in Slack as him and clears the message, or delegates the task, and Luis gets his message.">
+        <defs>
+          <marker id="ah3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" class="d-ah" fill="none"/></marker>
+          <marker id="ah3a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L10 5 L0 10 z" class="d-ah-acc" fill="none"/></marker>
+        </defs>
+
+        <rect x="20" y="97" width="200" height="96" rx="8" class="d-box" fill="none"/>
+        <text x="36" y="121" class="d-l">10:38 · SLACK</text>
+        <text x="36" y="145" class="d-t">Maya posts a message</text>
+        <text x="36" y="166" class="d-s">in a channel you chose</text>
+
+        <rect x="270" y="97" width="150" height="96" rx="8" class="d-box" fill="none"/>
+        <text x="286" y="121" class="d-l">11:00</text>
+        <text x="286" y="145" class="d-t">Hourly check</text>
+        <text x="286" y="166" class="d-s">picks it up</text>
+
+        <rect x="470" y="30" width="230" height="96" rx="8" class="d-box" fill="none"/>
+        <text x="486" y="54" class="d-l">IN YOUR INBOX</text>
+        <text x="486" y="78" class="d-t">Marked High</text>
+        <text x="486" y="99" class="d-s">It is from a client channel</text>
+
+        <rect x="470" y="164" width="230" height="96" rx="8" class="d-box" fill="none"/>
+        <text x="486" y="188" class="d-l">IN YOUR TASKS</text>
+        <text x="486" y="212" class="d-t">Suggested task</text>
+        <text x="486" y="233" class="d-s">Swap hook on clip #4 · due Fri</text>
+
+        <rect x="850" y="30" width="220" height="96" rx="8" class="d-soft" fill="none"/>
+        <text x="866" y="54" class="d-l">YOU REPLY</text>
+        <text x="866" y="78" class="d-t">Sent in Slack as you</text>
+        <text x="866" y="99" class="d-s">Message leaves your inbox</text>
+
+        <rect x="850" y="164" width="220" height="96" rx="8" class="d-soft" fill="none"/>
+        <text x="866" y="188" class="d-l">YOU DELEGATE</text>
+        <text x="866" y="212" class="d-t">Luis gets your message</text>
+        <text x="866" y="233" class="d-s">Task shows under his name</text>
+
+        <path d="M220 145 H266" class="d-ln" marker-end="url(#ah3)"/>
+        <path d="M420 145 H445 V78 H466" class="d-ln" marker-end="url(#ah3)"/>
+        <path d="M445 145 V212 H466" class="d-ln" marker-end="url(#ah3)"/>
+        <path d="M700 78 H846" class="d-ln-acc" marker-end="url(#ah3a)"/>
+        <text x="773" y="68" text-anchor="middle" class="d-a">Send and mark done</text>
+        <path d="M700 212 H846" class="d-ln-acc" marker-end="url(#ah3a)"/>
+        <text x="773" y="202" text-anchor="middle" class="d-a">Delegate</text>
+      </svg>
+    </div>
+    <figcaption>Grey steps happen on their own. Blue steps happen only when you click. A Telegram message follows the same path.</figcaption>
+  </figure>
+
+  <div class="two">
+    <div class="block">
+      <h3>If you answer it yourself</h3>
+      <ol>
+        <li>Open the message.</li>
+        <li>Write your reply.</li>
+        <li>Click <strong>Send and mark done</strong>. Your reply shows up in Slack under your name, and the message leaves your inbox.</li>
+      </ol>
+    </div>
+    <div class="block">
+      <h3>If someone else should do it</h3>
+      <ol>
+        <li>Click <strong>Delegate</strong>.</li>
+        <li>Pick the person and write a short note.</li>
+        <li>They get a Slack message from you with the task and your note.</li>
+        <li>The task now shows under their name. You can take it back at any time.</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- 4 -->
+<section id="timers">
+  <div class="sec-head">
+    <h2>How often it checks</h2>
+    <p>The Command Center checks for new things once an hour. Each check is its own small program with its own timer, and you can change the timer yourself.</p>
+  </div>
+
+  <figure>
+    <div class="fig-top"><span class="t">Settings › Timers</span><span class="n">PICTURE 4 · A SKETCH OF THE PAGE</span></div>
+    <div class="tbl-scroll">
+      <table>
+        <thead><tr><th>What it does</th><th>Shows up in</th><th>How often</th><th>Fastest it can go</th><th>Uses AI</th><th></th></tr></thead>
+        <tbody>
+          <tr><td class="name">Gets new Slack messages</td><td>Inbox</td><td class="num">Every hour</td><td class="num">Every 5 minutes</td><td>No</td><td><span class="fake">Run now</span></td></tr>
+          <tr><td class="name">Gets new Telegram messages</td><td>Inbox</td><td class="num">Every hour</td><td class="num">Every 30 minutes</td><td>No</td><td><span class="fake">Run now</span></td></tr>
+          <tr><td class="name">Gets new calls from Fathom</td><td>Meetings</td><td class="num">Every hour</td><td class="num">Every 15 minutes</td><td>No</td><td><span class="fake">Run now</span></td></tr>
+          <tr><td class="name">Marks what is urgent, adds labels</td><td>Inbox</td><td class="num">After each message check</td><td class="num">–</td><td>No</td><td><span class="fake">Run now</span></td></tr>
+          <tr><td class="name">Finds tasks in your messages</td><td>Tasks</td><td class="num">Every hour</td><td class="num">–</td><td><strong>Yes</strong></td><td><span class="fake">Run now</span></td></tr>
+          <tr><td class="name">Updates your channel and team list</td><td>Settings</td><td class="num">Once a day</td><td class="num">–</td><td>No</td><td><span class="fake">Run now</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <figcaption>Each row is one small program with its own timer. You can change it, pause it, or run it right now. Only one of the six uses AI.</figcaption>
+  </figure>
+
+  <div class="plain">
+    <h3>Good to know</h3>
+    <ul>
+      <li><strong>A new message can take up to an hour to show up.</strong></li>
+      <li><strong>In a hurry?</strong> Click Run now and it checks straight away.</li>
+      <li><strong>Your replies are never delayed.</strong> They are sent the moment you click. If one fails to send, it tries again by itself.</li>
+      <li><strong>Why not check every second?</strong> Slack, Telegram and Fathom only let an app ask so often. Checking once an hour keeps us well inside their limits, so the connection is never blocked.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- 5 -->
+<section id="team">
+  <div class="sec-head">
+    <h2>Adding your team later</h2>
+    <p>Phase 1 is only for you. It is built so more people can be added later, without starting again.</p>
+  </div>
+
+  <div class="plain">
+    <h3>How that will work</h3>
+    <ul>
+      <li><strong>Each person gets their own login.</strong></li>
+      <li><strong>Each person connects their own Slack, Telegram and calls.</strong> It takes a few clicks.</li>
+      <li><strong>Nobody can see anyone else's messages or calls.</strong> Yours stay private to you.</li>
+      <li><strong>The team list, the departments and delegated tasks are shared.</strong></li>
+      <li><strong>Delegated tasks land in the other person's own task list</strong> once they have a login. Until then, you tick delegated tasks off yourself.</li>
+    </ul>
+    <p class="muted">Your idea from the call, linking each person's view to their clients in the Control Room, comes at that stage. It is not part of Phase 1.</p>
+  </div>
+</section>
+
+<!-- 6 -->
+<section id="order">
+  <div class="sec-head">
+    <h2>The order we build it in</h2>
+    <p>You can start using it at step 3. After that, each step switches on something new.</p>
+  </div>
+
+  <ol class="steps tight">
+    <li><div class="body"><h3>Set up</h3><p>A separate, private home for the project and a login for you. This step needs the things listed at the end of this page.</p></div></li>
+    <li><div class="body"><h3>Timers</h3><p>The hourly checks, and the page where you change them.</p></div></li>
+    <li><div class="body"><h3>Slack inbox</h3><p>Your Slack messages, most important first. Reply from the page.</p><span class="pill on tag">You can start using it here</span></div></li>
+    <li><div class="body"><h3>Calls</h3><p>Your Fathom calls with notes and transcript.</p></div></li>
+    <li><div class="body"><h3>Tasks</h3><p>Tasks found in your messages and calls, each with a due date.</p></div></li>
+    <li><div class="body"><h3>Delegating and departments</h3><p>Delegate a task or a message, and see who has what.</p></div></li>
+    <li><div class="body"><h3>Telegram inbox</h3><p>Your Telegram chats in the same inbox as Slack.</p></div></li>
+    <li><div class="body"><h3>Agency and Consulting labels</h3><p>A label on each chat that says Agency or Consulting.</p></div></li>
+    <li><div class="body"><h3>Today and Targets</h3><p>Your daily overview, and your monthly targets.</p></div></li>
+  </ol>
+
+  <div class="two">
+    <div class="block">
+      <h3>Phase 1 is finished when you can</h3>
+      <ul class="check">
+        <li>See new Slack and Telegram messages within the hour, most important first.</li>
+        <li>Reply from the page and see your reply in Slack or Telegram under your name.</li>
+        <li>Open any recorded call and read its notes and transcript.</li>
+        <li>Get suggested tasks with due dates, and add or dismiss each one.</li>
+        <li>Delegate a task and have the person receive it in Slack.</li>
+        <li>See each department's tasks and who is responsible.</li>
+      </ul>
+    </div>
+    <div class="block">
+      <h3>Things we still need to check</h3>
+      <ul>
+        <li><strong>Telegram.</strong> Connecting it works like logging in on a new device. We test this first, because it is the part we are least sure about. Telegram also watches accounts that connect through other apps, so we read only the chats you choose, and slowly.</li>
+        <li><strong>Tags in channels you did not choose.</strong> We use Slack's search for this and need to test it. If it does not work, we catch tags in the channels you chose and in your direct messages.</li>
+        <li><strong>Slack approval.</strong> Your Slack may ask an owner to approve the new app once.</li>
+        <li><strong>Calls recorded by someone else.</strong> Fathom only shows us calls you recorded, or calls shared with you. Ask teammates to share the calls they record for you.</li>
+        <li><strong>Client Slacks.</strong> If some clients are in a different Slack, each one needs its own connection.</li>
+        <li><strong>AI cost.</strong> It should be low, because AI is used for only one job. We will know the real number after one day of use.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="plain">
+    <h3>What comes after, in Phase 2</h3>
+    <ol>
+      <li>Email and your calendar.</li>
+      <li>Payments, with unpaid invoices found for you.</li>
+      <li>Targets that fill in by themselves.</li>
+      <li>The same view for your team, and repeating tasks.</li>
+      <li>WhatsApp. This only works if your number is on the WhatsApp Business app.</li>
+      <li>The Personal side, if you want it.</li>
+    </ol>
+  </div>
+</section>
+
+<hr class="rule">
+
+<!-- What we need -->
+<section id="need">
+  <div class="sec-head">
+    <span class="for">For Jeremy and Jaap</span>
+    <h2>What we need to start</h2>
+    <p>Three connections, one AI key, a place to build, and a few choices. Either of you can set these up, except Slack, which Jeremy does himself. No passwords are shared.</p>
+  </div>
+
+  <ol class="steps">
+    <li><div class="body">
+      <h3>Slack</h3>
+      <p>Slack only gives access through a small app, so one has to be created inside SPM's Slack. It is not a bot. Jeremy's replies are sent from his own account, with his name and photo.</p>
+      <p><strong>Jeremy does this one himself, signed in to Slack as Jeremy.</strong> The key belongs to whoever clicks Allow.</p>
+      <ul>
+        <li>Click the button, pick the SPM workspace, then click Create.</li>
+        <li>On the app's page, open OAuth &amp; Permissions, click Install to Workspace, then Allow.</li>
+        <li>Back on the same page, copy the token under OAuth Tokens. It starts with <code>xoxp-</code>.</li>
+        <li>Put that token in the password manager for Shruti.</li>
+      </ul>
+      <a class="btn" href="https://api.slack.com/apps?new_app=1&amp;manifest_yaml=display_information%3A%0A%20%20name%3A%20SPM%20Command%20Center%0A%20%20description%3A%20Reads%20Slack%20for%20the%20SPM%20Command%20Center%20dashboard%20and%20sends%20replies%20as%20the%20person%20who%20connects%20it.%0Aoauth_config%3A%0A%20%20scopes%3A%0A%20%20%20%20user%3A%0A%20%20%20%20%20%20-%20channels%3Ahistory%0A%20%20%20%20%20%20-%20groups%3Ahistory%0A%20%20%20%20%20%20-%20im%3Ahistory%0A%20%20%20%20%20%20-%20mpim%3Ahistory%0A%20%20%20%20%20%20-%20channels%3Aread%0A%20%20%20%20%20%20-%20groups%3Aread%0A%20%20%20%20%20%20-%20im%3Aread%0A%20%20%20%20%20%20-%20mpim%3Aread%0A%20%20%20%20%20%20-%20users%3Aread%0A%20%20%20%20%20%20-%20users%3Aread.email%0A%20%20%20%20%20%20-%20chat%3Awrite%0A%20%20%20%20%20%20-%20im%3Awrite%0A%20%20%20%20%20%20-%20search%3Aread%0Asettings%3A%0A%20%20org_deploy_enabled%3A%20false%0A%20%20socket_mode_enabled%3A%20false%0A%20%20token_rotation_enabled%3A%20false%0A" target="_blank" rel="noopener noreferrer">Create the Slack app</a>
+    </div></li>
+    <li><div class="body">
+      <h3>Telegram</h3>
+      <p>Nothing is needed now. When the dashboard is ready, Jeremy logs in once on a Connect screen. It works the same way as logging in to Telegram on a new device.</p>
+    </div></li>
+    <li><div class="body">
+      <h3>Calls</h3>
+      <p>The API key of the Fathom account Jeremy wants to connect. In Fathom it is under Settings, in the part called API Access.</p>
+      <p>If some calls are recorded with a different tool, tell us which one.</p>
+      <a class="btn" href="https://fathom.video/customize#api-access-header" target="_blank" rel="noopener noreferrer">Open Fathom: API Access</a>
+    </div></li>
+    <li><div class="body">
+      <h3>An AI key</h3>
+      <p>One API key for any AI model, for example Claude or OpenAI. We use it to build and test. Later we decide together which model to keep.</p>
+    </div></li>
+    <li><div class="body">
+      <h3>A place to build</h3>
+      <p>A new <a href="https://github.com/new" target="_blank" rel="noopener noreferrer">GitHub repository</a>, a new <a href="https://supabase.com/dashboard/new" target="_blank" rel="noopener noreferrer">Supabase project</a> and hosting, all separate from the tracker, with Shruti added to each.</p>
+    </div></li>
+  </ol>
+
+  <div class="two">
+    <div class="block">
+      <h3>A few choices</h3>
+      <ul class="check">
+        <li>Which Slack channels to read. Your 1-1 direct messages are included.</li>
+        <li>Which Telegram chats to read.</li>
+        <li>What counts as urgent: which people, clients or channels.</li>
+        <li>Your team: names, roles and departments.</li>
+      </ul>
+    </div>
+    <div class="block">
+      <h3>Sharing keys safely</h3>
+      <ul>
+        <li>Please share keys through SPM's password manager, not as text in Slack, WhatsApp or email.</li>
+        <li>Each connection can be turned off at any time, from Slack, Telegram or Fathom.</li>
+        <li>One OK we need from Jeremy: message and call text is stored, and AI reads new messages to find his tasks.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+</div>
