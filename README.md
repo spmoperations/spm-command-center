@@ -93,7 +93,7 @@ The checks run by themselves. How depends on where the app runs.
 
 To deploy on Vercel:
 
-1. Set the project's **Root Directory** to `ui`.
+1. Set the project's **Root Directory** to `ui`. `ui/vercel.json` tells Vercel this is a Next.js app, so the Framework Preset in the dashboard does not matter.
 2. Add the variables from `.env.local` to the project, plus `CRON_SECRET` (any long random text). Vercel sends it with each cron call, and the route refuses anything else.
 3. For `DATABASE_URL` use Supabase's **Transaction pooler** string (port 6543). The direct string needs IPv6, which Vercel does not have.
 4. Leave `TICKER` out.
