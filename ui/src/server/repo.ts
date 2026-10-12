@@ -60,7 +60,7 @@ interface ConversationRow {
   id: string; source: Conversation["source"]; from_name: string; ctx: string; direct: boolean; tagged: boolean;
   last_text: string; last_at: number; pri: Priority; line: Conversation["line"]; mode: Mode; project: string; done: boolean; replied: boolean; manual_pri: boolean; manual_mode: boolean;
 }
-interface MessageRow { conversation_id: string; sender_name: string; me: boolean; body: string; at: number; status: "queued" | "sent" | "failed" | null }
+interface MessageRow { conversation_id: string; sender_name: string; me: boolean; body: string; at: number; status: "queued" | "sent" | "failed" | null; external_id: string | null; thread_ts: string | null }
 interface TaskRow {
   id: string; title: string; mode: Mode; dept: string; project: string; pri: Priority; due: string; done: boolean; done_at: number | null;
   src_type: "message" | "meeting" | null; src_id: string | null; delegable: boolean;
@@ -69,7 +69,11 @@ interface TaskRow {
 }
 interface RuleRow { id: string; kind: "priority" | "label"; source: Rule["source"]; match_on: Rule["when"]; op: Rule["op"]; value: string; pri: Priority | null; line: Rule["line"] | null; mode: Mode | null }
 
-const THREAD_LENGTH = 30;
+// How much of a conversation the screens get: the threads and single messages written in
+// most recently, each thread's first message and newest replies, within an overall limit.
+const GROUPS_SHOWN = 30;
+const REPLIES_SHOWN = 40;
+const MESSAGES_SHOWN = 150;
 
 const toRule = (r: RuleRow): Rule => ({ id: r.id, source: r.source, when: r.match_on, op: r.op, value: r.value, pri: r.pri ?? undefined, line: r.line ?? undefined, mode: r.mode ?? undefined });
 
@@ -91,22 +95,33 @@ const SHOWN = `(select id from conversations where owner_id = $1 and not done or
                (select id from conversations where owner_id = $1 and done order by last_at desc limit 100)`;
 
 async function loadConversations(db: Db, ownerId: string): Promise<Conversation[]> {
-  // Both reads go out together. Only the newest messages of each conversation are fetched:
-  // a busy channel can hold thousands.
+  // Both reads go out together. Only the newest part of each conversation is fetched: a busy
+  // channel can hold thousands of messages. A thread counts as one group and is kept whole
+  // (its first message and its newest replies), so a reply never shows without what it answers.
   const [rows, messages] = await Promise.all([
     db.query<ConversationRow>(`select * from conversations where id in (${SHOWN})`, [ownerId]),
     db.query<MessageRow>(
-      `select conversation_id, sender_name, me, body, at, status from (
-         select m.*, row_number() over (partition by m.conversation_id order by m.at desc, m.id desc) as newest
+      `with grouped as (
+         select m.*, coalesce(m.thread_ts, m.external_id, m.id) as grp,
+                max(m.at) over (partition by m.conversation_id, coalesce(m.thread_ts, m.external_id, m.id)) as grp_at
          from messages m where m.conversation_id in (${SHOWN})
-       ) latest where newest <= $2 order by at, id`,
-      [ownerId, THREAD_LENGTH],
+       ), ranked as (
+         select g.*,
+                dense_rank() over (partition by conversation_id order by grp_at desc, grp desc) as grp_rank,
+                row_number() over (partition by conversation_id, grp order by at desc, id desc) as in_grp,
+                row_number() over (partition by conversation_id order by grp_at desc, at desc, id desc) as overall
+         from grouped g
+       )
+       select conversation_id, sender_name, me, body, at, status, external_id, thread_ts from ranked
+       where grp_rank <= $2 and overall <= $4 and (in_grp <= $3 or external_id = grp)
+       order by at, id`,
+      [ownerId, GROUPS_SHOWN, REPLIES_SHOWN, MESSAGES_SHOWN],
     ),
   ]);
   const threads = new Map<string, Conversation["thread"]>();
   for (const m of messages) {
     const thread = threads.get(m.conversation_id) ?? [];
-    thread.push({ me: m.me, text: m.body, at: m.at, from: m.me ? undefined : m.sender_name, status: m.status === "failed" ? "queued" : (m.status ?? undefined) });
+    thread.push({ me: m.me, text: m.body, at: Number(m.at), from: m.me ? undefined : m.sender_name, status: m.status === "failed" ? "queued" : (m.status ?? undefined), ts: m.external_id ?? undefined, thread: m.thread_ts ?? undefined });
     threads.set(m.conversation_id, thread);
   }
   return rows.map((r) => ({
@@ -408,15 +423,25 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
     await c.db.run("update conversations set mode = $1, manual_mode = true where owner_id = $2 and id = $3", [asMode(mode), c.ownerId, id]);
     await c.db.run("update suggestions set mode = $1 where owner_id = $2 and src_type = 'message' and src_id = $3 and status = 'new'", [asMode(mode), c.ownerId, id]);
   },
-  async sendReply(c, id: string, text: string, markDone: boolean) {
+  /** `thread` is the id of the message that started a thread: the reply then goes into that thread, as it would in Slack. */
+  async sendReply(c, id: string, text: string, markDone: boolean, thread?: string | null) {
     const conv = await conversation(c, id);
     const [owner] = await c.db.query<{ name: string }>("select name from users where id = $1", [c.ownerId]);
+    let threadTs: string | null = null;
+    if (thread) {
+      // Only a thread that really is in this conversation.
+      const [known] = await c.db.query<{ n: number }>("select count(*)::int as n from messages where conversation_id = $1 and (external_id = $2 or thread_ts = $2)", [id, thread]);
+      if (!known?.n) throw new Error("That thread is no longer in this conversation.");
+      threadTs = thread;
+      // The message being answered now starts a thread, if it did not before.
+      await c.db.run("update messages set thread_ts = $1 where conversation_id = $2 and external_id = $1 and thread_ts is null", [thread, id]);
+    }
     const messageId = uid("m");
-    await c.db.run("insert into messages (id, conversation_id, owner_id, sender_name, me, body, at, status, scanned) values ($1, $2, $3, $4, true, $5, $6, 'queued', true)", [messageId, id, c.ownerId, owner?.name ?? "You", text, c.now.getTime()]);
+    await c.db.run("insert into messages (id, conversation_id, owner_id, sender_name, me, body, at, status, scanned, asked, thread_ts) values ($1, $2, $3, $4, true, $5, $6, 'queued', true, true, $7)", [messageId, id, c.ownerId, owner?.name ?? "You", text, c.now.getTime(), threadTs]);
     await c.db.run("update conversations set replied = true, done = done or $1 where id = $2", [markDone, id]);
     await c.db.run(
-      "insert into outbox (id, owner_id, source, target, to_name, ctx, body, conversation_id, message_id, created_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
-      [uid("o"), c.ownerId, conv.source, conv.external_id, conv.from_name, conv.ctx, text, id, messageId, c.now.getTime()],
+      "insert into outbox (id, owner_id, source, target, to_name, ctx, body, conversation_id, message_id, thread_ts, created_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+      [uid("o"), c.ownerId, conv.source, conv.external_id, conv.from_name, conv.ctx, text, id, messageId, threadTs, c.now.getTime()],
     );
   },
   async markConversationDone(c, id: string) {

@@ -3,7 +3,7 @@
 // The owner is in hundreds of conversations, so asking each one "anything new?" every hour
 // would be hundreds of requests. Instead `slack-pull` asks Slack's search once for everything
 // newer than its bookmark, which costs a request per hundred messages.
-import { attachmentText, channelKind, contextLabel, mentionedIds, mentionsUser, slackToText, slackTsToMs, type SlackKind } from "@/core/slack-text";
+import { attachmentText, channelKind, contextLabel, mentionedIds, mentionsUser, slackToText, slackTsToMs, threadOf, type SlackKind } from "@/core/slack-text";
 import type { Db } from "@/server/db";
 import { RateLimited, type SlackClient } from "@/server/slack";
 import type { JobContext, JobResult } from "./runner";
@@ -55,15 +55,21 @@ interface SearchMatch {
   username?: string;
   files?: unknown[];
   attachments?: unknown;
+  /** The only place search says which thread a message is in: see `threadOf`. */
+  permalink?: string;
   channel: { id: string; name?: string; is_im?: boolean; is_mpim?: boolean; is_private?: boolean; is_group?: boolean };
 }
-interface HistoryMessage { ts: string; text?: string; user?: string; username?: string; subtype?: string; bot_id?: string; user_profile?: { real_name?: string; display_name?: string }; files?: unknown[]; attachments?: unknown }
+interface HistoryMessage { ts: string; thread_ts?: string; text?: string; user?: string; username?: string; subtype?: string; bot_id?: string; user_profile?: { real_name?: string; display_name?: string }; files?: unknown[]; attachments?: unknown }
 
 // How far back the first read goes, and how many pages of 100 messages one run may read.
 // Both can be turned down in the environment while developing.
 const BACKFILL_DAYS = Number(process.env.SLACK_BACKFILL_DAYS ?? 2);
 const MAX_PAGES = Number(process.env.SLACK_MAX_PAGES ?? 20);
 const CONTEXT_MESSAGES = 8;
+/** Whole threads read in one run. Each is one request to Slack. */
+const MAX_THREADS = 40;
+/** How far back a thread counts as one the owner is following. */
+const FOLLOW_DAYS = 30;
 
 const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
@@ -113,15 +119,19 @@ async function learnName(db: Db, ownerId: string, look: Lookup, slack: SlackClie
   look.names.set(userId, name);
 }
 
-async function storeMessage(db: Db, ownerId: string, conversationId: string, look: Lookup, m: { ts: string; text?: string; user?: string; username?: string; user_profile?: { real_name?: string; display_name?: string }; files?: unknown[]; attachments?: unknown }): Promise<boolean> {
+/** Stores one message. `thread` is the id of the message that started its thread, when it is in one. */
+async function storeMessage(db: Db, ownerId: string, conversationId: string, look: Lookup, m: { ts: string; text?: string; user?: string; username?: string; user_profile?: { real_name?: string; display_name?: string }; files?: unknown[]; attachments?: unknown }, thread: string | null = null): Promise<boolean> {
   const me = m.user === look.myId;
   const sender = (m.user && look.names.get(m.user)) || m.user_profile?.real_name || m.user_profile?.display_name || m.username || "Someone";
   const text = slackToText(m.text || attachmentText(m.attachments), (id) => look.names.get(id)) || (m.files?.length ? "(sent a file)" : "(sent something that has no text)");
+  const id = `${conversationId}:${m.ts}`;
   const added = await db.run(
-    `insert into messages (id, conversation_id, owner_id, external_id, sender_name, me, body, at, scanned)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9) on conflict (id) do nothing`,
-    [`${conversationId}:${m.ts}`, conversationId, ownerId, m.ts, sender, me, text, slackTsToMs(m.ts), me],
+    `insert into messages (id, conversation_id, owner_id, external_id, sender_name, me, body, at, scanned, thread_ts)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) on conflict (id) do nothing`,
+    [id, conversationId, ownerId, m.ts, sender, me, text, slackTsToMs(m.ts), me, thread],
   );
+  // A message stored before its thread was known is put in its thread now.
+  if (!added && thread) await db.run("update messages set thread_ts = $1 where id = $2 and thread_ts is null", [thread, id]);
   return added > 0;
 }
 
@@ -159,6 +169,15 @@ export async function slackPull({ db, ownerId, now, cursor }: JobContext, slack:
   const query = `after:${day(Number(lastTs) * 1000 - 2 * 86_400_000)}`;
 
   const touched = new Map<string, { kind: SlackKind; partner: string | null; tagged: boolean; isNew: boolean; firstTs: string; channelId: string }>();
+  // Threads the owner is already part of: a new reply in one of these comes in even from a
+  // channel that is not ticked and without tagging them.
+  const following = new Set<string>();
+  for (const row of await db.query<{ conversation_id: string; thread_ts: string }>("select distinct conversation_id, thread_ts from messages where owner_id = $1 and thread_ts is not null and at > $2", [ownerId, now - FOLLOW_DAYS * 86_400_000])) {
+    following.add(`${row.conversation_id}:${row.thread_ts}`);
+  }
+  // Threads to read whole once the search is done: a reply alone says little without the
+  // message it answers and the replies around it.
+  const threads = new Map<string, { conversationId: string; channelId: string; thread: string }>();
   let newest = lastTs;
   let stored = 0;
   let leftOut = 0;
@@ -177,12 +196,13 @@ export async function slackPull({ db, ownerId, now, cursor }: JobContext, slack:
       const known = look.channels.get(m.channel.id);
       const kind = known?.kind ?? channelKind(m.channel);
       const raw = m.text ?? "";
-      if (!wanted(kind, known?.selected ?? false, raw, look.myId)) {
+      const conversationId = `slack:${m.channel.id}`;
+      const thread = threadOf(m.permalink);
+      if (!wanted(kind, known?.selected ?? false, raw, look.myId) && !(thread && following.has(`${conversationId}:${thread}`))) {
         leftOut++;
         continue;
       }
 
-      const conversationId = `slack:${m.channel.id}`;
       const partnerId = kind === "im" ? (known?.userId ?? m.channel.name ?? "") : "";
       const partner = kind === "im" ? (look.names.get(partnerId) ?? null) : null;
       // A direct message from an app (Notion, Slack's own notices) is a notification, not a person writing.
@@ -201,8 +221,20 @@ export async function slackPull({ db, ownerId, now, cursor }: JobContext, slack:
       for (const id of [m.user, ...mentionedIds(raw)]) await learnName(db, ownerId, look, slack, id);
       if (Number(m.ts) < Number(entry.firstTs)) entry.firstTs = m.ts;
       if (m.user !== look.myId && mentionsUser(raw, look.myId)) entry.tagged = true;
-      if (await storeMessage(db, ownerId, conversationId, look, m)) stored++;
+      if (await storeMessage(db, ownerId, conversationId, look, m, thread)) stored++;
+      if (thread) threads.set(`${conversationId}:${thread}`, { conversationId, channelId: m.channel.id, thread });
       if (Number(m.ts) > Number(newest)) newest = m.ts;
+    }
+  }
+
+  // Each thread that was touched is read whole: the message that started it and every reply.
+  // The search ran newest first, so when there are too many for one run the newest are read.
+  for (const { conversationId, channelId, thread } of [...threads.values()].slice(0, MAX_THREADS)) {
+    const res = await slack.call<{ messages: HistoryMessage[] }>("conversations.replies", { channel: channelId, ts: thread, limit: 200 });
+    for (const m of res.messages) {
+      if (m.subtype && m.subtype !== "thread_broadcast") continue;
+      for (const id of [m.user, ...mentionedIds(m.text ?? "")]) await learnName(db, ownerId, look, slack, id);
+      if (await storeMessage(db, ownerId, conversationId, look, m, thread)) stored++;
     }
   }
 

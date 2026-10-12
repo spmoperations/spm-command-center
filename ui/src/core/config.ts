@@ -24,6 +24,13 @@ export const LIVE_SOURCES: Source[] = ["slack"];
 export const DEPARTMENTS: boolean = false;
 
 /**
+ * The Connections tab is left out of the tab bar for now: Slack and Fathom are connected
+ * already, from the keys in the environment. The page itself still works at /connections,
+ * for the day a key has to be replaced. Change this to `true` to show the tab again.
+ */
+export const CONNECTIONS_TAB: boolean = false;
+
+/**
  * Targets (the Targets tab, and the month's pace on Today) are switched off for now: the
  * numbers are the prototype's examples and nothing fills them in yet. Change this to `true`
  * to bring them back.

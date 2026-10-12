@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { formatInline, formatMessage, hueFor, initials, plainPreview, shortUrl } from "./message-format";
-import { attachmentText, mentionedIds, slackToText } from "./slack-text";
+import { attachmentText, mentionedIds, slackToText, threadOf } from "./slack-text";
+import { groupByThread, threadToAnswer } from "./threads";
+import type { ThreadMessage } from "./types";
 
 const kinds = (text: string) => formatInline(text).map((p) => [p.kind, p.text]);
 
@@ -59,6 +61,7 @@ describe("Slack text clean-up", () => {
     expect(slackToText("see <https://a.co/x|the doc>")).toBe("see [the doc](https://a.co/x)");
     expect(slackToText("<https://docs.google.com/spreadsheets/d/abc123456789/edit|docs.google.com/spreadsheets/d/abc12…>")).toBe("https://docs.google.com/spreadsheets/d/abc123456789/edit");
     expect(slackToText("mail <mailto:jan@example.com|jan@example.com>")).toBe("mail jan@example.com");
+    expect(slackToText("call <tel:+15550100|+1 555 0100> or <tel:+15550101>")).toBe("call +1 555 0100 or +15550101");
   });
 
   it("lists everyone tagged in a message", () => {
@@ -71,3 +74,46 @@ describe("Slack text clean-up", () => {
     expect(attachmentText(undefined)).toBe("");
   });
 });
+
+describe("Slack threads", () => {
+  it("reads which thread a search result is in from its link", () => {
+    expect(threadOf("https://acme.slack.com/archives/C1/p1760000020000100?thread_ts=1760000010.000100")).toBe("1760000010.000100");
+    expect(threadOf("https://acme.slack.com/archives/C1/p1760000010000100")).toBeNull();
+    expect(threadOf(undefined)).toBeNull();
+    expect(threadOf("not a link")).toBeNull();
+  });
+
+  const say = (ts: string, at: number, text: string, thread?: string, me = false): ThreadMessage => ({ ts, at, text, thread, me, from: me ? undefined : "Priya" });
+
+  it("puts each reply under the message that started its thread", () => {
+    const groups = groupByThread([say("10", 10, "Proposal is ready", "10"), say("15", 15, "Lunch?"), say("20", 20, "Looks good", "10"), say("30", 30, "Approved", "10", true)]);
+    expect(groups.map((g) => [g.first?.text, g.replies.map((r) => r.text), g.threaded])).toEqual([
+      ["Lunch?", [], false],
+      ["Proposal is ready", ["Looks good", "Approved"], true],
+    ]);
+  });
+
+  it("orders by the newest message in each group, so a fresh reply to an old thread comes last", () => {
+    const groups = groupByThread([say("10", 10, "Old thread", "10"), say("50", 50, "Newer message"), say("99", 99, "Late reply", "10")]);
+    expect(groups.map((g) => g.first?.text)).toEqual(["Newer message", "Old thread"]);
+  });
+
+  it("keeps replies together when the message that started the thread has not been read", () => {
+    const [group] = groupByThread([say("20", 20, "Looks good", "10"), say("30", 30, "Agreed", "10")]);
+    expect([group.first, group.replies.length, group.threaded]).toEqual([null, 2, true]);
+  });
+
+  it("keeps a reply that has not been sent yet in its thread, and one outside a thread on its own", () => {
+    const unsent = (text: string, thread?: string): ThreadMessage => ({ at: 99, text, thread, me: true, status: "queued" });
+    const groups = groupByThread([say("10", 10, "Proposal is ready", "10"), unsent("In the thread", "10"), unsent("In the chat")]);
+    expect(groups.find((g) => g.first?.text === "Proposal is ready")!.replies.map((r) => r.text)).toEqual(["In the thread"]);
+    expect(groups.some((g) => g.first?.text === "In the chat" && !g.threaded)).toBe(true);
+  });
+
+  it("answers in the thread the latest message from someone else is in", () => {
+    expect(threadToAnswer([say("10", 10, "Proposal is ready", "10"), say("20", 20, "Looks good", "10")])).toBe("10");
+    expect(threadToAnswer([say("10", 10, "Proposal is ready", "10"), say("50", 50, "Lunch?")])).toBeNull();
+    expect(threadToAnswer([say("10", 10, "Hi"), say("20", 20, "On it", "10", true)])).toBeNull();
+  });
+});
+

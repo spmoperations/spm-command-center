@@ -58,7 +58,7 @@ export function DelegateForm({ team, slackPeople, channels, subject, today, chat
       <div className="dg-form">
         <h4>Assign to</h4>
         <p className="muted" style={{ margin: 0 }}>
-          There is nobody to assign to yet. Connect Slack on the Connections tab, or add people in Settings under Team.
+          There is nobody to assign to yet. Connect Slack, or add people in Settings under Team.
         </p>
         <div className="dg-actions">
           <button className="btn" type="button" onClick={onCancel}>

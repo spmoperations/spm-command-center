@@ -16,8 +16,9 @@ export function slackToText(raw: string, names: (userId: string) => string | und
     .replace(/<!date\^[^|>]*\|([^>]+)>/g, "$1")
     // A link keeps its address: "[label](url)", or just the address when the label is the address.
     .replace(/<(https?:[^|>]+)\|([^>]+)>/g, (_, url: string, label: string) => (sameLink(url, label) ? url : `[${label.replace(/[[\]]/g, "")}](${url})`))
-    .replace(/<mailto:[^|>]+\|([^>]+)>/g, "$1")
-    .replace(/<((?:https?|mailto):[^>]+)>/g, (_, url: string) => url.replace(/^mailto:/, ""))
+    // An email address or a phone number reads as itself, not as a link.
+    .replace(/<(?:mailto|tel):[^|>]+\|([^>]+)>/g, "$1")
+    .replace(/<((?:https?|mailto|tel):[^>]+)>/g, (_, url: string) => url.replace(/^(?:mailto|tel):/, ""))
     .replace(/&(amp|lt|gt);/g, (m) => ENTITIES[m])
     // ":raised_hands:" becomes the emoji itself. A workspace's own custom emoji have no picture
     // here, so their names are dropped along with skin-tone markers.
@@ -79,3 +80,18 @@ export function contextLabel(kind: SlackKind, name: string): string {
   if (kind === "mpim") return "Group message";
   return `#${name}`;
 }
+
+/**
+ * The thread a search result is part of, read from its link. Slack's search does not say so
+ * any other way: the link of a reply, and of a first message that has replies, ends in
+ * "?thread_ts=<the first message's id>". Null for a message outside any thread.
+ */
+export function threadOf(permalink: string | undefined): string | null {
+  if (!permalink) return null;
+  try {
+    return new URL(permalink).searchParams.get("thread_ts") || null;
+  } catch {
+    return null;
+  }
+}
+

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
-import { DEPARTMENTS, MODE_NAME, MODES, PERSONAL_SIDE, TARGETS } from "@/core/config";
+import { CONNECTIONS_TAB, DEPARTMENTS, MODE_NAME, MODES, PERSONAL_SIDE, TARGETS } from "@/core/config";
 import { daysInMonth } from "@/core/dates";
 import { isMine } from "@/core/delegation";
 import { LIVE_PROVIDERS } from "@/core/providers";
@@ -57,7 +57,7 @@ function Chrome({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const counts = app ? navCounts(app, mode) : {};
   // Tabs that are switched off for now are left out (see core/config).
-  const off: string[] = [...(DEPARTMENTS ? [] : ["departments"]), ...(TARGETS ? [] : ["targets"])];
+  const off: string[] = [...(DEPARTMENTS ? [] : ["departments"]), ...(TARGETS ? [] : ["targets"]), ...(CONNECTIONS_TAB ? [] : ["connections"])];
   const tabs = TABS.filter((tab) => (mode === "professional" || !PROFESSIONAL_ONLY.includes(tab.href)) && !off.includes(tab.key));
 
   // The Personal side has its own accent color, as in the prototype.

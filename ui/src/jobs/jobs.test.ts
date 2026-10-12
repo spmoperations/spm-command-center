@@ -101,6 +101,68 @@ describe("Slack jobs", () => {
     expect(slack.calls.filter(([m]) => m === "conversations.history")).toHaveLength(2);
   });
 
+  describe("threads", () => {
+    const link = (ts: string, thread?: string) => `https://acme.slack.com/archives/C2/p${ts.replace(".", "")}${thread ? `?thread_ts=${thread}` : ""}`;
+    const first = `${T - 300}.000100`;
+    const asked = `${T - 200}.000100`;
+    const tagged = `${T - 100}.000100`;
+    const ops = { id: "C2", name: "ops", is_private: true };
+    // What Slack holds: a message in #ops, a reply, and a second reply that tags the owner.
+    const wholeThread = [
+      { ts: first, thread_ts: first, user: "U1", text: "Who signs off the pay change?" },
+      { ts: asked, thread_ts: first, user: "U1", text: "Finance says it needs an owner" },
+      { ts: tagged, thread_ts: first, user: "U1", text: "<@UME> can you OK it?" },
+    ];
+    const slackWith = (found: Record<string, unknown>[], thread = wholeThread) =>
+      fakeSlack({
+        "search.messages": () => ({ messages: { matches: found, paging: { pages: 1 } } }),
+        "conversations.history": () => ({ messages: [] }),
+        "conversations.replies": () => ({ messages: thread }),
+      });
+    const inThread = async () => (await loadState(db)).inbox.find((c) => c.id === "slack:C2")!.thread;
+
+    it("reads the whole thread when the owner is tagged in a reply: the message it answers and the replies around it", async () => {
+      await slackDirectorySync(ctx(), directory());
+      const slack = slackWith([{ ts: tagged, channel: ops, user: "U1", text: "<@UME> can you OK it?", permalink: link(tagged, first) }]);
+      const result = await slackPull(ctx(), slack);
+      expect(result.items).toBe(3);
+      expect(slack.calls.filter(([m]) => m === "conversations.replies")).toEqual([["conversations.replies", { channel: "C2", ts: first, limit: 200 }]]);
+      expect((await inThread()).map((m) => [m.text, m.ts === m.thread, m.thread === first])).toEqual([
+        ["Who signs off the pay change?", true, true],
+        ["Finance says it needs an owner", false, true],
+        ["@Jeremy Moser can you OK it?", false, true],
+      ]);
+    });
+
+    it("brings in a later reply to that thread, from a channel that is not ticked and without a tag", async () => {
+      await slackDirectorySync(ctx(), directory());
+      await slackPull(ctx(), slackWith([{ ts: tagged, channel: ops, user: "U1", text: "<@UME> can you OK it?", permalink: link(tagged, first) }]));
+      const later = `${T + 50}.000100`;
+      const elsewhere = `${T + 60}.000100`;
+      const next = slackWith(
+        [
+          { ts: elsewhere, channel: ops, user: "U1", text: "unrelated chatter", permalink: link(elsewhere) },
+          { ts: later, channel: ops, user: "U1", text: "Any news?", permalink: link(later, first) },
+        ],
+        [...wholeThread, { ts: later, thread_ts: first, user: "U1", text: "Any news?" }],
+      );
+      const result = await slackPull(ctx({ lastTs: tagged }), next);
+      expect(result.message).toBe("1 new message in 1 conversation. 1 in channels that are not ticked in Settings were left out");
+      expect((await inThread()).map((m) => m.text)).toEqual(["Who signs off the pay change?", "Finance says it needs an owner", "@Jeremy Moser can you OK it?", "Any news?"]);
+    });
+
+    it("puts a message it stored earlier into its thread once the thread is known", async () => {
+      await slackDirectorySync(ctx(), directory());
+      // First seen as a plain message that tags the owner, before anyone had replied.
+      await slackPull(ctx(), slackWith([{ ts: first, channel: ops, user: "U1", text: "<@UME> who signs off the pay change?", permalink: link(first) }], []));
+      expect((await inThread()).map((m) => m.thread)).toEqual([undefined]);
+      const reply = `${T + 50}.000100`;
+      const parent = { ts: first, thread_ts: first, user: "U1", text: "<@UME> who signs off the pay change?" };
+      await slackPull(ctx({ lastTs: first }), slackWith([{ ts: reply, channel: ops, user: "U1", text: "<@UME> bump", permalink: link(reply, first) }], [parent, { ts: reply, thread_ts: first, user: "U1", text: "<@UME> bump" }]));
+      expect((await inThread()).map((m) => [m.text, m.thread])).toEqual([["@Jeremy Moser who signs off the pay change?", first], ["@Jeremy Moser bump", first]]);
+    });
+  });
+
   it("files a direct message from an app as a notification, not as a person writing", async () => {
     const withApp = fakeSlack({
       "auth.test": () => ({ user_id: "UME" }),
@@ -358,6 +420,16 @@ describe("outbox", () => {
     expect((await outboxSend(ctx(), slack)).items).toBe(1);
     expect(slack.calls).toEqual([["chat.postMessage", { channel: "C1", text: "<@ULUIS> new task for you: From Priya: Booked 2 more discovery calls for tomorrow. (due 2026-10-09)\n\nBefore Friday please." }]]);
     expect((await loadState(db)).inbox.find((c) => c.id === "slack:C1")!.thread.at(-1)).toMatchObject({ me: true, status: "sent" });
+  });
+
+  it("sends a reply written under a thread into that thread", async () => {
+    await seed(db);
+    const { applyAction } = await import("@/server/repo");
+    await applyAction(db, "sendReply", ["slack:C1", "On it.", false, "1.0"], OWNER_ID, new Date(NOW));
+    process.env.SENDING_ENABLED = "true";
+    const slack = sender();
+    await outboxSend(ctx(), slack);
+    expect(slack.calls).toEqual([["chat.postMessage", { channel: "C1", text: "On it.", thread_ts: "1.0" }]]);
   });
 });
 

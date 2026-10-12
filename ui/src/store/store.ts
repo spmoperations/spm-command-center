@@ -197,10 +197,13 @@ export const openConversation = (id: string | null) => setUi({ openConversation:
 export const setConversationPriority = (id: string, pri: Priority) => void act("setConversationPriority", [id, pri], undefined, inInbox(id, { pri }));
 export const setConversationMode = (id: string, mode: Mode) => void act("setConversationMode", [id, mode], mode === "personal" ? "Moved to Personal" : "Moved to Professional", inInbox(id, { mode }));
 
-/** Adds the reply to the thread. It goes out from the owner's own account, if sending is on. */
-export function sendReply(id: string, text: string, markDone: boolean) {
+/**
+ * Adds the reply to the conversation. It goes out from the owner's own account, if sending is
+ * on. `thread` puts it in that Slack thread; without it, it is a new message in the chat.
+ */
+export function sendReply(id: string, text: string, markDone: boolean, thread: string | null = null) {
   if (markDone) setUi({ openConversation: null });
-  void act("sendReply", [id, text, markDone], app?.state.sendingEnabled ? "Reply sent" : "Reply saved. Sending is switched off, so it waits in the outbox.");
+  void act("sendReply", [id, text, markDone, thread], app?.state.sendingEnabled ? "Reply sent" : "Reply saved. Sending is switched off, so it waits in the outbox.");
 }
 
 export const markConversationDone = (id: string) => void act("markConversationDone", [id], "Marked done", inInbox(id, { done: true }));

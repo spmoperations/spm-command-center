@@ -51,7 +51,7 @@ function Timers({ app }: { app: App }) {
         </button>
       </div>
       <p className="set-intro">
-        New messages and calls come in by themselves, each check on its own timer. <strong>Sync now</strong> runs all of them straight away; <strong>Run now</strong> runs just one. Change how often a check runs, or switch it off. Every timer has a fastest allowed value, so a check can never run often enough to get blocked by Slack or Fathom. A check waits until its source is connected on the <Link href="/connections">Connections</Link> tab.
+        New messages and calls come in by themselves, each check on its own timer. <strong>Sync now</strong> runs all of them straight away; <strong>Run now</strong> runs just one. Change how often a check runs, or switch it off. Every timer has a fastest allowed value, so a check can never run often enough to get blocked by Slack or Fathom. A check waits until its source is connected on the <Link href="/connections">Connections</Link> page.
       </p>
       <div className="table-scroll">
         <table className="set">

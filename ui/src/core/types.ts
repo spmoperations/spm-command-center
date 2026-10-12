@@ -15,6 +15,10 @@ export interface ThreadMessage {
   from?: string;
   /** Set on replies written in the dashboard until the source confirms delivery. */
   status?: "queued" | "sent";
+  /** The message's id in its source (Slack's timestamp). Missing on replies not sent yet. */
+  ts?: string;
+  /** The id of the message that started the thread this one is in, when it is in one. */
+  thread?: string;
 }
 
 export interface Conversation {

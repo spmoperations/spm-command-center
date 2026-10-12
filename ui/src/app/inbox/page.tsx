@@ -9,17 +9,36 @@ import { LINE_NAME, LIVE_SOURCES, MODE_NAME, MODES, PERSONAL_SIDE, PRIORITIES, P
 import { ago, stamp } from "@/core/dates";
 import { plainPreview } from "@/core/message-format";
 import { requestSummary } from "@/core/requests";
+import { groupByThread, threadToAnswer } from "@/core/threads";
 import { canAssignInChat } from "@/core/delegation";
-import type { Conversation, Line, Mode, Priority, Source } from "@/core/types";
+import type { Conversation, Line, Mode, Priority, Source, ThreadMessage } from "@/core/types";
 import {
   conversationToTask, delegateConversation, markConversationDone, openConversation, restoreInbox, sendReply,
   setConversationMode, setConversationPriority, toast, useApp, type App,
 } from "@/store/store";
 
-/** The conversation itself, opened under its row: every message, then the reply box. */
+/** One message in the conversation. */
+function Bubble({ b, c, app }: { b: ThreadMessage; c: Conversation; app: App }) {
+  return (
+    <div className={`bubble ${b.me ? "me" : ""}`}>
+      <MessageText text={b.text} />
+      <div className="bmeta">
+        {b.me ? "You" : (b.from ?? c.from)} · {stamp(b.at, app.now)}
+        {b.status === "queued" && <span className="queued">{app.state.sendingEnabled ? "Sending" : "Saved, not sent"}</span>}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The conversation itself, opened under its row, laid out the way Slack shows it: each
+ * message, with the replies in its thread under it. Then the reply box.
+ */
 function Thread({ c, app, draft, onDraft }: { c: Conversation; app: App; draft: string; onDraft(text: string): void }) {
   const box = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
+  /** Where the reply goes: a thread's id, "" for the chat itself, or null until the person chooses. */
+  const [picked, setPicked] = useState<string | null>(null);
   // Open at the newest message, and stay there when one is added.
   useEffect(() => {
     if (box.current) box.current.scrollTop = box.current.scrollHeight;
@@ -28,28 +47,54 @@ function Thread({ c, app, draft, onDraft }: { c: Conversation; app: App; draft: 
     field.current?.focus({ preventScroll: true });
   }, []);
 
+  const groups = groupByThread(c.thread);
+  // By default a reply goes where the latest message from someone else is: into its thread.
+  const target = picked ?? threadToAnswer(c.thread) ?? "";
+  const into = target ? groups.find((g) => g.key === target) : undefined;
+  const chat = c.ctx.startsWith("#") ? c.ctx : `your chat with ${c.from}`;
   const where = c.ctx.startsWith("#") ? `${SOURCE_NAME[c.source]} in ${c.ctx}` : `${SOURCE_NAME[c.source]} to ${c.from}`;
+  const answer = (key: string) => {
+    setPicked(key);
+    field.current?.focus();
+  };
   const send = (markDone: boolean) => {
     const text = draft.trim();
     if (!text) {
       toast("Write a reply first");
       return field.current?.focus();
     }
-    sendReply(c.id, text, markDone);
+    sendReply(c.id, text, markDone, into ? target : null);
     onDraft("");
   };
 
   return (
     <div className="thread">
       <div className="bubbles" ref={box}>
-        {c.thread.length === 0 && <p className="muted">No messages in this conversation yet.</p>}
-        {c.thread.map((b, k) => (
-          <div className={`bubble ${b.me ? "me" : ""}`} key={k}>
-            <MessageText text={b.text} />
-            <div className="bmeta">
-              {b.me ? "You" : (b.from ?? c.from)} · {stamp(b.at, app.now)}
-              {b.status === "queued" && <span className="queued">{app.state.sendingEnabled ? "Sending" : "Saved, not sent"}</span>}
-            </div>
+        {groups.length === 0 && <p className="muted">No messages in this conversation yet.</p>}
+        {groups.map((g) => (
+          <div className={`tgroup ${into?.key === g.key ? "answering" : ""}`} key={g.key}>
+            {g.first && <Bubble b={g.first} c={c} app={app} />}
+            {(g.replies.length > 0 || g.threaded) && (
+              <div className="treplies">
+                <div className="tlabel">
+                  {g.first ? `Thread · ${g.replies.length} ${g.replies.length === 1 ? "reply" : "replies"}` : "Replies in a thread that started earlier"}
+                  {g.first?.ts && into?.key !== g.key && (
+                    <button className="linkbtn inline" onClick={() => answer(g.key)}>
+                      Reply in this thread
+                    </button>
+                  )}
+                </div>
+                {g.replies.map((r, k) => (
+                  <Bubble b={r} c={c} app={app} key={k} />
+                ))}
+              </div>
+            )}
+            {/* A single message from someone else can be answered in a thread of its own. */}
+            {g.first?.ts && !g.first.me && !g.threaded && g.replies.length === 0 && into?.key !== g.key && (
+              <button className="linkbtn inline tstart" onClick={() => answer(g.key)}>
+                Reply in a thread
+              </button>
+            )}
           </div>
         ))}
       </div>
@@ -57,6 +102,20 @@ function Thread({ c, app, draft, onDraft }: { c: Conversation; app: App; draft: 
         <label className="label" htmlFor={`reply-${c.id}`}>
           Reply on {where}
         </label>
+        <div className="reply-to">
+          {into ? (
+            <>
+              <span>
+                In the thread{into.first ? ` ${into.first.me ? "you" : (into.first.from ?? c.from)} started: “${plainPreview(into.first.text, 60)}”` : ""}
+              </span>
+              <button className="linkbtn inline" onClick={() => setPicked("")}>
+                Post in {chat} instead
+              </button>
+            </>
+          ) : (
+            <span>As a new message in {chat}</span>
+          )}
+        </div>
         <textarea
           id={`reply-${c.id}`}
           ref={field}
@@ -277,7 +336,7 @@ export default function InboxPage() {
           <p className="empty" style={{ padding: 18 }}>
             {!state.connections.slack.connected ? (
               <>
-                Nothing here yet. Connect Slack on the <Link href="/connections">Connections</Link> tab.
+                Nothing here yet. Connect Slack on the <Link href="/connections">Connections</Link> page.
               </>
             ) : open.length > 0 ? (
               "No conversations match this filter."

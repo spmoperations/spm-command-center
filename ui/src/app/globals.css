@@ -547,3 +547,13 @@ button.t-title:hover, .task-link:hover { color: var(--accent); text-decoration: 
 .td-msg .bmeta { font: 11.5px var(--f-mono); color: var(--muted); margin-bottom: 3px; }
 .td-links { display: flex; gap: 14px; flex-wrap: wrap; }
 .set-add { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+
+/* A thread: the message that started it, with its replies set in under it */
+.tgroup { display: flex; flex-direction: column; gap: 6px; }
+.tgroup.answering > .bubble, .tgroup.answering .treplies { border-color: var(--accent); }
+.treplies { display: flex; flex-direction: column; gap: 6px; margin-left: 18px; padding-left: 12px; border-left: 2px solid var(--line); }
+.tlabel { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; font-size: 12px; font-weight: 600; color: var(--muted); }
+.tstart { align-self: flex-start; margin-left: 2px; }
+.reply-to { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+.reply-to span { overflow-wrap: anywhere; }
+

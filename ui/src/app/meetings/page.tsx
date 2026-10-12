@@ -195,7 +195,7 @@ export default function MeetingsPage() {
           ))}
           {list.length === 0 && (
             <p className="empty" style={{ padding: 18 }}>
-              {state.connections.fathom.connected ? "No calls yet. They appear here after the next check." : "Connect Fathom on the Connections tab to see your calls here."}
+              {state.connections.fathom.connected ? "No calls yet. They appear here after the next check." : "Fathom is not connected yet, so there are no calls to show."}
             </p>
           )}
         </div>

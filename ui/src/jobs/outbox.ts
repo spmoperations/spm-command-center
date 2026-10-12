@@ -10,10 +10,10 @@ import type { JobContext, JobResult } from "./runner";
 const BATCH = 20;
 const MAX_ATTEMPTS = 5;
 
-interface Queued { id: string; target: string | null; to_name: string; ctx: string; body: string; message_id: string | null; attempts: number }
+interface Queued { id: string; target: string | null; to_name: string; ctx: string; body: string; message_id: string | null; thread_ts: string | null; attempts: number }
 
 export async function outboxSend({ db, ownerId, now }: JobContext, slack: SlackClient | null): Promise<JobResult> {
-  const queued = await db.query<Queued>("select id, target, to_name, ctx, body, message_id, attempts from outbox where owner_id = $1 and status = 'queued' and source = 'slack' order by created_at limit $2", [ownerId, BATCH]);
+  const queued = await db.query<Queued>("select id, target, to_name, ctx, body, message_id, thread_ts, attempts from outbox where owner_id = $1 and status = 'queued' and source = 'slack' order by created_at limit $2", [ownerId, BATCH]);
   if (!queued.length) return { items: 0, message: "Nothing waiting to send" };
   if (!sendingEnabled()) return { items: 0, message: `${queued.length} waiting. Sending is switched off.` };
   if (!slack) return { items: 0, message: `${queued.length} waiting. Slack is not connected.` };
@@ -26,7 +26,8 @@ export async function outboxSend({ db, ownerId, now }: JobContext, slack: SlackC
       const channel = item.target.startsWith("U") || item.target.startsWith("W")
         ? (await slack.call<{ channel: { id: string } }>("conversations.open", { users: item.target })).channel.id
         : item.target;
-      await slack.call("chat.postMessage", { channel, text: item.body });
+      // A reply written under a thread goes into that thread, not to the top of the channel.
+      await slack.call("chat.postMessage", { channel, text: item.body, ...(item.thread_ts ? { thread_ts: item.thread_ts } : {}) });
       await db.run("update outbox set status = 'sent', sent_at = $1, attempts = attempts + 1, last_error = null where id = $2", [now, item.id]);
       if (item.message_id) await db.run("update messages set status = 'sent' where id = $1", [item.message_id]);
       sent++;

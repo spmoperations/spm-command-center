@@ -24,7 +24,7 @@ beforeEach(async () => {
 
 describe("database", () => {
   it("applies each migration once and records it", async () => {
-    expect(await db.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }]);
+    expect(await db.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }]);
     expect(await migrate(db)).toEqual([]);
   });
 
@@ -60,8 +60,8 @@ describe("database", () => {
   it("accepts a first schema that was run by hand, then applies what came after", async () => {
     const fresh = await openDb(undefined, { migrate: false });
     for (const statement of splitStatements(fs.readFileSync("db/migrations/0001_init.sql", "utf8"))) await fresh.run(statement);
-    expect(await migrate(fresh)).toEqual(["0002_row_level_security.sql", "0003_personal_and_requests.sql"]);
-    expect(await fresh.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }]);
+    expect(await migrate(fresh)).toEqual(["0002_row_level_security.sql", "0003_personal_and_requests.sql", "0004_threads.sql"]);
+    expect(await fresh.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }]);
     expect(await fresh.query("select relrowsecurity from pg_class where relname = 'messages'")).toEqual([{ relrowsecurity: true }]);
     await fresh.close();
   });
@@ -73,7 +73,7 @@ describe("database", () => {
     }
     await migrate(fresh);
     expect(await fresh.query("select relname from pg_class where relnamespace = 'public'::regnamespace and relkind = 'r' and not relrowsecurity")).toEqual([]);
-    expect(await fresh.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }]);
+    expect(await fresh.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }]);
     expect(await fresh.query("select mode, asked from messages m join conversations c on c.id = m.conversation_id")).toEqual([]);
     await fresh.close();
   });
@@ -513,6 +513,50 @@ describe("reading the inbox", () => {
     expect(long).toHaveLength(30);
     expect([long[0].text, long.at(-1)!.text]).toEqual(["update 10", "update 39"]);
     expect(inbox.find((c) => c.id === "slack:D1")!.thread).toHaveLength(1);
+  });
+});
+
+describe("Slack threads", () => {
+  const T0 = 1_760_000_000;
+  const ts = (k: number) => `${T0 + k}.000100`;
+  const put = (k: number, sender: string, body: string, thread: number | null, me = false) =>
+    db.run("insert into messages (id, conversation_id, owner_id, external_id, sender_name, me, body, at, thread_ts) values ($1, 'slack:C1', $2, $3, $4, $5, $6, $7, $8)", [`slack:C1:${ts(k)}`, OWNER_ID, ts(k), sender, me, body, (T0 + k) * 1000, thread === null ? null : ts(thread)]);
+  const sales = async () => (await state()).inbox.find((c) => c.id === "slack:C1")!;
+
+  it("hands the screens each message's own id and the thread it is in", async () => {
+    await put(10, "Priya", "Proposal draft is ready", 10);
+    await put(20, "Luis Ramos", "Looks good to me", 10);
+    // The message that was there already is in no thread.
+    const all = (await sales()).thread;
+    expect(all.find((m) => m.text === "Booked 2 more discovery calls for tomorrow.")).toMatchObject({ ts: "1.0", thread: undefined });
+    const thread = all.filter((m) => m.thread);
+    expect(thread.map((m) => [m.text, m.ts === m.thread, m.thread])).toEqual([["Proposal draft is ready", true, ts(10)], ["Looks good to me", false, ts(10)]]);
+  });
+
+  it("keeps the first message of a long thread, with its newest replies", async () => {
+    await put(10, "Priya", "Who can take the Harbor report?", 10);
+    for (let k = 1; k <= 60; k++) await put(10 + k, "Luis Ramos", `reply ${k}`, 10);
+    const texts = (await sales()).thread.map((m) => m.text);
+    expect(texts).toContain("Who can take the Harbor report?");
+    expect(texts).toContain("reply 60");
+    expect(texts).not.toContain("reply 1");
+    expect(texts.filter((t) => t.startsWith("reply"))).toHaveLength(40);
+  });
+
+  it("puts a reply written in the dashboard into the thread it answers, and marks that message as the start of one", async () => {
+    await put(10, "Priya", "Can you approve the proposal?", null);
+    await act("sendReply", "slack:C1", "Approved.", false, ts(10));
+    const thread = (await sales()).thread;
+    expect(thread.find((m) => m.text === "Can you approve the proposal?")!.thread).toBe(ts(10));
+    expect(thread.at(-1)).toMatchObject({ me: true, text: "Approved.", status: "queued", thread: ts(10) });
+    expect(await db.query("select target, thread_ts, body from outbox")).toEqual([{ target: "C1", thread_ts: ts(10), body: "Approved." }]);
+  });
+
+  it("posts to the chat itself when no thread is picked, and refuses a thread from somewhere else", async () => {
+    await act("sendReply", "slack:C1", "Morning all.", false);
+    expect(await db.query("select thread_ts from outbox")).toEqual([{ thread_ts: null }]);
+    await expect(act("sendReply", "slack:C1", "Hello?", false, "1.000100")).rejects.toThrow("no longer in this conversation");
+    expect(await db.query("select count(*)::int as n from outbox")).toEqual([{ n: 1 }]);
   });
 });
 

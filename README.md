@@ -44,6 +44,7 @@ These are built or planned but left off the screens for now. Each has one line t
 | The Personal side | Asked to be parked for now | `PERSONAL_SIDE = true` in `ui/src/core/config.ts` |
 | Departments (the tab, and the department on tasks and team members) | Nothing yet says which department a task or person belongs to | `DEPARTMENTS = true` in `ui/src/core/config.ts` |
 | Targets (the tab, and the month's pace on Today) | The numbers are the prototype's examples; nothing fills them in yet | `TARGETS = true` in `ui/src/core/config.ts` |
+| The Connections tab | Slack and Fathom are connected already from the keys in the environment. The page still works at `/connections` | `CONNECTIONS_TAB = true` in `ui/src/core/config.ts` |
 | Finding tasks with AI | The Claude account has no credit, so every run fails | `live: true` on `task-suggest` in `ui/src/core/jobs.ts` |
 | Telegram | Not built: needs Telegram app keys | Add it to `LIVE_SOURCES` and `LIVE_PROVIDERS`, and set `live: true` on `telegram-pull`, once it exists |
 
@@ -63,6 +64,7 @@ Off for now (see above). When it is on, the switch next to the title shows one s
 1. **Connect** Slack and Fathom on the Connections tab. Each key is checked with its service and stored encrypted.
 2. **Checks** read what is new. Each one is its own file in `ui/src/jobs/` with its own timer and bookmark.
 3. **Rules** mark what is urgent, label each chat and find requests waiting for a reply. No AI is involved.
+   Slack threads are kept whole: when the owner is tagged in a reply, the message that started the thread and the other replies come in with it, and later replies to that thread keep coming in. A reply written in the dashboard goes into the thread it answers.
 4. **Suggested tasks** appear on the Tasks tab: the owner's action items from calls, and messages that ask for something. Nothing becomes a task until Add task is clicked.
 5. **You act** on the screens. Any work task or conversation can be assigned to someone on the team list or to anyone in Slack; a person picked from Slack is added to the team list the first time. The person is told in a direct message, or, when the task came from a channel or a group message, in that chat with a tag. A reply or a delegation goes into the outbox and is sent from the owner's own Slack account, once sending is switched on.
 
