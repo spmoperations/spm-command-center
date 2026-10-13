@@ -6,7 +6,7 @@ import { useEffect } from "react";
 import { CONNECTIONS_TAB, DEPARTMENTS, MODE_NAME, MODES, PERSONAL_SIDE, TARGETS } from "@/core/config";
 import { daysInMonth } from "@/core/dates";
 import { isMine } from "@/core/delegation";
-import { liveProviders } from "@/core/providers";
+import { PROVIDERS } from "@/core/providers";
 import { evalMetric } from "@/core/targets";
 import type { Mode } from "@/core/types";
 import { PROFESSIONAL_ONLY, refresh, setMode, signOut, useApp, useMode, useToast, type App } from "@/store/store";
@@ -33,7 +33,8 @@ function navCounts({ state, now, today }: App, mode: Mode): Record<string, Count
   const lagging = state.metrics
     .filter((m) => !m.parent)
     .filter((m) => evalMetric(m, state.metrics, state.logs, clock).status !== "ok").length;
-  const providers = liveProviders(state.telegramAvailable);
+  // Every app the Connections tab shows is counted, Telegram too while it is not switched on yet.
+  const providers = PROVIDERS;
   const connected = providers.filter((p) => state.connections[p].connected).length;
   return {
     inbox: { text: open.length, hot: open.some((c) => c.pri === "high"), title: `${open.length} waiting for a reply` },

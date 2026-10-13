@@ -5,7 +5,7 @@ import { useState } from "react";
 import { Pill } from "@/components/bits";
 import { ago } from "@/core/dates";
 import {
-  checkFathomKey, checkPhone, checkSlackToken, checkTelegramCode, FATHOM_API_ACCESS_URL, liveProviders, PROVIDER_ABOUT, PROVIDER_NAME, PROVIDERS, SLACK_CREATE_APP_URL, SLACK_USER_SCOPES,
+  checkFathomKey, checkPhone, checkSlackToken, checkTelegramCode, FATHOM_API_ACCESS_URL, PROVIDER_ABOUT, PROVIDER_NAME, PROVIDERS, SLACK_CREATE_APP_URL, SLACK_USER_SCOPES,
 } from "@/core/providers";
 import type { JobId, Provider } from "@/core/types";
 import { connectProvider, disconnectProvider, disconnectTelegram, telegramStep, useApp, type App, type TelegramReply } from "@/store/store";
@@ -361,8 +361,7 @@ function ProviderCard({ provider, app }: { provider: Provider; app: App }) {
 export default function ConnectionsPage() {
   const app = useApp();
   if (!app) return null;
-  const providers = liveProviders(app.state.telegramAvailable);
-  const connected = providers.filter((p) => app.state.connections[p].connected).length;
+  const connected = PROVIDERS.filter((p) => app.state.connections[p].connected).length;
 
   return (
     <section className="view">
@@ -370,7 +369,7 @@ export default function ConnectionsPage() {
         <div>
           <h2>Connections</h2>
           <div className="muted" style={{ fontSize: 14 }}>
-            Connect the places your messages and calls come from. {connected} of {providers.length} connected. A key you paste here is checked, stored encrypted, and never shown again.
+            Connect the places your messages and calls come from. {connected} of {PROVIDERS.length} connected. A key you paste here is checked, stored encrypted, and never shown again.
           </div>
         </div>
       </div>
