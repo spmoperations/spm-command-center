@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addDays, dueLabel, weekStart } from "./dates";
+import { addDays, clockWithZone, dueLabel, weekStart } from "./dates";
 import { assignmentText, candidates, canAssign, canAssignInChat, fitFor, taskStatus } from "./delegation";
 import { clampInterval, describeInterval, isDue, JOBS, liveJobs, nextRunAt, waitUntil } from "./jobs";
 import { looksLikeRequest, requestDue, requestSummary, whereAsked } from "./requests";
@@ -259,6 +259,14 @@ describe("targets", () => {
 });
 
 describe("dates", () => {
+  it("shows a time with its timezone named, in whichever timezone it is asked for", () => {
+    const winter = Date.parse("2026-01-15T20:00:00Z");
+    const summer = Date.parse("2026-07-15T19:00:00Z");
+    expect([clockWithZone(winter, "America/New_York"), clockWithZone(summer, "America/New_York")]).toEqual(["3:00 PM EST", "3:00 PM EDT"]);
+    expect([clockWithZone(winter, "America/Los_Angeles"), clockWithZone(winter, "UTC")]).toEqual(["12:00 PM PST", "8:00 PM UTC"]);
+    expect(clockWithZone(winter, "Asia/Kolkata")).toBe("1:30 AM GMT+5:30");
+  });
+
   const now = new Date(2026, 9, 8, 15, 30); // Thursday 8 October 2026
 
   it("moves by whole calendar days", () => {

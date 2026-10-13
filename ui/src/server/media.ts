@@ -2,11 +2,10 @@
 //
 // Slack keeps its pictures: only their addresses are stored, and the dashboard fetches one
 // with the owner's token when it is looked at. Telegram's are different. They can only be
-// read through the logged-in account, so the ones worth showing are saved in a folder beside
-// the local database (`.data/telegram-media`, which git ignores) and served from there.
-// Telegram is local-only, so that folder exists only on the machine the app runs on.
-import fs from "node:fs";
-import path from "node:path";
+// read through the logged-in account, one download each, so the ones worth showing are kept
+// in the database (the `media` table) and served from there. On a developer's machine that
+// is the local database, so they never leave it.
+import type { Db } from "./db";
 
 /** A picture or sticker of a message, as it is stored with the message. */
 export interface StoredPicture {
@@ -18,13 +17,11 @@ export interface StoredPicture {
   thumb?: string;
   url?: string;
   link?: string;
-  /** Telegram: the file's name inside its chat's folder on this machine. */
-  file?: string;
+  /** Telegram: where the picture is kept in the `media` table. */
+  key?: string;
 }
 
-export interface StoredReaction { emoji: string; count: number; mine?: boolean }
-
-/** The kinds of picture a browser shows safely. Anything else is not served. */
+/** The kinds of picture a browser shows safely. Anything else is neither kept nor served. */
 const KINDS: [string, string, (b: Buffer) => boolean][] = [
   ["image/jpeg", "jpg", (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff],
   ["image/png", "png", (b) => b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))],
@@ -41,86 +38,75 @@ export function pictureType(bytes: Buffer): { mime: string; ext: string } | null
 /** True for a content type the dashboard is willing to pass on from Slack. */
 export const isPictureType = (type: string | null) => KINDS.some(([mime]) => (type ?? "").split(";")[0].trim().toLowerCase() === mime);
 
-// ---------- Telegram's folder on this machine ----------
+// ---------- Telegram's pictures, kept in the database ----------
 
-// The "turbopackIgnore" notes tell the build these files are made at run time, on this
-// machine, and are not something to pack with the server.
-const mediaDir = () => process.env.TELEGRAM_MEDIA_DIR ?? path.join(process.cwd(), ".data", "telegram-media");
-/** Folder and file names are ids and numbers. Anything else is refused, so a name can never point outside the folder. */
-const SAFE = /^-?[A-Za-z0-9][A-Za-z0-9_-]*(\.[a-z0-9]{1,5})?$/;
-const AVATARS = "avatars";
 const AVATAR_DAYS = 7;
+/** Chats and people are numbers, sometimes with a minus. Nothing else may be part of a key. */
+const ID = /^-?[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
-function place(folder: string, name: string): string | null {
-  return SAFE.test(folder) && SAFE.test(name) ? path.join(/* turbopackIgnore: true */ mediaDir(), folder, name) : null;
+export const telegramPictureKey = (chatId: string, messageId: number) => (ID.test(chatId) && Number.isInteger(messageId) ? `telegram/${chatId}/${messageId}` : null);
+const avatarKey = (id: string) => (ID.test(id) ? `telegram/avatar/${id}` : null);
+
+async function put(db: Db, ownerId: string, key: string, mime: string, bytes: Buffer, now: number): Promise<void> {
+  await db.run(
+    `insert into media (owner_id, key, mime, bytes, saved_at) values ($1, $2, $3, $4, $5)
+     on conflict (owner_id, key) do update set mime = excluded.mime, bytes = excluded.bytes, saved_at = excluded.saved_at`,
+    [ownerId, key, mime, bytes, now],
+  );
 }
 
-/** Saves a picture of a message and returns the file's name, or null when the bytes are not a picture. */
-export function saveTelegramPicture(chatId: string, messageId: number, bytes: Buffer): string | null {
+/** A stored picture by its key. Null when there is none, or when what is stored is not a picture. */
+export async function readPicture(db: Db, ownerId: string, key: string): Promise<{ bytes: Buffer; mime: string } | null> {
+  const [row] = await db.query<{ mime: string; bytes: Uint8Array }>("select mime, bytes from media where owner_id = $1 and key = $2", [ownerId, key]);
+  if (!row?.bytes?.length) return null;
+  const bytes = Buffer.from(row.bytes);
+  // Checked again on the way out: what goes to the browser is what the bytes are, not what the row says.
   const type = pictureType(bytes);
-  const name = `${messageId}.${type?.ext ?? ""}`;
-  const file = type && place(chatId, name);
-  if (!file) return null;
-  fs.mkdirSync(/* turbopackIgnore: true */ path.dirname(file), { recursive: true });
-  fs.writeFileSync(/* turbopackIgnore: true */ file, bytes, { mode: 0o600 });
-  return name;
+  return type ? { bytes, mime: type.mime } : null;
 }
 
-export function readTelegramPicture(chatId: string, name: string): Buffer | null {
-  const file = place(chatId, name);
-  try {
-    return file ? fs.readFileSync(/* turbopackIgnore: true */ file) : null;
-  } catch {
-    return null;
-  }
+/** Keeps a picture of a message and returns its key, or null when the bytes are not a picture. */
+export async function saveTelegramPicture(db: Db, ownerId: string, chatId: string, messageId: number, bytes: Buffer, now: number): Promise<string | null> {
+  const type = pictureType(bytes);
+  const key = telegramPictureKey(chatId, messageId);
+  if (!type || !key) return null;
+  await put(db, ownerId, key, type.mime, bytes, now);
+  return key;
 }
 
-const avatarFile = (id: string) => place(AVATARS, `${id}.jpg`);
-
-/** Saves a profile picture. No bytes means "asked, and there is none": an empty file is kept so nobody is asked about twice. */
-export function saveTelegramAvatar(id: string, bytes: Buffer | null): void {
-  const file = avatarFile(id);
-  if (!file) return;
-  fs.mkdirSync(/* turbopackIgnore: true */ path.dirname(file), { recursive: true });
-  fs.writeFileSync(/* turbopackIgnore: true */ file, bytes && pictureType(bytes) ? bytes : Buffer.alloc(0), { mode: 0o600 });
+/** Keeps a profile picture. No bytes means "asked, and there is none": an empty row is kept so nobody is asked about twice. */
+export async function saveTelegramAvatar(db: Db, ownerId: string, id: string, bytes: Buffer | null, now: number): Promise<void> {
+  const key = avatarKey(id);
+  if (!key) return;
+  const type = bytes && pictureType(bytes);
+  await put(db, ownerId, key, type ? type.mime : "", type ? bytes! : Buffer.alloc(0), now);
 }
 
-export function readTelegramAvatar(id: string): Buffer | null {
-  const file = avatarFile(id);
-  try {
-    const bytes = file ? fs.readFileSync(/* turbopackIgnore: true */ file) : null;
-    return bytes?.length ? bytes : null;
-  } catch {
-    return null;
-  }
+export async function readTelegramAvatar(db: Db, ownerId: string, id: string): Promise<{ bytes: Buffer; mime: string } | null> {
+  const key = avatarKey(id);
+  return key ? readPicture(db, ownerId, key) : null;
 }
 
-/** True when this person's picture has not been asked for lately. People change their pictures, so it is asked again after a week. */
-export function telegramAvatarIsDue(id: string, now: number): boolean {
-  const file = avatarFile(id);
-  if (!file) return false;
-  try {
-    return now - fs.statSync(/* turbopackIgnore: true */ file).mtimeMs > AVATAR_DAYS * 86_400_000;
-  } catch {
-    return true;
-  }
+/** Of these people, the ones whose picture has not been asked for lately. People change their pictures, so it is asked again after a week. */
+export async function telegramAvatarsDue(db: Db, ownerId: string, ids: string[], now: number): Promise<string[]> {
+  const wanted = ids.filter((id) => avatarKey(id));
+  if (!wanted.length) return [];
+  const fresh = new Set(
+    (await db.query<{ key: string }>(
+      "select key from media where owner_id = $1 and saved_at > $2 and key in (select jsonb_array_elements_text($3::jsonb))",
+      [ownerId, now - AVATAR_DAYS * 86_400_000, JSON.stringify(wanted.map(avatarKey))],
+    )).map((r) => r.key),
+  );
+  return wanted.filter((id) => !fresh.has(avatarKey(id)!));
 }
 
-/** The ids of everyone whose picture is saved here. */
-export function telegramAvatarIds(): Set<string> {
-  const ids = new Set<string>();
-  try {
-    const dir = path.join(/* turbopackIgnore: true */ mediaDir(), AVATARS);
-    for (const entry of fs.readdirSync(/* turbopackIgnore: true */ dir, { withFileTypes: true })) {
-      if (entry.isFile() && entry.name.endsWith(".jpg") && fs.statSync(/* turbopackIgnore: true */ path.join(/* turbopackIgnore: true */ dir, entry.name)).size > 0) ids.add(entry.name.slice(0, -4));
-    }
-  } catch {
-    // No folder yet: nobody has a picture.
-  }
-  return ids;
+/** The ids of everyone whose profile picture is kept. */
+export async function telegramAvatarIds(db: Db, ownerId: string): Promise<Set<string>> {
+  const rows = await db.query<{ key: string }>("select key from media where owner_id = $1 and key like 'telegram/avatar/%' and mime <> ''", [ownerId]);
+  return new Set(rows.map((r) => r.key.slice("telegram/avatar/".length)));
 }
 
-/** Removes every Telegram picture from this machine. Used when Telegram is disconnected and its chats are removed. */
-export function forgetTelegramMedia(): void {
-  fs.rmSync(/* turbopackIgnore: true */ mediaDir(), { recursive: true, force: true });
+/** Removes every Telegram picture. Used when Telegram is disconnected and its chats are removed. */
+export async function forgetTelegramMedia(db: Db, ownerId: string): Promise<void> {
+  await db.run("delete from media where owner_id = $1 and key like 'telegram/%'", [ownerId]);
 }

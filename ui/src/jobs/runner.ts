@@ -7,7 +7,7 @@ import { secretFor } from "@/server/connections";
 import type { Db } from "@/server/db";
 import { OWNER_ID, resortInbox, sendingEnabled } from "@/server/repo";
 import { RateLimited, slackClient } from "@/server/slack";
-import { telegramAccount, telegramApi, telegramAvailable, telegramBlocked } from "@/server/telegram";
+import { telegramApi, telegramAvailable, telegramBlocked, telegramConnected } from "@/server/telegram";
 import { fathomPull } from "./fathom";
 import { outboxSend } from "./outbox";
 import { requestFinder } from "./request-finder";
@@ -68,13 +68,13 @@ async function execute(jobId: JobId, ctx: JobContext): Promise<JobResult> {
     case "outbox-retry": {
       const token = await secretFor(ctx.db, ctx.ownerId, "slack");
       // Telegram is opened only if something is waiting to go there.
-      return outboxSend(ctx, token ? slackClient(token) : null, telegramAccount() ? telegramApi : null);
+      return outboxSend(ctx, token ? slackClient(token) : null, (await telegramConnected(ctx.db, ctx.ownerId)) ? () => telegramApi(ctx.db, ctx.ownerId) : null);
     }
     case "telegram-pull": {
       const blocked = telegramBlocked();
       if (blocked) throw new NotReady(blocked);
-      if (!telegramAccount()) throw new NotReady("Telegram is not connected");
-      const telegram = await telegramApi();
+      if (!(await telegramConnected(ctx.db, ctx.ownerId))) throw new NotReady("Telegram is not connected");
+      const telegram = await telegramApi(ctx.db, ctx.ownerId);
       try {
         return await telegramPull(ctx, telegram);
       } finally {
@@ -84,10 +84,10 @@ async function execute(jobId: JobId, ctx: JobContext): Promise<JobResult> {
   }
 }
 
-/** The services that are connected. Slack and Fathom are rows in the database; Telegram's login is a file on this machine. */
+/** The services that are connected. A Telegram login counts only on a server that may use Telegram. */
 async function connectedTo(db: Db, ownerId: string): Promise<Set<string>> {
   const connected = new Set((await db.query<{ provider: string }>("select provider from connections where owner_id = $1", [ownerId])).map((r) => r.provider));
-  if (telegramAccount()) connected.add("telegram");
+  if (!telegramAvailable()) connected.delete("telegram");
   return connected;
 }
 

@@ -9,9 +9,12 @@ import type { Db } from "@/server/db";
 import { forgetTelegramMedia } from "@/server/media";
 import { pictureResponse } from "@/server/pictures";
 import { applyAction, loadState, OWNER_ID } from "@/server/repo";
-import { seal } from "@/server/secrets";
+import { seal, unseal } from "@/server/secrets";
 import { createSession, SESSION_COOKIE } from "@/server/session";
-import { describeTelegramMedia, TELEGRAM_LOCAL_ONLY, telegramAccount, telegramAvailable, telegramBlocked, telegramReactions, type TelegramMessage } from "@/server/telegram";
+import {
+  adoptTelegramFile, describeTelegramMedia, giveTelegramCode, giveTelegramPassword, startTelegramLogin, TELEGRAM_OFF_HERE, telegramAvailable, telegramBlocked, telegramConnected, telegramReactions,
+  type OpenDoor, type TelegramMessage,
+} from "@/server/telegram";
 import { fakeSlack, fakeTelegram, NOW, reset, seed, testDb, TINY, type FakeTelegram } from "@/server/testing";
 import { outboxSend } from "./outbox";
 import { runJob, syncAll, type JobContext } from "./runner";
@@ -23,6 +26,7 @@ const ctx = (cursor: Record<string, unknown> = {}): JobContext => ({ db, ownerId
 
 const MINUTE = 60_000;
 const DAY = 86_400_000;
+const HOSTED = "postgres://user:secret@db.example.com:5432/postgres";
 const said = (id: number, text: string, more: Partial<TelegramMessage> = {}): TelegramMessage => ({ id, at: NOW - (100 - id) * MINUTE, text, out: false, sender: "Dana Whitfield", senderId: "", mentioned: false, reactions: [], ...more });
 
 /** One of each kind of chat Telegram has. */
@@ -37,11 +41,16 @@ const account = (): FakeTelegram =>
     { id: "777000", name: "Telegram", kind: "service", topId: 6, messages: [said(6, "Login code: 12345. Do not give this code to anyone.", { sender: "Telegram" })] },
   ]);
 
-/** As if a person had logged in on this machine: the keys are set and a sealed login is saved. */
-function connected() {
+/** The app keys are set, as on a server that has them. */
+function withKeys() {
   process.env.TELEGRAM_API_ID = "12345";
   process.env.TELEGRAM_API_HASH = "0123456789abcdef0123456789abcdef";
-  fs.writeFileSync(process.env.TELEGRAM_SESSION_FILE!, JSON.stringify({ v: 1, session: seal("a-login-that-is-never-used"), name: "Dana Whitfield", phone: "+44 •••• 0123", connectedAt: NOW }));
+}
+
+/** As if a person had logged in here: the keys are set and a sealed login is kept. */
+async function connected() {
+  withKeys();
+  await db.run("insert into connections (owner_id, provider, secret, label, connected_at) values ($1, 'telegram', $2, 'Dana Whitfield · +44 •••• 0123', $3)", [OWNER_ID, seal("a-login-that-is-never-used"), NOW]);
 }
 
 beforeAll(async () => {
@@ -50,40 +59,51 @@ beforeAll(async () => {
 afterAll(() => db.close());
 beforeEach(async () => {
   await reset(db);
-  // Every test gets an empty folder for the saved login, never the real one.
+  // Every test gets an empty folder for a login file from an earlier version, never the real one.
   folder = fs.mkdtempSync(path.join(os.tmpdir(), "command-center-telegram-"));
   process.env.TELEGRAM_SESSION_FILE = path.join(folder, "telegram-session.json");
-  process.env.TELEGRAM_MEDIA_DIR = path.join(folder, "media");
 });
 afterEach(() => {
-  for (const name of ["TELEGRAM_API_ID", "TELEGRAM_API_HASH", "DATABASE_URL", "SENDING_ENABLED", "LOGIN_EMAIL", "LOGIN_PASSWORD"]) delete process.env[name];
+  for (const name of ["TELEGRAM_API_ID", "TELEGRAM_API_HASH", "TELEGRAM_HOSTED", "DATABASE_URL", "SENDING_ENABLED", "LOGIN_EMAIL", "LOGIN_PASSWORD"]) delete process.env[name];
   fs.rmSync(folder, { recursive: true, force: true });
 });
 
 describe("where Telegram may be used", () => {
-  it("needs its app keys, and is off while the data is in a hosted database", () => {
-    expect([telegramAvailable(), telegramBlocked()]).toEqual([false, "Telegram's app keys are not set. Add TELEGRAM_API_ID and TELEGRAM_API_HASH to .env.local."]);
-    connected();
+  it("needs its app keys, and with a hosted database also the server's say-so", () => {
+    expect([telegramAvailable(), telegramBlocked()]).toEqual([false, "Telegram's app keys are not set. Add TELEGRAM_API_ID and TELEGRAM_API_HASH to the environment."]);
+    withKeys();
     expect([telegramAvailable(), telegramBlocked()]).toEqual([true, null]);
-    process.env.DATABASE_URL = "postgres://user:secret@db.example.com:5432/postgres";
-    expect([telegramAvailable(), telegramBlocked()]).toEqual([false, TELEGRAM_LOCAL_ONLY]);
+    // A developer's machine pointed at the hosted database: off, so their own account cannot end up there.
+    process.env.DATABASE_URL = HOSTED;
+    expect([telegramAvailable(), telegramBlocked()]).toEqual([false, TELEGRAM_OFF_HERE]);
+    // The live site says it is the one meant to hold a Telegram login.
+    process.env.TELEGRAM_HOSTED = "true";
+    expect([telegramAvailable(), telegramBlocked()]).toEqual([true, null]);
   });
 
-  it("shows who is connected by name and a masked number, and nothing at all with a hosted database", async () => {
-    connected();
-    expect(telegramAccount()).toEqual({ label: "Dana Whitfield · +44 •••• 0123", connectedAt: NOW });
+  it("shows who is connected by name and a masked number", async () => {
+    await connected();
+    expect(await telegramConnected(db, OWNER_ID)).toBe(true);
     expect((await loadState(db, OWNER_ID, new Date(NOW))).connections.telegram).toEqual({ connected: true, connectedAt: NOW, label: "Dana Whitfield · +44 •••• 0123" });
+  });
 
-    process.env.DATABASE_URL = "postgres://user:secret@db.example.com:5432/postgres";
-    expect(telegramAccount()).toBeNull();
+  it("takes no notice of a saved login on a server that may not use Telegram", async () => {
+    await connected();
+    process.env.DATABASE_URL = HOSTED;
+    expect(await telegramConnected(db, OWNER_ID)).toBe(false);
     const state = await loadState(db, OWNER_ID, new Date(NOW));
     expect([state.telegramAvailable, state.localData, state.connections.telegram]).toEqual([false, false, { connected: false }]);
+    expect(await runJob(db, "telegram-pull", OWNER_ID, NOW)).toMatchObject({ ok: false, items: 0, message: TELEGRAM_OFF_HERE });
+    expect((await syncAll(db)).map((r) => r.jobId)).not.toContain("telegram-pull");
   });
 
-  it("keeps the login in its file, sealed, and never in the database", async () => {
-    connected();
-    expect(fs.readFileSync(process.env.TELEGRAM_SESSION_FILE!, "utf8")).not.toContain("a-login-that-is-never-used");
-    expect(await db.query("select provider from connections where owner_id = $1", [OWNER_ID])).toEqual([]);
+  it("uses a saved login on the live site once the server says so", async () => {
+    await connected();
+    process.env.DATABASE_URL = HOSTED;
+    process.env.TELEGRAM_HOSTED = "true";
+    expect(await telegramConnected(db, OWNER_ID)).toBe(true);
+    const state = await loadState(db, OWNER_ID, new Date(NOW));
+    expect([state.telegramAvailable, state.localData, state.connections.telegram.connected]).toEqual([true, false, true]);
   });
 
   it("joins the list of apps, sources and checks only where it can be used", () => {
@@ -91,52 +111,211 @@ describe("where Telegram may be used", () => {
     expect([liveSources(false), liveSources(true)]).toEqual([["slack"], ["slack", "telegram"]]);
   });
 
-  it("does not run its check with a hosted database, even with a login saved, and says why", async () => {
-    connected();
-    process.env.DATABASE_URL = "postgres://user:secret@db.example.com:5432/postgres";
-    expect(await runJob(db, "telegram-pull", OWNER_ID, NOW)).toMatchObject({ ok: false, items: 0, message: TELEGRAM_LOCAL_ONLY });
-    expect((await syncAll(db)).map((r) => r.jobId)).not.toContain("telegram-pull");
+  it("says it is not connected when nobody has logged in", async () => {
+    withKeys();
+    expect(await telegramConnected(db, OWNER_ID)).toBe(false);
+    expect(await runJob(db, "telegram-pull", OWNER_ID, NOW)).toMatchObject({ ok: false, message: "Telegram is not connected" });
   });
 
-  it("says it is not connected when nobody has logged in", async () => {
-    process.env.TELEGRAM_API_ID = "12345";
-    process.env.TELEGRAM_API_HASH = "0123456789abcdef0123456789abcdef";
-    expect(await runJob(db, "telegram-pull", OWNER_ID, NOW)).toMatchObject({ ok: false, message: "Telegram is not connected" });
+  it("moves a login an earlier version kept in a file into the local database, once, and never into a hosted one", async () => {
+    withKeys();
+    const file = process.env.TELEGRAM_SESSION_FILE!;
+    const old = JSON.stringify({ v: 1, session: seal("the-old-login"), name: "Dana Whitfield", phone: "+44 •••• 0123", connectedAt: NOW });
+    fs.writeFileSync(file, old);
+    process.env.DATABASE_URL = HOSTED;
+    process.env.TELEGRAM_HOSTED = "true";
+    expect([await adoptTelegramFile(db, OWNER_ID), fs.existsSync(file)]).toEqual([false, true]);
+    expect(await db.query("select provider from connections")).toEqual([]);
+
+    delete process.env.DATABASE_URL;
+    delete process.env.TELEGRAM_HOSTED;
+    expect([await adoptTelegramFile(db, OWNER_ID), fs.existsSync(file)]).toEqual([true, false]);
+    const [row] = await db.query<{ secret: string; label: string; connected_at: number }>("select secret, label, connected_at from connections where provider = 'telegram'");
+    expect([unseal(row.secret), row.label, Number(row.connected_at)]).toEqual(["the-old-login", "Dana Whitfield · +44 •••• 0123", NOW]);
+    expect(await adoptTelegramFile(db, OWNER_ID)).toBe(false);
+  });
+});
+
+describe("logging in to Telegram, one request per step", () => {
+  const failure = (code: string, more: Record<string, unknown> = {}) => Object.assign(new Error(code), { errorMessage: code, ...more });
+  interface Script { via?: "app" | "sms" | "email"; code?: string; password?: string; hint?: string; sendFails?: Error; codeExpired?: boolean }
+
+  /**
+   * A pretend Telegram. Each request opens its own connection from the keys it was handed,
+   * as two different servers would, and nothing is shared between them but those keys.
+   */
+  function telegram(script: Script = {}) {
+    const asked: string[] = [];
+    const open: OpenDoor = async (session) => {
+      let keys = session || "keys";
+      asked.push(`open ${session || "(new)"}`);
+      return {
+        sendCode: async (phone) => {
+          asked.push(`sendCode ${phone}`);
+          if (script.sendFails) throw script.sendFails;
+          return { hash: "hash-1", via: script.via ?? "app", email: script.via === "email" ? "d***@example.com" : undefined };
+        },
+        signIn: async (phone, hash, code, via) => {
+          asked.push(`signIn ${phone} ${hash} ${code} ${via}`);
+          if (script.codeExpired) throw failure("PHONE_CODE_EXPIRED");
+          if (code !== (script.code ?? "12345")) throw failure("PHONE_CODE_INVALID");
+          keys += script.password ? "+code" : "+in";
+          return script.password ? "password" : "done";
+        },
+        passwordHint: async () => script.hint,
+        checkPassword: async (password) => {
+          asked.push("checkPassword");
+          if (password !== script.password) throw failure("PASSWORD_HASH_INVALID");
+          keys += "+in";
+        },
+        me: async () => ({ name: "Dana Whitfield", phone: "447700900123" }),
+        session: () => keys,
+        close: async () => void asked.push("close"),
+      };
+    };
+    return { open, asked };
+  }
+  const saved = async () => (await db.query<{ secret: string; label: string }>("select secret, label from connections where provider = 'telegram'")).map((r) => [unseal(r.secret), r.label]);
+
+  beforeEach(withKeys);
+
+  it("sends the code, takes it in a second request, and keeps the login sealed in the database", async () => {
+    const t = telegram();
+    const first = await startTelegramLogin("+447700900123", t.open);
+    expect(first.step).toEqual({ need: "code", viaApp: true });
+    // What travels to the browser and back is sealed: the connection's keys cannot be read from it.
+    expect([typeof first.pending, first.pending!.includes("keys"), unseal(first.pending!).includes('"session":"keys"')]).toEqual(["string", false, true]);
+    expect(await saved()).toEqual([]);
+
+    const second = await giveTelegramCode(db, OWNER_ID, first.pending, " 12345 ", t.open);
+    expect(second).toEqual({ step: { connected: true, label: "Dana Whitfield · +44 •••• 0123" }, pending: null });
+    expect(t.asked).toEqual(["open (new)", "sendCode +447700900123", "close", "open keys", "signIn +447700900123 hash-1 12345 app", "close"]);
+    expect(await saved()).toEqual([["keys+in", "Dana Whitfield · +44 •••• 0123"]]);
+    const [{ secret }] = await db.query<{ secret: string }>("select secret from connections where provider = 'telegram'");
+    expect(secret.includes("keys")).toBe(false);
+    expect((await loadState(db, OWNER_ID, new Date(NOW))).connections.telegram).toMatchObject({ connected: true, label: "Dana Whitfield · +44 •••• 0123" });
+  });
+
+  it("asks for the code again when it is wrong, with the same login still good", async () => {
+    const t = telegram();
+    const first = await startTelegramLogin("+447700900123", t.open);
+    const wrong = await giveTelegramCode(db, OWNER_ID, first.pending, "00000", t.open);
+    expect(wrong).toEqual({ step: { need: "code", viaApp: true, error: "That code is not right. Check it and try again." }, pending: first.pending });
+    expect(await saved()).toEqual([]);
+    expect((await giveTelegramCode(db, OWNER_ID, wrong.pending, "12345", t.open)).step).toMatchObject({ connected: true });
+  });
+
+  it("asks for the account's password when it has one, again when it is wrong, and never keeps it", async () => {
+    const t = telegram({ password: "open sesame", hint: "the usual" });
+    const first = await startTelegramLogin("+447700900123", t.open);
+    const afterCode = await giveTelegramCode(db, OWNER_ID, first.pending, "12345", t.open);
+    expect(afterCode.step).toEqual({ need: "password", hint: "the usual" });
+    expect(afterCode.pending).not.toBe(first.pending);
+    await expect(giveTelegramCode(db, OWNER_ID, afterCode.pending, "12345", t.open)).rejects.toThrow("Telegram is waiting for your password, not a code.");
+
+    const wrong = await giveTelegramPassword(db, OWNER_ID, afterCode.pending, "guess", t.open);
+    expect(wrong).toEqual({ step: { need: "password", hint: "the usual", error: "That password is not right. Try again." }, pending: afterCode.pending });
+    expect(await saved()).toEqual([]);
+
+    expect(await giveTelegramPassword(db, OWNER_ID, wrong.pending, "open sesame", t.open)).toEqual({ step: { connected: true, label: "Dana Whitfield · +44 •••• 0123" }, pending: null });
+    expect(await saved()).toEqual([["keys+code+in", "Dana Whitfield · +44 •••• 0123"]]);
+    // The password opened the door once. It is in no table and in nothing sent back.
+    expect(JSON.stringify([await db.query("select * from connections"), unseal(afterCode.pending!)])).not.toContain("open sesame");
+  });
+
+  it("will not take a password before Telegram has asked for one", async () => {
+    const t = telegram();
+    const first = await startTelegramLogin("+447700900123", t.open);
+    await expect(giveTelegramPassword(db, OWNER_ID, first.pending, "anything", t.open)).rejects.toThrow("Telegram has not asked for a password.");
+  });
+
+  it("starts over when the code has expired, the login is too old, or what comes back is not its own", async () => {
+    const over = "That login has timed out. Start again with your phone number.";
+    const expiring = telegram({ codeExpired: true });
+    const first = await startTelegramLogin("+447700900123", expiring.open);
+    await expect(giveTelegramCode(db, OWNER_ID, first.pending, "12345", expiring.open)).rejects.toThrow("That code has expired. Start again to get a new one.");
+
+    const t = telegram();
+    const old = seal(JSON.stringify({ ...JSON.parse(unseal(first.pending!)), at: Date.now() - 11 * MINUTE }));
+    for (const token of [old, null, "", "not-a-sealed-thing", `${first.pending!.slice(0, -4)}AAAA`]) {
+      await expect(giveTelegramCode(db, OWNER_ID, token, "12345", t.open)).rejects.toThrow(over);
+      await expect(giveTelegramPassword(db, OWNER_ID, token, "x", t.open)).rejects.toThrow(over);
+    }
+    // Nothing was asked of Telegram for any of them.
+    expect(t.asked).toEqual([]);
+    expect(await saved()).toEqual([]);
+  });
+
+  it("puts Telegram's refusals in plain words", async () => {
+    const start = (sendFails: Error) => startTelegramLogin("+447700900123", telegram({ sendFails }).open);
+    await expect(start(failure("PHONE_NUMBER_INVALID"))).rejects.toThrow("Telegram does not know that phone number. Check the country code.");
+    await expect(start(failure("FLOOD_WAIT_120", { seconds: 120 }))).rejects.toThrow("Telegram asks you to wait 2 minutes before trying again.");
+    await expect(start(failure("API_ID_INVALID"))).rejects.toThrow("Telegram did not accept the app keys. Check TELEGRAM_API_ID and TELEGRAM_API_HASH.");
+    await expect(start(new Error("Telegram requires a login email for this account"))).rejects.toThrow("Telegram wants a login email on this account first.");
+    // The connection is closed even when a step fails.
+    const t = telegram({ sendFails: failure("PHONE_NUMBER_BANNED") });
+    await expect(startTelegramLogin("+447700900123", t.open)).rejects.toThrow("Telegram has blocked that phone number.");
+    expect(t.asked).toEqual(["open (new)", "sendCode +447700900123", "close"]);
+  });
+
+  it("says when the code went to the account's email or by text message, and hands it in the right way", async () => {
+    const byEmail = telegram({ via: "email", code: "123456" });
+    const first = await startTelegramLogin("+447700900123", byEmail.open);
+    expect(first.step).toEqual({ need: "code", viaApp: false, email: "d***@example.com" });
+    await giveTelegramCode(db, OWNER_ID, first.pending, "123456", byEmail.open);
+    expect(byEmail.asked).toContain("signIn +447700900123 hash-1 123456 email");
+    expect((await startTelegramLogin("+447700900123", telegram({ via: "sms" }).open)).step).toEqual({ need: "code", viaApp: false });
+  });
+
+  it("does nothing on a server that may not use Telegram", async () => {
+    process.env.DATABASE_URL = HOSTED;
+    const t = telegram();
+    await expect(startTelegramLogin("+447700900123", t.open)).rejects.toThrow(TELEGRAM_OFF_HERE);
+    expect(t.asked).toEqual([]);
   });
 });
 
 describe("the Telegram login request", () => {
-  const post = (body: unknown, signedIn = true) => {
+  const post = (body: unknown, more: { signedIn?: boolean; cookie?: string } = {}) => {
     process.env.LOGIN_EMAIL = "jeremy@example.com";
     process.env.LOGIN_PASSWORD = "correct horse battery";
+    const cookies = [more.signedIn === false ? "" : `${SESSION_COOKIE}=${createSession("jeremy@example.com")}`, more.cookie ?? ""].filter(Boolean).join("; ");
     return telegramRoute(
       new Request("http://127.0.0.1:3000/api/telegram", {
         method: "POST",
-        headers: { "content-type": "application/json", host: "127.0.0.1:3000", ...(signedIn ? { cookie: `${SESSION_COOKIE}=${createSession("jeremy@example.com")}` } : {}) },
+        headers: { "content-type": "application/json", host: "127.0.0.1:3000", ...(cookies ? { cookie: cookies } : {}) },
         body: JSON.stringify(body),
       }),
     );
   };
   const answer = async (response: Response) => [response.status, ((await response.json()) as { error?: string }).error];
+  const over = "That login has timed out. Start again with your phone number.";
 
   it("is only for a signed-in person", async () => {
-    connected();
-    expect(await answer(await post({ step: "start", phone: "+447700900123" }, false))).toEqual([401, "Please sign in."]);
+    withKeys();
+    expect(await answer(await post({ step: "start", phone: "+447700900123" }, { signedIn: false }))).toEqual([401, "Please sign in."]);
   });
 
-  it("is refused with a hosted database, before anything is sent to Telegram", async () => {
-    connected();
-    process.env.DATABASE_URL = "postgres://user:secret@db.example.com:5432/postgres";
-    expect(await answer(await post({ step: "start", phone: "+447700900123" }))).toEqual([400, TELEGRAM_LOCAL_ONLY]);
-    expect(await answer(await post({ step: "disconnect", forget: true }))).toEqual([400, TELEGRAM_LOCAL_ONLY]);
+  it("is refused on a server that may not use Telegram, before anything is sent to Telegram", async () => {
+    withKeys();
+    process.env.DATABASE_URL = HOSTED;
+    expect(await answer(await post({ step: "start", phone: "+447700900123" }))).toEqual([400, TELEGRAM_OFF_HERE]);
+    expect(await answer(await post({ step: "disconnect", forget: true }))).toEqual([400, TELEGRAM_OFF_HERE]);
   });
 
   it("asks for a real phone number, and for the steps in order", async () => {
-    connected();
+    withKeys();
     expect(await answer(await post({ step: "start", phone: "07700 900123" }))).toEqual([400, "Type the number with its country code, for example +44 7700 900123."]);
-    expect(await answer(await post({ step: "code", code: "12345" }))).toEqual([400, "That login has timed out. Start again with your phone number."]);
-    expect(await answer(await post({ step: "password", password: "x" }))).toEqual([400, "That login has timed out. Start again with your phone number."]);
+    expect(await answer(await post({ step: "code", code: "12345" }))).toEqual([400, over]);
+    expect(await answer(await post({ step: "password", password: "x" }))).toEqual([400, over]);
+    expect(await answer(await post({ step: "code", code: "12345" }, { cookie: "cc_telegram_login=made-up" }))).toEqual([400, over]);
     expect(await answer(await post({ step: "anything else" }))).toEqual([400, "Unknown step."]);
+  });
+
+  it("forgets a login in progress when it is cancelled", async () => {
+    withKeys();
+    const res = await post({ step: "cancel" }, { cookie: "cc_telegram_login=something" });
+    expect([res.status, res.headers.get("set-cookie")]).toEqual([200, "cc_telegram_login=; Path=/api/telegram; HttpOnly; SameSite=Strict; Max-Age=0"]);
   });
 });
 
@@ -321,11 +500,11 @@ describe("pictures, stickers and reactions from Telegram", () => {
     return telegram;
   };
 
-  it("saves the pictures and stickers on this machine, and never fetches a video", async () => {
+  it("keeps the pictures and stickers, and never fetches a video", async () => {
     const telegram = withPictures();
     await telegramPull(ctx(), telegram);
     expect(telegram.fetched.filter((f) => !f.startsWith("face:")).sort()).toEqual(["501:1", "501:2"]);
-    expect(fs.readdirSync(path.join(folder, "media", "501")).sort()).toEqual(["1.jpg", "2.webp"]);
+    expect(await db.query("select key, mime from media order by key")).toEqual([{ key: "telegram/501/1", mime: "image/jpeg" }, { key: "telegram/501/2", mime: "image/webp" }, { key: "telegram/avatar/501", mime: "image/jpeg" }]);
 
     const [venue, sticker, video, question] = await thread("telegram:501");
     expect(venue.attachments).toEqual([{ kind: "image", name: "Photo", w: 800, h: 600, src: "/api/media?m=telegram%3A501%3A1&n=0" }]);
@@ -345,7 +524,7 @@ describe("pictures, stickers and reactions from Telegram", () => {
     delete telegram.files["501:2"];
     await telegramPull(ctx(), telegram);
     expect((await thread("telegram:501")).map((m) => m.attachments)).toEqual([undefined, undefined, undefined, undefined]);
-    expect(fs.existsSync(path.join(folder, "media", "501"))).toBe(false);
+    expect(await db.query("select key from media where key like 'telegram/501/%'")).toEqual([]);
   });
 
   it("shows the other person's profile picture on the row and beside their messages", async () => {
@@ -417,17 +596,30 @@ describe("pictures, stickers and reactions from Telegram", () => {
     expect((await thread("telegram:501"))[0].attachments).toHaveLength(1);
   });
 
-  it("hands out only its own files, by number and id, and nothing once they are removed", async () => {
+  it("fetches again a picture that an earlier version kept as a file", async () => {
+    const telegram = withPictures();
+    await telegramPull(ctx(), telegram);
+    await db.run("update messages set attachments = $1::jsonb where id = 'telegram:501:1'", [JSON.stringify([{ kind: "image", name: "Photo", file: "1.jpg" }])]);
+    await db.run("delete from media where key = 'telegram/501/1'");
+    telegram.fetched.length = 0;
+    await telegramRefresh({ db, ownerId: OWNER_ID, now: NOW }, telegram, "telegram:501");
+    expect(telegram.fetched).toEqual(["501:1"]);
+    expect((await picture("/api/media?m=telegram%3A501%3A1&n=0")).status).toBe(200);
+  });
+
+  it("hands out only its own pictures, by number and id, and nothing once they are removed", async () => {
     const telegram = withPictures();
     await telegramPull(ctx(), telegram);
     for (const bad of ["/api/media?avatar=..%2F501%2F1", "/api/media?avatar=..", "/api/media?avatar=501%2F..%2F..%2Fpg", "/api/media?m=telegram%3A501%3A1&n=5", "/api/media?m=telegram%3A501%3A3&n=0", "/api/media?m=telegram%3A501%3A1&n=-1", "/api/media?n=0"]) {
       expect([bad, (await picture(bad)).status >= 400]).toEqual([bad, true]);
     }
-    // A file name stored with a message can never point outside the chat's own folder.
-    await db.run("update messages set attachments = $1::jsonb where id = 'telegram:501:1'", [JSON.stringify([{ kind: "image", name: "x", file: "../avatars/501.jpg" }])]);
-    expect((await picture("/api/media?m=telegram%3A501%3A1&n=0")).status).toBe(404);
+    // Whatever a message row says, only a picture kept under its own chat is handed out.
+    for (const key of ["telegram/avatar/501", "telegram/502/1", "../telegram/501/2", "telegram/501/../avatar/501"]) {
+      await db.run("update messages set attachments = $1::jsonb where id = 'telegram:501:1'", [JSON.stringify([{ kind: "image", name: "x", key }])]);
+      expect([key, (await picture("/api/media?m=telegram%3A501%3A1&n=0")).status]).toEqual([key, 404]);
+    }
 
-    forgetTelegramMedia();
+    await forgetTelegramMedia(db, OWNER_ID);
     expect((await picture("/api/media?m=telegram%3A501%3A2&n=0")).status).toBe(404);
     expect((await picture("/api/media?avatar=501")).status).toBe(404);
   });

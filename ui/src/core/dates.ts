@@ -41,6 +41,13 @@ export function dueLabel(iso: string, today: string): { text: string; tone: DueT
 export const shortDate = (iso: string) =>
   parseDay(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 
+/**
+ * A time with its timezone named, so nobody has to guess: "3:00 PM EST". It is the time in
+ * the timezone of whoever is looking, unless `timeZone` names another ("America/New_York").
+ */
+export const clockWithZone = (ts: number, timeZone?: string) =>
+  new Date(ts).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZoneName: "short", timeZone });
+
 /** "22m", "3h", "2d" since `ts`. */
 export function ago(ts: number, now: number): string {
   const m = Math.max(0, Math.round((now - ts) / 60_000));

@@ -1,11 +1,11 @@
 // Hands a message's picture to the browser.
 //
-// A Telegram picture is a file on this machine. A Slack picture stays with Slack, which only
+// A Telegram picture is kept in the database. A Slack picture stays with Slack, which only
 // gives it to the owner's token, so it is fetched with that token and passed straight on.
 // Either way the browser asks the dashboard, and only a signed-in person gets an answer.
 import { secretFor } from "./connections";
 import type { Db } from "./db";
-import { isPictureType, pictureType, readTelegramAvatar, readTelegramPicture, type StoredPicture } from "./media";
+import { isPictureType, readPicture, readTelegramAvatar, type StoredPicture } from "./media";
 import { SLACK_FILES_HOST, SLACK_FILES_SCOPE, type Fetch } from "./slack";
 
 export const SLACK_NEEDS_FILES =
@@ -24,10 +24,7 @@ const headers = (type: string) => ({
 
 const none = (error = "There is no such picture.", status = 404) => Response.json({ error }, { status });
 
-function fromDisk(bytes: Buffer | null): Response {
-  const type = bytes && pictureType(bytes);
-  return type ? new Response(new Uint8Array(bytes!), { headers: headers(type.mime) }) : none();
-}
+const kept = (found: { bytes: Buffer; mime: string } | null): Response => (found ? new Response(new Uint8Array(found.bytes), { headers: headers(found.mime) }) : none());
 
 /** The owner's token goes to Slack's file server and nowhere else. */
 function onSlack(address: string): boolean {
@@ -45,7 +42,7 @@ function onSlack(address: string): boolean {
  */
 export async function pictureResponse(db: Db, ownerId: string, query: URLSearchParams, fetchImpl: Fetch = fetch): Promise<Response> {
   const avatar = query.get("avatar");
-  if (avatar) return fromDisk(readTelegramAvatar(avatar));
+  if (avatar) return kept(await readTelegramAvatar(db, ownerId, avatar));
 
   const id = query.get("m");
   const n = Number(query.get("n") ?? 0);
@@ -56,7 +53,8 @@ export async function pictureResponse(db: Db, ownerId: string, query: URLSearchP
   );
   const found = row?.attachments?.[n];
   if (!found) return none();
-  if (row.source === "telegram") return fromDisk(found.file ? readTelegramPicture(row.chat, found.file) : null);
+  // Only a key under this chat's own name is looked up, whatever the message row says.
+  if (row.source === "telegram") return kept(found.key?.startsWith(`telegram/${row.chat}/`) ? await readPicture(db, ownerId, found.key) : null);
 
   const address = (query.get("full") && found.url) || found.thumb || found.url;
   if (!address || !onSlack(address)) return none();

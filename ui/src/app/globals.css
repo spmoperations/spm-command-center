@@ -212,10 +212,11 @@ th.sortable { cursor: pointer; }
 .mt-group > .label { margin-bottom: 8px; display: block; }
 .mt { border-top: 1px solid var(--line); }
 .mt:first-child { border-top: 0; }
-.mt-head { width: 100%; display: grid; grid-template-columns: 92px minmax(0, 1fr) auto auto; gap: 14px; align-items: center; padding: 14px 16px; background: none; border: 0; text-align: left; cursor: pointer; }
+.mt-head { width: 100%; display: grid; grid-template-columns: 134px minmax(0, 1fr) auto auto; gap: 14px; align-items: center; padding: 14px 16px; background: none; border: 0; text-align: left; cursor: pointer; }
 .mt-head:hover { background: var(--surface-2); }
 .mt.open .mt-head { background: var(--surface-2); }
-.mt-when { font: 600 13px var(--f-mono); }
+/* The time with its timezone, kept on one line: "3:00 PM EST". */
+.mt-when { font: 600 13px var(--f-mono); white-space: nowrap; }
 .mt-when small { display: block; font-weight: 400; color: var(--muted); font-size: 11.5px; }
 .mt-title { font-weight: 600; font-size: 15px; }
 .mt-who { font-size: 13px; color: var(--muted); }
@@ -408,8 +409,11 @@ table.set tr:last-child td { border-bottom: 0; }
   .wt-grid .pace-row:nth-child(2) { border-top: 1px solid var(--line); }
   .focus-col + .focus-col { border-left: 0; border-top: 1px solid var(--line); padding-top: 12px; }
   .tgt-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .mt-head { grid-template-columns: 64px minmax(0, 1fr) auto; }
-  .mt-head .mt-chips { grid-column: 2 / -1; justify-content: start; grid-row: 2; }
+  /* On a phone the time and day sit in a line of their own above the title. */
+  .mt-head { grid-template-columns: minmax(0, 1fr) auto; row-gap: 4px; }
+  .mt-head .mt-when { grid-column: 1 / -1; display: flex; gap: 8px; align-items: baseline; }
+  .mt-head .mt-when small { display: inline; }
+  .mt-head .mt-chips { grid-column: 1 / -1; justify-content: start; }
   .sg { grid-template-columns: minmax(0, 1fr); }
   .sg-ctrl { justify-content: start; }
   .transcript .line { grid-template-columns: minmax(0, 1fr); gap: 0; }

@@ -8,7 +8,7 @@ import { MessageText } from "@/components/MessageText";
 import { SuggestionRow } from "@/components/SuggestionRow";
 import { DueText, PriPill, PrioritySelect, SourceLink, VisuallyHidden } from "@/components/bits";
 import { DEPARTMENTS, DEPTS, MODE_NAME, MODES, PERSONAL_SIDE, PRIORITY_RANK, SOURCE_NAME } from "@/core/config";
-import { addDays, dueLabel, parseDay, stamp } from "@/core/dates";
+import { addDays, clockWithZone, dueLabel, parseDay, stamp } from "@/core/dates";
 import { canAssign, canAssignInChat, CHANNEL_PICK, isMine, SLACK_PICK } from "@/core/delegation";
 import type { Mode, Priority, Task } from "@/core/types";
 import { addTask, delegateTask, openConversation, openTask, setTaskPriority, showMeeting, toggleTask, undelegateTask, useApp, type App } from "@/store/store";
@@ -122,7 +122,7 @@ function TaskDetail({ t, app }: { t: Task; app: App }) {
         {call && (
           <>
             <p>
-              Call · {call.title} · {longDay(call.date)}, {call.time}
+              Call · {call.title} · {longDay(call.date)}, {clockWithZone(call.at)}
             </p>
             <div className="td-links">
               <Link className="srclink" href="/meetings" onClick={() => showMeeting(call.id)}>

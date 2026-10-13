@@ -7,7 +7,7 @@ import { ensureOwner, OWNER_ID } from "./repo";
 import type { SlackClient } from "./slack";
 import type { TelegramApi, TelegramChat, TelegramMessage } from "./telegram";
 
-const TABLES = ["outbox", "quick_links", "focus_items", "metric_logs", "metrics", "rules", "suggestions", "tasks", "team_members", "meetings", "messages", "conversations", "slack_channels", "slack_users", "job_runs", "jobs", "connections", "users"];
+const TABLES = ["media", "outbox", "quick_links", "focus_items", "metric_logs", "metrics", "rules", "suggestions", "tasks", "team_members", "meetings", "messages", "conversations", "slack_channels", "slack_users", "job_runs", "jobs", "connections", "users"];
 
 const freePort = () =>
   new Promise<number>((resolve, reject) => {
@@ -28,7 +28,6 @@ export async function testDb(): Promise<Db> {
   process.env.SECRETS_KEY ??= Buffer.alloc(32, 7).toString("base64");
   // No test may ever read a real Telegram login saved on this machine.
   process.env.TELEGRAM_SESSION_FILE ??= path.join(os.tmpdir(), `command-center-test-${process.pid}`, "telegram-session.json");
-  process.env.TELEGRAM_MEDIA_DIR ??= path.join(os.tmpdir(), `command-center-test-${process.pid}`, "telegram-media");
   if (process.env.TEST_DRIVER !== "postgres") return openDb();
   const { PGlite } = await import("@electric-sql/pglite");
   const { PGLiteSocketServer } = await import("@electric-sql/pglite-socket");

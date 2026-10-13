@@ -4,9 +4,9 @@
 // it is addressed to the owner (a tag or a reply to them). Channels, bots and Saved Messages
 // are left out. So is Telegram's own account: it sends login codes, which are never kept.
 //
-// Pictures and stickers are saved on this machine beside the local database, and so are the
-// profile pictures of the people who wrote. Videos are never fetched.
-import { saveTelegramAvatar, saveTelegramPicture, telegramAvatarIsDue, type StoredPicture } from "@/server/media";
+// Pictures and stickers are kept in the database, and so are the profile pictures of the
+// people who wrote. Videos are never fetched.
+import { saveTelegramAvatar, saveTelegramPicture, telegramAvatarsDue, type StoredPicture } from "@/server/media";
 import { RateLimited } from "@/server/slack";
 import type { TelegramApi, TelegramMessage } from "@/server/telegram";
 import type { JobContext, JobResult } from "./runner";
@@ -37,8 +37,8 @@ async function attempt(work: () => Promise<Buffer | null>): Promise<Buffer | nul
 /**
  * Stores what was read from one chat. New messages are added. On the ones already here the
  * reactions are brought up to date, since people react long after a message is sent. Then
- * the pictures and stickers that are not on this machine yet are fetched, and the profile
- * pictures of whoever wrote. Returns the messages that were new, and how many others changed.
+ * the pictures and stickers that are not kept yet are fetched, and the profile pictures of
+ * whoever wrote. Returns the messages that were new, and how many others changed.
  */
 async function storeChat(
   { db, ownerId, now }: Pick<JobContext, "db" | "ownerId" | "now">,
@@ -72,7 +72,8 @@ async function storeChat(
   if (withMedia.length && budget.pictures > 0) {
     const missing = new Set(
       (await db.query<{ external_id: string }>(
-        "select external_id from messages where conversation_id = $1 and attachments = '[]'::jsonb and external_id in (select jsonb_array_elements_text($2::jsonb))",
+        // "Without a key" covers pictures an earlier version saved as files: they are fetched again.
+        "select external_id from messages where conversation_id = $1 and (attachments = '[]'::jsonb or not jsonb_exists(attachments -> 0, 'key')) and external_id in (select jsonb_array_elements_text($2::jsonb))",
         [conversationId, JSON.stringify(withMedia.map((m) => String(m.id)))],
       )).map((r) => r.external_id),
     );
@@ -80,20 +81,19 @@ async function storeChat(
       if (budget.pictures <= 0) break;
       budget.pictures--;
       const bytes = await attempt(() => telegram.download(chat.id, m.id));
-      const file = bytes && saveTelegramPicture(chat.id, m.id, bytes);
-      if (!file) continue;
-      const picture: StoredPicture = { kind: m.media!.kind, name: m.media!.name, w: m.media!.w, h: m.media!.h, file };
+      const key = bytes && (await saveTelegramPicture(db, ownerId, chat.id, m.id, bytes, now));
+      if (!key) continue;
+      const picture: StoredPicture = { kind: m.media!.kind, name: m.media!.name, w: m.media!.w, h: m.media!.h, key };
       changed += await db.run("update messages set attachments = $1::jsonb where id = $2", [JSON.stringify([picture]), `${conversationId}:${m.id}`]);
     }
   }
 
   // Profile pictures of the people who wrote, asked for once and again after a week.
   const people = new Set(chat.direct ? [chat.id] : messages.map(senderOf).filter((id): id is string => Boolean(id)));
-  for (const id of people) {
+  for (const id of await telegramAvatarsDue(db, ownerId, [...people], now)) {
     if (budget.avatars <= 0) break;
-    if (!telegramAvatarIsDue(id, now)) continue;
     budget.avatars--;
-    saveTelegramAvatar(id, await attempt(() => telegram.picture(id)));
+    await saveTelegramAvatar(db, ownerId, id, await attempt(() => telegram.picture(id)), now);
     changed++;
   }
   return { fresh, changed };

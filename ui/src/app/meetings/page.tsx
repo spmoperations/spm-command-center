@@ -5,7 +5,7 @@ import { useState } from "react";
 import { Markdown } from "@/components/Markdown";
 import { SuggestionRow } from "@/components/SuggestionRow";
 import { DueText, PriPill } from "@/components/bits";
-import { daysBetween, parseDay } from "@/core/dates";
+import { clockWithZone, daysBetween, parseDay } from "@/core/dates";
 import type { Meeting } from "@/core/types";
 import { actionItemToTask, loadTranscript, openTask, toast, toggleMeeting, toggleTask, useApp, type App } from "@/store/store";
 
@@ -77,7 +77,7 @@ function MeetingRow({ m, app }: { m: Meeting; app: App }) {
     <div className={`mt ${open ? "open" : ""}`}>
       <button className="mt-head" aria-expanded={open} onClick={() => toggleMeeting(m.id)}>
         <div className="mt-when">
-          {m.time}
+          {clockWithZone(m.at)}
           <small>{dayText(m, today)}</small>
         </div>
         <div style={{ minWidth: 0 }}>
@@ -174,7 +174,7 @@ export default function MeetingsPage() {
   const app = useApp();
   if (!app) return null;
   const { state } = app;
-  const list = [...state.meetings].sort((a, b) => b.date.localeCompare(a.date) || b.time.localeCompare(a.time));
+  const list = [...state.meetings].sort((a, b) => b.at - a.at);
 
   return (
     <section className="view">

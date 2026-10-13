@@ -1,68 +1,98 @@
 // Telegram, through a person's own account (not a bot), so the dashboard sees their chats
 // and replies as them.
 //
-// LOCAL ONLY FOR NOW. Telegram runs only while the app keeps its data on this machine, that
-// is, while DATABASE_URL is not set. With a hosted database (Supabase) every function here
-// refuses, so a person's Telegram login and chats can never end up there. The login itself
-// (the session) is not kept in any database at all: it is encrypted and saved in a file in
-// `.data`, which git ignores.
+// The login is kept the way the Slack token is: encrypted, in the `connections` table of the
+// database the app is using. On a developer's machine that is the local database, so a
+// developer's own account never leaves their machine. With the hosted database Telegram
+// stays off unless TELEGRAM_HOSTED=true says this server is the one meant to hold someone's
+// Telegram: the live site sets it, a developer's machine does not.
 import fs from "node:fs";
 import path from "node:path";
 import { maskPhone } from "@/core/providers";
 import type { Reaction } from "@/core/types";
+import type { Db } from "./db";
 import { seal, unseal } from "./secrets";
 import { RateLimited } from "./slack";
 
 /** The app keys from my.telegram.org are in the environment. */
 export const telegramConfigured = () => Boolean(Number(process.env.TELEGRAM_API_ID) && process.env.TELEGRAM_API_HASH);
 
-/** Telegram can be used: its keys are set, and the data stays on this machine. */
-export const telegramAvailable = () => telegramConfigured() && !process.env.DATABASE_URL;
-
-export const TELEGRAM_LOCAL_ONLY =
-  "Telegram is local-only for now, so it stays off while the app uses the hosted database. Start the app with: npm run dev:local";
+export const TELEGRAM_OFF_HERE =
+  "Telegram is switched off while the app uses the hosted database. The live site turns it on with TELEGRAM_HOSTED=true. On your own machine, start the app with: npm run dev:local";
 
 /** Why Telegram cannot be used here, in words for the person, or null when it can. */
 export const telegramBlocked = (): string | null =>
-  !telegramConfigured() ? "Telegram's app keys are not set. Add TELEGRAM_API_ID and TELEGRAM_API_HASH to .env.local." : process.env.DATABASE_URL ? TELEGRAM_LOCAL_ONLY : null;
+  !telegramConfigured()
+    ? "Telegram's app keys are not set. Add TELEGRAM_API_ID and TELEGRAM_API_HASH to the environment."
+    : process.env.DATABASE_URL && process.env.TELEGRAM_HOSTED !== "true"
+      ? TELEGRAM_OFF_HERE
+      : null;
+
+/** Telegram can be used: its keys are set, and this server is one that may hold a Telegram login. */
+export const telegramAvailable = () => telegramBlocked() === null;
+
+/** Something already put in words for the person. It is shown as it is. */
+class Said extends Error {}
 
 function mustBeAvailable(): void {
   const blocked = telegramBlocked();
-  if (blocked) throw new Error(blocked);
+  if (blocked) throw new Said(blocked);
 }
 
 // ---------- The saved login ----------
 
-interface Saved { v: 1; session: string; name: string; phone: string; connectedAt: number }
-
-// Next to the local database, in the folder git ignores. The tests point it somewhere else.
-// The "turbopackIgnore" notes below tell the build this file is made at run time, on this
-// machine, and is not something to pack with the server.
-const sessionFile = () => process.env.TELEGRAM_SESSION_FILE ?? path.join(process.cwd(), ".data", "telegram-session.json");
-
-function readSaved(): Saved | null {
+/** The saved login, decrypted. Null when Telegram is not connected, or may not be used here. */
+async function savedSession(db: Db, ownerId: string): Promise<string | null> {
   if (!telegramAvailable()) return null;
+  const [row] = await db.query<{ secret: string }>("select secret from connections where owner_id = $1 and provider = 'telegram'", [ownerId]);
+  return row ? unseal(row.secret) : null;
+}
+
+/** True when someone has logged in to Telegram here. */
+export async function telegramConnected(db: Db, ownerId: string): Promise<boolean> {
+  if (!telegramAvailable()) return false;
+  const [row] = await db.query<{ provider: string }>("select provider from connections where owner_id = $1 and provider = 'telegram'", [ownerId]);
+  return Boolean(row);
+}
+
+/** Keeps the login, encrypted, and answers with how the account is shown: a name and a number mostly hidden. */
+async function saveSession(db: Db, ownerId: string, session: string, name: string, phone: string): Promise<string> {
+  const label = [name, maskPhone(phone.startsWith("+") ? phone : `+${phone}`)].filter(Boolean).join(" · ") || "Connected";
+  await db.run(
+    `insert into connections (owner_id, provider, secret, label, connected_at) values ($1, 'telegram', $2, $3, $4)
+     on conflict (owner_id, provider) do update set secret = excluded.secret, label = excluded.label, connected_at = excluded.connected_at`,
+    [ownerId, seal(session), label, Date.now()],
+  );
+  return label;
+}
+
+const forgetSession = (db: Db, ownerId: string) => db.run("delete from connections where owner_id = $1 and provider = 'telegram'", [ownerId]);
+
+/**
+ * An earlier version kept the login in a file beside the local database. On a developer's
+ * machine it is moved into that database once, and the file is removed. Never with a hosted
+ * database: a login made on someone's own machine stays there.
+ */
+export async function adoptTelegramFile(db: Db, ownerId: string): Promise<boolean> {
+  if (process.env.DATABASE_URL || !telegramConfigured()) return false;
+  const file = process.env.TELEGRAM_SESSION_FILE ?? path.join(process.cwd(), ".data", "telegram-session.json");
+  let saved: { v?: number; session?: string; name?: string; phone?: string; connectedAt?: number };
   try {
-    const saved = JSON.parse(fs.readFileSync(/* turbopackIgnore: true */ sessionFile(), "utf8")) as Saved;
-    return saved.v === 1 && saved.session ? saved : null;
+    saved = JSON.parse(fs.readFileSync(/* turbopackIgnore: true */ file, "utf8"));
   } catch {
-    return null;
+    return false;
   }
+  if (saved.v !== 1 || !saved.session) return false;
+  // It was sealed with this machine's key already, so it goes in as it is.
+  await db.run("insert into connections (owner_id, provider, secret, label, connected_at) values ($1, 'telegram', $2, $3, $4) on conflict (owner_id, provider) do nothing", [
+    ownerId,
+    saved.session,
+    [saved.name, saved.phone].filter(Boolean).join(" · ") || "Connected",
+    saved.connectedAt ?? Date.now(),
+  ]);
+  fs.rmSync(/* turbopackIgnore: true */ file, { force: true });
+  return true;
 }
-
-/** Who is connected, for showing on screen. Never the session itself. */
-export function telegramAccount(): { label: string; connectedAt: number } | null {
-  const saved = readSaved();
-  return saved ? { label: [saved.name, saved.phone].filter(Boolean).join(" · "), connectedAt: saved.connectedAt } : null;
-}
-
-function save(session: string, name: string, phone: string): void {
-  fs.mkdirSync(/* turbopackIgnore: true */ path.dirname(sessionFile()), { recursive: true });
-  const saved: Saved = { v: 1, session: seal(session), name, phone: maskPhone(phone.startsWith("+") ? phone : `+${phone}`), connectedAt: Date.now() };
-  fs.writeFileSync(/* turbopackIgnore: true */ sessionFile(), JSON.stringify(saved), { mode: 0o600 });
-}
-
-const forget = () => fs.rmSync(/* turbopackIgnore: true */ sessionFile(), { force: true });
 
 // ---------- Talking to Telegram ----------
 
@@ -75,12 +105,14 @@ const nameOf = (entity: unknown): string => {
   return [e.firstName, e.lastName].filter(Boolean).join(" ") || e.title || e.username || "Someone";
 };
 
+const appKeys = () => ({ apiId: Number(process.env.TELEGRAM_API_ID), apiHash: process.env.TELEGRAM_API_HASH! });
+
 /** The library is loaded only when Telegram is used, so nothing else pays for it. */
 async function newClient(session: string): Promise<{ client: Client; lib: Library }> {
   mustBeAvailable();
   const lib = await import("teleproto");
   const { StringSession } = await import("teleproto/sessions");
-  const client = new lib.TelegramClient(new StringSession(session), Number(process.env.TELEGRAM_API_ID), process.env.TELEGRAM_API_HASH!, {
+  const client = new lib.TelegramClient(new StringSession(session), appKeys().apiId, appKeys().apiHash, {
     connectionRetries: 3,
     deviceModel: "SPM Command Center",
     appVersion: "1.0",
@@ -98,29 +130,40 @@ async function hangUp(client: Client): Promise<void> {
   }
 }
 
+const codeOf = (error: unknown): string => {
+  const e = error as { errorMessage?: string; message?: string };
+  return e?.errorMessage ?? e?.message ?? "";
+};
+
 /** Telegram's error codes, in words a person can act on. */
 function explain(error: unknown): string {
-  const e = error as { errorMessage?: string; seconds?: number; message?: string };
-  const code = e?.errorMessage ?? e?.message ?? "";
-  if (typeof e?.seconds === "number") {
-    const minutes = Math.ceil(e.seconds / 60);
+  if (error instanceof Said) return error.message;
+  const code = codeOf(error);
+  const seconds = (error as { seconds?: number })?.seconds;
+  if (typeof seconds === "number") {
+    const minutes = Math.ceil(seconds / 60);
     return `Telegram asks you to wait ${minutes > 90 ? `${Math.ceil(minutes / 60)} hours` : `${minutes} ${minutes === 1 ? "minute" : "minutes"}`} before trying again.`;
   }
   if (/PHONE_NUMBER_INVALID/.test(code)) return "Telegram does not know that phone number. Check the country code.";
   if (/PHONE_NUMBER_BANNED/.test(code)) return "Telegram has blocked that phone number.";
-  if (/PHONE_CODE_INVALID|PHONE_CODE_EMPTY/.test(code)) return "That code is not right. Check it and try again.";
   if (/PHONE_CODE_EXPIRED/.test(code)) return "That code has expired. Start again to get a new one.";
+  if (/PHONE_CODE_INVALID|PHONE_CODE_EMPTY|EMAIL_CODE_INVALID|CODE_INVALID/.test(code)) return "That code is not right. Check it and try again.";
   if (/PASSWORD_HASH_INVALID/.test(code)) return "That password is not right. Try again.";
-  if (/API_ID_INVALID|API_ID_PUBLISHED_FLOOD/.test(code)) return "Telegram did not accept the app keys in .env.local. Check TELEGRAM_API_ID and TELEGRAM_API_HASH.";
+  if (/API_ID_INVALID|API_ID_PUBLISHED_FLOOD/.test(code)) return "Telegram did not accept the app keys. Check TELEGRAM_API_ID and TELEGRAM_API_HASH.";
   if (/AUTH_KEY_UNREGISTERED|SESSION_REVOKED|AUTH_KEY_DUPLICATED|USER_DEACTIVATED/.test(code)) return "Telegram has signed this connection out. Connect again.";
   if (/AUTH_USER_CANCEL|LOGIN_CANCELLED/.test(code)) return "The Telegram login was cancelled.";
-  if (/EMAIL_CODE_INVALID|CODE_INVALID/.test(code)) return "That code is not right. Check it and try again.";
   if (/No account is registered/.test(code)) return "There is no Telegram account with that phone number.";
   if (/requires a login email/.test(code)) return "Telegram wants a login email on this account first. Add one in the Telegram app under Settings, Privacy and Security, then try again.";
   return code ? `Telegram answered: ${code}` : "Telegram could not be reached.";
 }
 
 // ---------- Logging in, one step per request ----------
+//
+// Each step is a request of its own, and on a host two requests may land on two different
+// servers. So nothing about a login in progress is kept in memory. What the next step needs
+// (the connection's keys, the phone number and the id Telegram gave the code) goes back to
+// the browser sealed, in a cookie only this server can read, and comes in again with the
+// next step.
 
 /** What the login needs next, or that it is done. */
 export type TelegramStep =
@@ -129,150 +172,170 @@ export type TelegramStep =
   | { need: "password"; hint?: string; error?: string }
   | { connected: true; label: string };
 
-interface Deferred<T> { promise: Promise<T>; resolve(value: T): void; reject(error: Error): void }
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  // A step nobody is waiting on any more must not crash the server.
-  promise.catch(() => {});
-  return { promise, resolve, reject };
+/** One step's answer. `pending` is what the next step needs, sealed. Null when the login is over. */
+export interface LoginTurn { step: TelegramStep; pending: string | null }
+
+type CodeRoute = "app" | "sms" | "email";
+
+/** The part of Telegram a login uses. The tests swap in a fake. */
+export interface TelegramDoor {
+  /** Asks Telegram to send a login code to that number. */
+  sendCode(phone: string): Promise<{ hash: string; via: CodeRoute; email?: string }>;
+  /** Hands in the code. "password" when the account wants its password as well. */
+  signIn(phone: string, hash: string, code: string, via: CodeRoute): Promise<"done" | "password">;
+  passwordHint(): Promise<string | undefined>;
+  checkPassword(password: string): Promise<void>;
+  me(): Promise<{ name: string; phone: string }>;
+  /** The connection's keys: carried into the next step, and kept once the login is done. */
+  session(): string;
+  close(): Promise<void>;
+}
+export type OpenDoor = (session: string) => Promise<TelegramDoor>;
+
+async function openDoor(session: string): Promise<TelegramDoor> {
+  const { client, lib } = await newClient(session);
+  await client.connect();
+  return {
+    async sendCode(phone) {
+      const sent = (await client.sendCode(appKeys(), phone)) as { phoneCodeHash?: string; isCodeViaApp?: boolean; emailRequired?: boolean; emailCodeSent?: boolean; emailOptions?: { emailPattern?: string } };
+      if (sent.emailRequired) throw new Error("Telegram requires a login email for this account");
+      if (typeof sent.phoneCodeHash !== "string") throw new Said("Telegram did not send a code. Try again in a minute.");
+      return { hash: sent.phoneCodeHash, via: sent.emailCodeSent ? "email" : sent.isCodeViaApp ? "app" : "sms", email: sent.emailOptions?.emailPattern };
+    },
+    async signIn(phone, hash, code, via) {
+      try {
+        const how = via === "email" ? { emailVerification: new lib.Api.EmailVerificationCode({ code }) } : { phoneCode: code };
+        const result = await client.invoke(new lib.Api.auth.SignIn({ phoneNumber: phone, phoneCodeHash: hash, ...how }));
+        if (!(result instanceof lib.Api.auth.Authorization)) throw new Error("No account is registered with this phone number");
+        return "done";
+      } catch (error) {
+        if (codeOf(error) === "SESSION_PASSWORD_NEEDED") return "password";
+        throw error;
+      }
+    },
+    passwordHint: async () => (await client.invoke(new lib.Api.account.GetPassword())).hint || undefined,
+    async checkPassword(password) {
+      // The library reports a wrong password through `onError`, then gives up with a general error.
+      let failure: unknown;
+      try {
+        await client.signInWithPassword(appKeys(), {
+          password: async () => password,
+          onError: async (error) => {
+            failure = error;
+            return true;
+          },
+        });
+      } catch (error) {
+        throw failure ?? error;
+      }
+    },
+    async me() {
+      const me = await client.getMe();
+      return { name: nameOf(me), phone: (me as { phone?: string }).phone ?? "" };
+    },
+    session: () => String(client.session.save()),
+    close: () => hangUp(client),
+  };
 }
 
-/** One login in progress. Telegram's library asks for the code and the password through callbacks; each request answers one. */
-interface Login {
-  client: Client;
-  next: Deferred<TelegramStep>;
-  code?: Deferred<string>;
-  password?: Deferred<string>;
-  lastError?: string;
-  timer: ReturnType<typeof setTimeout>;
-}
+/** A login that has been started and not finished. */
+interface Pending { v: 1; session: string; phone: string; hash: string; via: CodeRoute; email?: string; hint?: string; wantsPassword?: boolean; at: number }
 
 const LOGIN_MINUTES = 10;
-// Kept across hot reloads in development, like the database handle.
-const holder = globalThis as unknown as { __telegramLogin?: Login };
+const TIMED_OUT = "That login has timed out. Start again with your phone number.";
 
-class Cancelled extends Error {}
+function readPending(token: string | null | undefined): Pending {
+  try {
+    const pending = JSON.parse(unseal(token ?? "")) as Pending;
+    if (pending.v === 1 && Date.now() - pending.at < LOGIN_MINUTES * 60_000) return pending;
+  } catch {
+    // Not ours, changed, or cut short.
+  }
+  throw new Said(TIMED_OUT);
+}
 
-/** Abandons a login that is under way. */
-export async function cancelTelegramLogin(): Promise<void> {
-  const login = holder.__telegramLogin;
-  if (!login) return;
-  holder.__telegramLogin = undefined;
-  clearTimeout(login.timer);
-  const stop = new Cancelled("LOGIN_CANCELLED");
-  login.code?.reject(stop);
-  login.password?.reject(stop);
-  login.next.reject(stop);
-  await hangUp(login.client);
+/** Throws, in plain words, when there is no login in progress to continue. */
+export const mustHaveLoginInProgress = (token: string | null | undefined): void => void readPending(token);
+
+const codeStep = (p: Pick<Pending, "via" | "email">, error?: string): TelegramStep => ({ need: "code", viaApp: p.via === "app", email: p.via === "email" ? p.email || "your email" : undefined, error });
+
+async function finish(db: Db, ownerId: string, door: TelegramDoor, phone: string): Promise<LoginTurn> {
+  const me = await door.me();
+  return { step: { connected: true, label: await saveSession(db, ownerId, door.session(), me.name, me.phone || phone) }, pending: null };
+}
+
+/** Runs one step against Telegram, and puts whatever goes wrong in words. */
+async function step<T>(session: string, open: OpenDoor, work: (door: TelegramDoor) => Promise<T>): Promise<T> {
+  mustBeAvailable();
+  let door: TelegramDoor | undefined;
+  try {
+    door = await open(session);
+    return await work(door);
+  } catch (error) {
+    throw new Said(explain(error));
+  } finally {
+    await door?.close();
+  }
 }
 
 /** Step 1: asks Telegram to send a login code to that number. */
-export async function startTelegramLogin(phone: string): Promise<TelegramStep> {
-  await cancelTelegramLogin();
-  const { client } = await newClient("");
-  const login: Login = {
-    client,
-    next: deferred<TelegramStep>(),
-    timer: setTimeout(() => void cancelTelegramLogin(), LOGIN_MINUTES * 60_000),
-  };
-  holder.__telegramLogin = login;
-
-  // Runs in the background: it pauses inside the callbacks until the next request arrives.
-  void client
-    .start({
-      phoneNumber: phone,
-      phoneCode: async (viaApp) => {
-        login.code = deferred<string>();
-        login.next.resolve({ need: "code", viaApp: viaApp !== false, error: login.lastError });
-        login.lastError = undefined;
-        return login.code.promise;
-      },
-      // Some accounts get the code by email instead of inside Telegram. It is the same step.
-      emailVerification: async (info) => {
-        login.code = deferred<string>();
-        login.next.resolve({ need: "code", viaApp: false, email: info.emailPattern || "your email", error: login.lastError });
-        login.lastError = undefined;
-        return { type: "code" as const, code: await login.code.promise };
-      },
-      password: async (hint) => {
-        login.password = deferred<string>();
-        login.next.resolve({ need: "password", hint: hint || undefined, error: login.lastError });
-        login.lastError = undefined;
-        return login.password.promise;
-      },
-      // A wrong code or password is asked for again; anything else ends the login.
-      onError: async (error) => {
-        const code = (error as { errorMessage?: string }).errorMessage ?? "";
-        if (!(error instanceof Cancelled) && /PHONE_CODE_INVALID|PHONE_CODE_EMPTY|EMAIL_CODE_INVALID|CODE_INVALID|PASSWORD_HASH_INVALID/.test(code)) {
-          login.lastError = explain(error);
-          return false;
-        }
-        login.next.reject(new Error(explain(error)));
-        return true;
-      },
-    })
-    .then(async () => {
-      const me = await client.getMe();
-      save(String(client.session.save()), nameOf(me), (me as { phone?: string }).phone ?? phone);
-      login.next.resolve({ connected: true, label: telegramAccount()?.label ?? nameOf(me) });
-    })
-    .catch((error: unknown) => login.next.reject(new Error(explain(error))))
-    .finally(async () => {
-      if (holder.__telegramLogin === login) holder.__telegramLogin = undefined;
-      clearTimeout(login.timer);
-      await hangUp(client);
-    });
-
-  return login.next.promise;
-}
-
-function current(): Login {
-  const login = holder.__telegramLogin;
-  if (!login) throw new Error("That login has timed out. Start again with your phone number.");
-  return login;
+export async function startTelegramLogin(phone: string, open: OpenDoor = openDoor): Promise<LoginTurn> {
+  return step("", open, async (door) => {
+    const sent = await door.sendCode(phone);
+    const pending: Pending = { v: 1, session: door.session(), phone, hash: sent.hash, via: sent.via, email: sent.email, at: Date.now() };
+    return { step: codeStep(pending), pending: seal(JSON.stringify(pending)) };
+  });
 }
 
 /** Step 2: the code Telegram sent. Answers with a password request, or connected. */
-export async function giveTelegramCode(code: string): Promise<TelegramStep> {
-  const login = current();
-  if (!login.code) throw new Error("Telegram has not asked for a code yet.");
-  const waiting = login.code;
-  login.code = undefined;
-  login.next = deferred<TelegramStep>();
-  waiting.resolve(code.trim());
-  return login.next.promise;
-}
-
-/** Step 3, only for accounts with two-step verification: the Telegram password. */
-export async function giveTelegramPassword(password: string): Promise<TelegramStep> {
-  const login = current();
-  if (!login.password) throw new Error("Telegram has not asked for a password.");
-  const waiting = login.password;
-  login.password = undefined;
-  login.next = deferred<TelegramStep>();
-  waiting.resolve(password);
-  return login.next.promise;
-}
-
-/** Signs the session out on Telegram's side too, then removes it from this machine. */
-export async function disconnectTelegram(): Promise<void> {
-  const saved = readSaved();
-  if (saved) {
+export async function giveTelegramCode(db: Db, ownerId: string, token: string | null | undefined, code: string, open: OpenDoor = openDoor): Promise<LoginTurn> {
+  const pending = readPending(token);
+  if (pending.wantsPassword) throw new Said("Telegram is waiting for your password, not a code.");
+  return step(pending.session, open, async (door) => {
+    let outcome: "done" | "password";
     try {
-      const { client, lib } = await newClient(unseal(saved.session));
+      outcome = await door.signIn(pending.phone, pending.hash, code.trim(), pending.via);
+    } catch (error) {
+      // A wrong code is asked for again. Anything else ends the login.
+      if (/PHONE_CODE_INVALID|PHONE_CODE_EMPTY|EMAIL_CODE_INVALID|CODE_INVALID/.test(codeOf(error))) return { step: codeStep(pending, explain(error)), pending: token! };
+      throw error;
+    }
+    if (outcome === "done") return finish(db, ownerId, door, pending.phone);
+    const hint = await door.passwordHint().catch(() => undefined);
+    const next: Pending = { ...pending, session: door.session(), hint, wantsPassword: true, at: Date.now() };
+    return { step: { need: "password", hint }, pending: seal(JSON.stringify(next)) };
+  });
+}
+
+/** Step 3, only for accounts with two-step verification: the Telegram password. It is used once and never kept. */
+export async function giveTelegramPassword(db: Db, ownerId: string, token: string | null | undefined, password: string, open: OpenDoor = openDoor): Promise<LoginTurn> {
+  const pending = readPending(token);
+  if (!pending.wantsPassword) throw new Said("Telegram has not asked for a password.");
+  return step(pending.session, open, async (door) => {
+    try {
+      await door.checkPassword(password);
+    } catch (error) {
+      if (/PASSWORD_HASH_INVALID/.test(codeOf(error))) return { step: { need: "password", hint: pending.hint, error: explain(error) }, pending: token! };
+      throw error;
+    }
+    return finish(db, ownerId, door, pending.phone);
+  });
+}
+
+/** Signs the session out on Telegram's side too, then removes the saved login. */
+export async function disconnectTelegram(db: Db, ownerId: string): Promise<void> {
+  const session = await savedSession(db, ownerId);
+  if (session) {
+    try {
+      const { client, lib } = await newClient(session);
       await client.connect();
       await client.invoke(new lib.Api.auth.LogOut());
       await hangUp(client);
     } catch {
-      // Telegram unreachable or the session already ended: removing the file is what matters.
+      // Telegram unreachable or the session already ended: removing the saved login is what matters.
     }
   }
-  forget();
+  await forgetSession(db, ownerId);
 }
 
 // ---------- What the checks use ----------
@@ -412,13 +475,13 @@ export function telegramReactions(raw: unknown): Reaction[] {
 }
 
 /** Connects with the saved login. Throws a plain sentence when there is none or Telegram has ended it. */
-export async function telegramApi(): Promise<TelegramApi> {
-  const saved = readSaved();
-  if (!saved) {
+export async function telegramApi(db: Db, ownerId: string): Promise<TelegramApi> {
+  const session = await savedSession(db, ownerId);
+  if (!session) {
     mustBeAvailable();
     throw new Error("Telegram is not connected.");
   }
-  const { client } = await newClient(unseal(saved.session));
+  const { client } = await newClient(session);
   // "Slow down" from Telegram stops the check until the wait is over, like Slack's.
   const guard = async <T,>(work: () => Promise<T>): Promise<T> => {
     try {
@@ -432,7 +495,7 @@ export async function telegramApi(): Promise<TelegramApi> {
   await guard(() => client.connect());
   if (!(await guard(() => client.checkAuthorization()))) {
     await hangUp(client);
-    forget();
+    await forgetSession(db, ownerId);
     throw new Error("Telegram has signed this connection out. Connect again.");
   }
 

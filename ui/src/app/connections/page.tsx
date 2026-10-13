@@ -139,7 +139,7 @@ const TELEGRAM_FIELD: Record<TelegramStage, { label: string; placeholder: string
  * Telegram sends, then the account's password if it has one. Each answer goes to the server
  * on this machine once and is not kept in the browser.
  */
-function TelegramSteps() {
+function TelegramSteps({ local }: { local?: boolean }) {
   const [stage, setStage] = useState<TelegramStage>("phone");
   /** Where Telegram sent the code: inside Telegram, by text message, or to an email address. */
   const [sentTo, setSentTo] = useState<"app" | "sms" | string>("app");
@@ -248,17 +248,26 @@ function TelegramSteps() {
         )}
       </ol>
       <div className="st-help">
-        <strong>This stays on this machine.</strong> The login is saved encrypted in a file here, and the chats go into the local database only. Nothing from Telegram reaches the hosted database or the live site. One-to-one chats come in, and a group only when someone tags you or replies to you. Channels and bots are left out.
+        {local ? (
+          <>
+            <strong>This stays on this machine.</strong> The login is saved encrypted in the local database, with the chats. Nothing from Telegram reaches the hosted database or the live site.
+          </>
+        ) : (
+          <>
+            <strong>You log in yourself.</strong> Nobody else needs your code or password, and neither is kept. The login is stored encrypted, the same way as the Slack token, and you can end it here at any time.
+          </>
+        )}{" "}
+        One-to-one chats come in, and a group only when someone tags you or replies to you. Channels and bots are left out.
       </div>
     </>
   );
 }
 
-const STEPS: Record<Provider, () => React.ReactNode> = { slack: SlackSteps, telegram: TelegramSteps, fathom: FathomSteps };
+const STEPS: Record<Provider, (props: { local?: boolean }) => React.ReactNode> = { slack: SlackSteps, telegram: TelegramSteps, fathom: FathomSteps };
 
 const TURN_OFF: Record<Provider, string> = {
   slack: "Disconnecting removes the stored token and stops the Command Center reading Slack. To remove the access for good, also delete the app in Slack.",
-  telegram: "Disconnecting signs this connection out of Telegram and deletes the saved login from this machine. The chats already read stay in the local database unless you also remove them. You can check it is gone in Telegram under Settings, Devices.",
+  telegram: "Disconnecting signs this connection out of Telegram and deletes the saved login. The chats already read stay in the dashboard unless you also remove them. You can check it is gone in Telegram under Settings, Devices.",
   fathom: "Disconnecting removes the stored key and stops new calls coming in. To remove the access for good, also delete the key in Fathom.",
 };
 
@@ -321,7 +330,7 @@ function ProviderCard({ provider, app }: { provider: Provider; app: App }) {
             <div className="st-help">{TURN_OFF[provider]}</div>
           </>
         ) : (
-          <Steps />
+          <Steps local={app.state.localData} />
         )}
       </div>
     </div>

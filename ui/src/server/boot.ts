@@ -2,6 +2,7 @@
 import { connectFromEnv } from "./connections";
 import { describeDbError, getDb, type Db } from "./db";
 import { ensureOwner, OWNER_ID } from "./repo";
+import { adoptTelegramFile } from "./telegram";
 
 const holder = globalThis as unknown as { __commandCenterReady?: Promise<Db> };
 
@@ -11,6 +12,7 @@ export function ready(): Promise<Db> {
       try {
         const db = await getDb();
         await ensureOwner(db);
+        if (await adoptTelegramFile(db, OWNER_ID)) console.log("[command-center] telegram: the saved login was moved into the local database");
         for (const note of await connectFromEnv(db, OWNER_ID)) console.log(`[command-center] ${note}`);
         return db;
       } catch (error) {

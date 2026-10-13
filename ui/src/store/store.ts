@@ -5,7 +5,7 @@
 // fresh state. Nothing but small screen preferences lives only in the browser.
 import { useSyncExternalStore } from "react";
 import { PERSONAL_SIDE } from "@/core/config";
-import { isoDay } from "@/core/dates";
+import { isoDay, pad } from "@/core/dates";
 import { jobById } from "@/core/jobs";
 import { PROVIDER_NAME } from "@/core/providers";
 import type { AssignWhere } from "@/core/delegation";
@@ -54,9 +54,25 @@ function oneSide(state: AppState): AppState {
   return { ...state, inbox: state.inbox.map(work), tasks: state.tasks.map(work), suggestions: state.suggestions.map(work), links: state.links.map(work) };
 }
 
+/**
+ * A call's day and time, in the timezone of this browser. The server sends the moment it
+ * started. Its own clock may be in another timezone (a host runs on UTC), and a call at
+ * 9 in the evening must not show up under the next day.
+ */
+function inMyTimezone(state: AppState): AppState {
+  return {
+    ...state,
+    meetings: state.meetings.map((m) => {
+      const start = new Date(m.at);
+      return { ...m, date: isoDay(start), time: `${pad(start.getHours())}:${pad(start.getMinutes())}` };
+    }),
+  };
+}
+
 function setState(state: AppState) {
   const now = new Date();
-  app = { state: PERSONAL_SIDE ? state : oneSide(state), ui, now, today: isoDay(now) };
+  const mine = inMyTimezone(state);
+  app = { state: PERSONAL_SIDE ? mine : oneSide(mine), ui, now, today: isoDay(now) };
   emit();
 }
 
@@ -383,12 +399,12 @@ export async function telegramStep(body: { step: "start"; phone: string } | { st
   }
 }
 
-/** Signs out of Telegram and removes the login from this machine. `forget` also deletes the chats that were read. */
+/** Signs out of Telegram and removes the saved login. `forget` also deletes the chats that were read, and their pictures. */
 export async function disconnectTelegram(forget: boolean) {
   try {
     const { state } = await request<{ state: AppState }>("/api/telegram", { step: "disconnect", forget });
     setState(state);
-    toast(forget ? "Telegram disconnected, and its chats removed from this machine" : "Telegram disconnected");
+    toast(forget ? "Telegram disconnected, and its chats removed" : "Telegram disconnected");
   } catch (error) {
     toast((error as Error).message);
   }

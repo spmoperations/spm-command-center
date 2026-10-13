@@ -46,7 +46,7 @@ These are built or planned but left off the screens for now. Each has one line t
 | Targets (the tab, and the month's pace on Today) | The numbers are the prototype's examples; nothing fills them in yet | `TARGETS = true` in `ui/src/core/config.ts` |
 | The Connections tab | Slack and Fathom are connected already from the keys in the environment. The page still works at `/connections` | `CONNECTIONS_TAB = true` in `ui/src/core/config.ts` |
 | Finding tasks with AI | The Claude account has no credit, so every run fails | `live: true` on `task-suggest` in `ui/src/core/jobs.ts` |
-| Telegram | Built, and for now it runs only where the data stays on the machine it runs on. Its login is a file there, and so are its pictures. With the hosted database it is hidden and every Telegram request is refused | Set `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` (from my.telegram.org) and start with `npm run dev:local`. The Connections tab then shows the Telegram login |
+| Telegram | It needs its two app keys (`TELEGRAM_API_ID` and `TELEGRAM_API_HASH`, from my.telegram.org). With the hosted database it also needs `TELEGRAM_HOSTED=true`, which only the live site sets, so a developer's own account can never end up in the hosted database | Set the keys (and on the live site the switch). The Connections tab then shows the Telegram login. On your own machine use `npm run dev:local`, which keeps the data on your computer |
 
 While the Personal side is off, everything shows as Professional, including anything that was moved to Personal earlier.
 
@@ -67,7 +67,8 @@ Off for now (see above). When it is on, the switch next to the title shows one s
    Slack threads are kept whole: when the owner is tagged in a reply, the message that started the thread and the other replies come in with it, and later replies to that thread keep coming in. A reply written in the dashboard goes into the thread it answers. Opening a conversation asks Slack once which of its other messages have replies, and reads those threads too.
    Each person's Slack profile picture shows beside their messages. Only the picture's address is stored; the picture itself stays with Slack.
    Reactions show under each message, with the owner's own picked out, and are brought up to date when a conversation is opened. Pictures sent in Slack show too once the Slack app has the `files:read` permission: the dashboard fetches each one with the owner's token and hands it only to a signed-in person. Until then a picture is named, with a link that opens it in Slack. Videos are never fetched.
-   Telegram works the same way: one-to-one chats, and a group when the owner is tagged or replied to. Its pictures, stickers and profile pictures are saved beside the local database. Telegram's own account, which sends login codes, is never read.
+   Telegram works the same way: one-to-one chats, and a group when the owner is tagged or replied to. Telegram hands a picture over only to the logged-in account, so its pictures, stickers and profile pictures are kept in the `media` table at a size for the screen. Telegram's own account, which sends login codes, is never read.
+   The Telegram login is three requests (phone number, code, password if the account has one). Nothing about a login in progress is kept on the server: what the next step needs goes back to the browser sealed in a cookie, so the steps work when a host answers them from different servers. The finished login is stored encrypted, like the Slack token.
 4. **Suggested tasks** appear on the Tasks tab: the owner's action items from calls, and messages that ask for something. Nothing becomes a task until Add task is clicked.
 5. **You act** on the screens. Any work task or conversation can be assigned to someone on the team list or to anyone in Slack; a person picked from Slack is added to the team list the first time. The person is told in a direct message, or, when the task came from a channel or a group message, in that chat with a tag. A reply or a delegation goes into the outbox and is sent from the owner's own Slack account, once sending is switched on.
 
@@ -80,7 +81,7 @@ Off for now (see above). When it is on, the switch next to the title shows one s
 | `request-finder` | After each message check, finds messages that ask the owner for something (a question, "can you", "please", "following up" and the like) and are still unanswered, and suggests a "Reply to" task. Drops the suggestion once he replies | No |
 | `task-suggest` | Finds other tasks in new messages from conversations the rules rated worth reading | Yes |
 | `outbox-retry` | Sends what is waiting in the outbox | No |
-| `telegram-pull` | Reads new Telegram messages with their pictures, stickers and reactions. Runs only where Telegram can be used (see What is switched off) | No |
+| `telegram-pull` | Reads new Telegram messages with their pictures, stickers and reactions. Runs only on a server that may use Telegram (see What is switched off) | No |
 
 Run one by hand with `npm run job -- slack-pull` (with the local database, stop the app first: it allows one process at a time), or press Run now beside it in Settings. **Sync now** in Settings runs every working check at once.
 
@@ -157,7 +158,7 @@ To move to the hosted database: put the string in `ui/.env.local`, run `npm run 
 | --- | --- |
 | Finding tasks in messages with AI | Credit on the Claude account. The check is built and tested, and fails today with "no credit". Requests waiting for a reply are found without it. |
 | Sending, fully proven | Switched on with `SENDING_ENABLED=true`. A reply into a thread has been sent and read back from Slack. An assignment by direct message and a post to a channel have only run against a fake Slack so far. |
-| Telegram on the hosted site | It runs on a developer's machine today. On the host its login and pictures need a home that is not a local file, and the login steps must work across separate server requests. |
+| Telegram on the live site, proven | Built and tested against a pretend Telegram. It needs the two app keys and `TELEGRAM_HOSTED=true` on the host, and has not yet been through a real login there. Pictures are kept in the database with no clean-up yet: about 100 KB each. |
 | Pictures from Slack | The `files:read` permission on the Slack app (User Token Scopes), then a reinstall. A workspace's own custom emoji show by name; their pictures would need `emoji:read`. |
 | A login per person | Supabase sign-in, in place of the one fixed login. The hosted database is in use already (see Database). |
 | Personal: Payments, Goals, Health | The tabs from the prototype's Personal side that are not built. |

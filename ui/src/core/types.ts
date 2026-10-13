@@ -132,6 +132,9 @@ export interface ActionItem {
 
 export interface Meeting {
   id: string;
+  /** The moment the call started, in epoch milliseconds. The day and time shown are worked out from this where it is looked at. */
+  at: number;
+  /** The day ("2026-10-13") and the time ("15:00") the call started, in the timezone of whoever is looking. */
   date: string;
   time: string;
   dur: number;

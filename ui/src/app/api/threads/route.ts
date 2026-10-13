@@ -5,7 +5,7 @@ import { secretFor } from "@/server/connections";
 import { failed, fromDashboard, refused, signedIn, signInFirst } from "@/server/http";
 import { loadState, OWNER_ID } from "@/server/repo";
 import { RateLimited, slackClient } from "@/server/slack";
-import { telegramAccount, telegramApi, telegramAvailable } from "@/server/telegram";
+import { telegramApi, telegramConnected } from "@/server/telegram";
 
 export const maxDuration = 60;
 
@@ -23,8 +23,8 @@ export async function POST(request: Request) {
     if (typeof id !== "string") return failed(new Error("Which conversation?"));
     const db = await ready();
     if (id.startsWith("telegram:")) {
-      if (!telegramAvailable() || !telegramAccount()) return Response.json({ added: 0 });
-      const telegram = await telegramApi();
+      if (!(await telegramConnected(db, OWNER_ID))) return Response.json({ added: 0 });
+      const telegram = await telegramApi(db, OWNER_ID);
       try {
         const { added, changed } = await telegramRefresh({ db, ownerId: OWNER_ID, now: Date.now() }, telegram, id);
         return Response.json(added || changed ? { added, state: await loadState(db) } : { added });

@@ -13,7 +13,7 @@ import type {
 import { aiConfigured } from "./ai";
 import { telegramAvatarIds, type StoredPicture } from "./media";
 import { SLACK_FILES_SCOPE } from "./slack";
-import { telegramAccount, telegramAvailable } from "./telegram";
+import { telegramAvailable } from "./telegram";
 import type { Db } from "./db";
 
 /** Phase 1 has one person. Every table already carries the owner, so more can be added later. */
@@ -128,9 +128,9 @@ async function loadConversations(db: Db, ownerId: string): Promise<Conversation[
       [ownerId, GROUPS_SHOWN, REPLIES_SHOWN, MESSAGES_SHOWN],
     ),
   ]);
-  // Telegram's profile pictures are files on this machine. Slack's are addresses, in `avatars`.
+  // Telegram's profile pictures are kept by the dashboard. Slack's are addresses, in `avatars`.
   const telegram = new Set(rows.filter((r) => r.source === "telegram").map((r) => r.id));
-  const faces = telegram.size ? telegramAvatarIds() : new Set<string>();
+  const faces = telegram.size ? await telegramAvatarIds(db, ownerId) : new Set<string>();
   const threads = new Map<string, Conversation["thread"]>();
   for (const m of messages) {
     const thread = threads.get(m.conversation_id) ?? [];
@@ -171,7 +171,9 @@ async function loadMeetings(db: Db, ownerId: string): Promise<Meeting[]> {
   return rows.map((m) => {
     const start = new Date(Number(m.started_at));
     return {
-      id: m.id, title: m.title, date: isoDay(start), time: `${pad(start.getHours())}:${pad(start.getMinutes())}`, dur: m.duration_min,
+      // `date` and `time` here are in the server's timezone. The page works them out again from
+      // `at` in the timezone of the person looking, since a host's clock is not theirs.
+      id: m.id, title: m.title, at: start.getTime(), date: isoDay(start), time: `${pad(start.getHours())}:${pad(start.getMinutes())}`, dur: m.duration_min,
       who: m.who, where: m.place, project: m.project, url: m.url, summary: m.summary, actionItems: m.action_items ?? [], transcript: [], transcriptLines: m.lines,
     };
   });
@@ -259,7 +261,6 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
   const board = (): FocusBoard => ({ day: {}, week: {} });
   const focus: AppState["focus"] = { professional: board(), personal: board() };
   for (const f of focusRows) (focus[f.mode][f.scope][f.period] ??= []).push({ id: f.id, text: f.body, done: f.done });
-  const telegram = telegramAccount();
   const slackScopes = connections.find((c) => c.provider === "slack")?.scopes;
   const connection = (p: Provider) => {
     const row = connections.find((c) => c.provider === p);
@@ -289,8 +290,8 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
       const row = jobs.find((j) => j.job_id === def.id);
       return { id: def.id, intervalMin: row?.interval_min ?? def.defaultMin, enabled: row?.enabled ?? true };
     }),
-    // Telegram's login is kept in a file on this machine, not in the database.
-    connections: { slack: connection("slack"), telegram: telegram ? { connected: true, connectedAt: telegram.connectedAt, label: telegram.label } : { connected: false }, fathom: connection("fathom") },
+    // A Telegram login counts only on a server that may use Telegram (see `telegramAvailable`).
+    connections: { slack: connection("slack"), telegram: telegramAvailable() ? connection("telegram") : { connected: false }, fathom: connection("fathom") },
     jobStatus,
     channels,
     slackPeople,

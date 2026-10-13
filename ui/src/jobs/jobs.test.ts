@@ -452,6 +452,8 @@ describe("Fathom job", () => {
     const s = await loadState(db, OWNER_ID, new Date(NOW));
     expect(s.meetings).toHaveLength(1);
     expect(s.meetings[0]).toMatchObject({ title: "Weekly check-in", transcriptLines: 2, transcript: [] });
+    // The moment it started goes to the page, which shows it in the timezone of whoever is looking.
+    expect(s.meetings[0].at).toBe(Date.parse("2026-10-07T09:00:00Z"));
     expect(s.suggestions.map((g) => [g.title, g.src?.id, g.due])).toEqual([["Send the September report", "fathom:42", "2026-10-09"]]);
   });
 
