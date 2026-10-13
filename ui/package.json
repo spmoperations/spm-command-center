@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev -H 127.0.0.1",
+    "dev:local": "DATABASE_URL= next dev -H 127.0.0.1",
     "build": "next build",
     "start": "next start -H 127.0.0.1",
     "lint": "eslint",
@@ -21,6 +22,7 @@
     "postgres": "^3.4.9",
     "react": "19.3.0",
     "react-dom": "19.3.0",
+    "teleproto": "^1.230.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {

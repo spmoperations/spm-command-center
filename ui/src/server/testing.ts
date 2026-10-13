@@ -1,8 +1,11 @@
 // Helpers for tests: an in-memory database with a little known data, and a fake Slack.
 import net from "node:net";
+import os from "node:os";
+import path from "node:path";
 import { openDb, openRemote, type Db } from "./db";
 import { ensureOwner, OWNER_ID } from "./repo";
 import type { SlackClient } from "./slack";
+import type { TelegramApi, TelegramChat, TelegramMessage } from "./telegram";
 
 const TABLES = ["outbox", "quick_links", "focus_items", "metric_logs", "metrics", "rules", "suggestions", "tasks", "team_members", "meetings", "messages", "conversations", "slack_channels", "slack_users", "job_runs", "jobs", "connections", "users"];
 
@@ -23,6 +26,9 @@ const freePort = () =>
  */
 export async function testDb(): Promise<Db> {
   process.env.SECRETS_KEY ??= Buffer.alloc(32, 7).toString("base64");
+  // No test may ever read a real Telegram login saved on this machine.
+  process.env.TELEGRAM_SESSION_FILE ??= path.join(os.tmpdir(), `command-center-test-${process.pid}`, "telegram-session.json");
+  process.env.TELEGRAM_MEDIA_DIR ??= path.join(os.tmpdir(), `command-center-test-${process.pid}`, "telegram-media");
   if (process.env.TEST_DRIVER !== "postgres") return openDb();
   const { PGlite } = await import("@electric-sql/pglite");
   const { PGLiteSocketServer } = await import("@electric-sql/pglite-socket");
@@ -81,4 +87,58 @@ export function fakeSlack(routes: Record<string, (params: Record<string, unknown
     call: call as SlackClient["call"],
     list: (async (method: string, key: string, params: Record<string, unknown> = {}) => ((await call<Record<string, unknown[]>>(method, params))[key] ?? [])) as SlackClient["list"],
   };
+}
+
+export type FakeTelegram = TelegramApi & {
+  chatList: (TelegramChat & { messages: TelegramMessage[] })[];
+  read: string[];
+  sent: [string, string][];
+  closed: number;
+  /** The bytes behind each picture ("<chat>:<message>") and each profile picture (by id). */
+  files: Record<string, Buffer>;
+  faces: Record<string, Buffer>;
+  /** What was fetched, in order: "<chat>:<message>" for a picture, "face:<id>" for a profile picture. */
+  fetched: string[];
+};
+
+/** The first bytes of a real picture of each kind, enough to be recognised as one. */
+export const TINY = {
+  jpg: Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(16)]),
+  png: Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(16)]),
+  webp: Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WEBP"), Buffer.alloc(8)]),
+};
+
+/** A Telegram with these chats and messages. It remembers which chats were read, what was fetched and what was sent. */
+export function fakeTelegram(chatList: FakeTelegram["chatList"]): FakeTelegram {
+  const fake: FakeTelegram = {
+    chatList,
+    read: [],
+    sent: [],
+    closed: 0,
+    files: {},
+    faces: {},
+    fetched: [],
+    download: async (chatId, messageId) => {
+      fake.fetched.push(`${chatId}:${messageId}`);
+      return fake.files[`${chatId}:${messageId}`] ?? null;
+    },
+    picture: async (id) => {
+      fake.fetched.push(`face:${id}`);
+      return fake.faces[id] ?? null;
+    },
+    chats: async (limit) => fake.chatList.slice(0, limit).map(({ id, name, kind, topId }) => ({ id, name, kind, topId })),
+    messages: async (chatId, { afterId, limit }) => {
+      fake.read.push(chatId);
+      const chat = fake.chatList.find((c) => c.id === chatId);
+      if (!chat) throw new Error(`Unexpected Telegram chat in a test: ${chatId}`);
+      return chat.messages.filter((m) => m.id > afterId).slice(-limit);
+    },
+    send: async (chatId, text) => {
+      fake.sent.push([chatId, text]);
+    },
+    close: async () => {
+      fake.closed++;
+    },
+  };
+  return fake;
 }

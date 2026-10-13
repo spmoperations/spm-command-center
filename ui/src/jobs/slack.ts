@@ -3,9 +3,10 @@
 // The owner is in hundreds of conversations, so asking each one "anything new?" every hour
 // would be hundreds of requests. Instead `slack-pull` asks Slack's search once for everything
 // newer than its bookmark, which costs a request per hundred messages.
-import { attachmentText, channelKind, contextLabel, mentionedIds, mentionsUser, slackToText, slackTsToMs, threadOf, type SlackKind } from "@/core/slack-text";
+import { attachmentText, channelKind, contextLabel, mentionedIds, mentionsUser, slackReactions, slackToText, slackTsToMs, threadOf, type SlackKind } from "@/core/slack-text";
 import type { Db } from "@/server/db";
-import { RateLimited, type SlackClient } from "@/server/slack";
+import type { StoredPicture } from "@/server/media";
+import { RateLimited, SLACK_FILES_HOST, type SlackClient } from "@/server/slack";
 import type { JobContext, JobResult } from "./runner";
 
 interface SlackUser { id: string; name?: string; real_name?: string; deleted?: boolean; is_bot?: boolean; is_app_user?: boolean; profile?: { real_name?: string; display_name?: string; email?: string; image_72?: string; image_48?: string } }
@@ -20,8 +21,20 @@ const pictureOf = (u: SlackUser): string | null => {
 };
 interface SlackChannel { id: string; name?: string; user?: string; is_im?: boolean; is_mpim?: boolean; is_private?: boolean; is_group?: boolean }
 
+/**
+ * Keeps what the token may do, as Slack said in its last answer. Showing pictures needs one
+ * permission more than reading messages, and this is how the dashboard knows whether it is
+ * there. Returns 1 when that changed.
+ */
+async function noteScopes(db: Db, ownerId: string, slack: SlackClient): Promise<number> {
+  const scopes = slack.scopes?.();
+  if (!scopes) return 0;
+  return db.run("update connections set scopes = $1 where owner_id = $2 and provider = 'slack' and scopes is distinct from $1", [scopes.join(","), ownerId]);
+}
+
 export async function slackDirectorySync({ db, ownerId }: JobContext, slack: SlackClient): Promise<JobResult> {
   const me = await slack.call<{ user_id: string }>("auth.test");
+  await noteScopes(db, ownerId, slack);
   const users = await slack.list<SlackUser>("users.list", "members", { limit: 200 });
   // Saved in one statement: a workspace has hundreds of people and conversations, and one
   // trip to the database each would take minutes.
@@ -85,7 +98,39 @@ interface SearchMatch {
   permalink?: string;
   channel: { id: string; name?: string; is_im?: boolean; is_mpim?: boolean; is_private?: boolean; is_group?: boolean };
 }
-interface HistoryMessage { ts: string; thread_ts?: string; reply_count?: number; text?: string; user?: string; username?: string; subtype?: string; bot_id?: string; user_profile?: { real_name?: string; display_name?: string }; files?: unknown[]; attachments?: unknown }
+interface HistoryMessage { ts: string; thread_ts?: string; reply_count?: number; latest_reply?: string; text?: string; user?: string; username?: string; subtype?: string; bot_id?: string; user_profile?: { real_name?: string; display_name?: string }; files?: unknown[]; attachments?: unknown; reactions?: unknown }
+
+/** A file on a message, as Slack describes it. Only the parts a picture needs. */
+type SlackFile = { name?: string; title?: string; mimetype?: string; mode?: string; url_private?: string; permalink?: string; original_w?: number; original_h?: number } & Record<string, unknown>;
+
+/**
+ * The pictures among a message's files. Videos, documents and everything else are left out.
+ * Only addresses on Slack's own file server are kept: the dashboard later fetches them with
+ * the owner's token, and must never be sent anywhere else with it.
+ */
+export function slackPictures(files: unknown): StoredPicture[] {
+  if (!Array.isArray(files)) return [];
+  const onSlack = (v: unknown): v is string => typeof v === "string" && v.startsWith(`https://${SLACK_FILES_HOST}/`);
+  const pictures: StoredPicture[] = [];
+  for (const f of files as SlackFile[]) {
+    if (!f?.mimetype?.startsWith("image/") || f.mimetype === "image/svg+xml" || f.mode === "external") continue;
+    // A moving GIF has moving small copies of its own. Otherwise the largest ordinary one.
+    const sizes = f.mimetype === "image/gif" ? ["thumb_480_gif", "thumb_360_gif", "thumb_720", "thumb_480", "thumb_360"] : ["thumb_720", "thumb_480", "thumb_360"];
+    const thumb = sizes.map((k) => f[k]).find(onSlack);
+    const url = onSlack(f.url_private) ? f.url_private : undefined;
+    if (!thumb && !url) continue;
+    pictures.push({
+      kind: "image",
+      name: (f.title || f.name || "Picture").slice(0, 120),
+      w: Number(f.original_w) || undefined,
+      h: Number(f.original_h) || undefined,
+      thumb,
+      url,
+      link: typeof f.permalink === "string" && f.permalink.startsWith("https://") ? f.permalink : undefined,
+    });
+  }
+  return pictures;
+}
 
 // How far back the first read goes, and how many pages of 100 messages one run may read.
 // Both can be turned down in the environment while developing.
@@ -146,19 +191,38 @@ async function learnName(db: Db, ownerId: string, look: Lookup, slack: SlackClie
 }
 
 /** Stores one message. `thread` is the id of the message that started its thread, when it is in one. */
-async function storeMessage(db: Db, ownerId: string, conversationId: string, look: Lookup, m: { ts: string; text?: string; user?: string; username?: string; user_profile?: { real_name?: string; display_name?: string }; files?: unknown[]; attachments?: unknown }, thread: string | null = null): Promise<boolean> {
+async function storeMessage(db: Db, ownerId: string, conversationId: string, look: Lookup, m: { ts: string; text?: string; user?: string; username?: string; user_profile?: { real_name?: string; display_name?: string }; files?: unknown[]; attachments?: unknown; reactions?: unknown }, thread: string | null = null): Promise<boolean> {
   const me = m.user === look.myId;
   const sender = (m.user && look.names.get(m.user)) || m.user_profile?.real_name || m.user_profile?.display_name || m.username || "Someone";
-  const text = slackToText(m.text || attachmentText(m.attachments), (id) => look.names.get(id)) || (m.files?.length ? "(sent a file)" : "(sent something that has no text)");
+  const pictures = slackPictures(m.files);
+  const text = slackToText(m.text || attachmentText(m.attachments), (id) => look.names.get(id)) || (pictures.length ? "(sent a picture)" : m.files?.length ? "(sent a file)" : "(sent something that has no text)");
   const id = `${conversationId}:${m.ts}`;
   const added = await db.run(
-    `insert into messages (id, conversation_id, owner_id, external_id, sender_name, me, body, at, scanned, thread_ts)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) on conflict (id) do nothing`,
-    [id, conversationId, ownerId, m.ts, sender, me, text, slackTsToMs(m.ts), me, thread],
+    `insert into messages (id, conversation_id, owner_id, external_id, sender_name, sender_id, me, body, at, scanned, thread_ts, attachments, reactions)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb) on conflict (id) do nothing`,
+    [id, conversationId, ownerId, m.ts, sender, m.user ?? null, me, text, slackTsToMs(m.ts), me, thread, JSON.stringify(pictures), JSON.stringify(slackReactions(m.reactions, look.myId))],
   );
   // A message stored before its thread was known is put in its thread now.
   if (!added && thread) await db.run("update messages set thread_ts = $1 where id = $2 and thread_ts is null", [thread, id]);
   return added > 0;
+}
+
+/**
+ * Brings the pictures and reactions of messages already stored in line with what Slack says
+ * now: a reaction is often added long after the message was read, and the search the hourly
+ * check uses carries neither. One statement for the whole list. Returns how many changed.
+ */
+async function saveExtras(db: Db, conversationId: string, myId: string, messages: HistoryMessage[]): Promise<number> {
+  const rows = messages
+    .filter((m) => !m.subtype || m.subtype === "thread_broadcast")
+    .map((m) => ({ id: `${conversationId}:${m.ts}`, attachments: slackPictures(m.files), reactions: slackReactions(m.reactions, myId) }));
+  if (!rows.length) return 0;
+  return db.run(
+    `update messages m set attachments = r.attachments, reactions = r.reactions
+     from jsonb_to_recordset($2::jsonb) as r(id text, attachments jsonb, reactions jsonb)
+     where m.conversation_id = $1 and m.id = r.id and (m.attachments <> r.attachments or m.reactions <> r.reactions)`,
+    [conversationId, JSON.stringify(rows)],
+  );
 }
 
 /**
@@ -192,6 +256,8 @@ export async function refreshConversation(db: Db, conversationId: string, look: 
 const CHECKED_MESSAGES = 40;
 /** Threads read in one check. Each is one request to Slack. */
 const CHECKED_THREADS = 10;
+/** Threads read again even when nothing in them is new, so reactions on their replies stay current. */
+const FRESH_THREADS = 3;
 
 /**
  * Reads the threads under the messages of one conversation, when a person opens it.
@@ -199,11 +265,15 @@ const CHECKED_THREADS = 10;
  * The hourly check only brings in a thread when the owner is tagged in it or it is in a chat
  * they follow. The other messages on screen may have replies in Slack too. This asks Slack
  * once which of them do, and reads the threads the dashboard does not have in full yet.
- * Returns how many messages were added.
+ *
+ * The same answer carries each message's pictures and reactions as they are now, so those
+ * are brought up to date on the way. The threads written in most recently are read again
+ * for the same reason.
+ * Returns how many messages were added, and how many already here changed.
  */
-export async function slackReadThreads({ db, ownerId }: Pick<JobContext, "db" | "ownerId">, slack: SlackClient, conversationId: string): Promise<number> {
+export async function slackReadThreads({ db, ownerId }: Pick<JobContext, "db" | "ownerId">, slack: SlackClient, conversationId: string): Promise<{ added: number; changed: number }> {
   const [conversation] = await db.query<{ external_id: string }>("select external_id from conversations where owner_id = $1 and id = $2 and source = 'slack'", [ownerId, conversationId]);
-  if (!conversation) return 0;
+  if (!conversation) return { added: 0, changed: 0 };
   // The messages that could have a thread under them, with how many replies are here already.
   const onScreen = await db.query<{ external_id: string; replies: number }>(
     `select m.external_id,
@@ -213,30 +283,42 @@ export async function slackReadThreads({ db, ownerId }: Pick<JobContext, "db" | 
      order by m.at desc limit $2`,
     [conversationId, CHECKED_MESSAGES],
   );
-  if (!onScreen.length) return 0;
+  if (!onScreen.length) return { added: 0, changed: 0 };
 
   const oldest = onScreen.reduce((min, m) => (Number(m.external_id) < Number(min) ? m.external_id : min), onScreen[0].external_id);
   const history = await slack.call<{ messages: HistoryMessage[] }>("conversations.history", { channel: conversation.external_id, oldest, inclusive: true, limit: 200 });
+  const [owner] = await db.query<{ slack_user_id: string | null }>("select slack_user_id from users where id = $1", [ownerId]);
+  const myId = owner?.slack_user_id ?? "";
+  let changed = (await saveExtras(db, conversationId, myId, history.messages)) + (await noteScopes(db, ownerId, slack));
+
   const inSlack = new Map(history.messages.map((m) => [m.ts, m.reply_count ?? 0]));
-  const behind = onScreen.filter((m) => (inSlack.get(m.external_id) ?? 0) > m.replies).slice(0, CHECKED_THREADS);
-  if (!behind.length) return 0;
+  const behind = onScreen.filter((m) => (inSlack.get(m.external_id) ?? 0) > m.replies).map((m) => m.external_id);
+  const here = new Set(onScreen.map((m) => m.external_id));
+  const lively = history.messages
+    .filter((m) => (m.reply_count ?? 0) > 0 && here.has(m.ts))
+    .sort((a, b) => Number(b.latest_reply ?? b.ts) - Number(a.latest_reply ?? a.ts))
+    .slice(0, FRESH_THREADS)
+    .map((m) => m.ts);
+  const threads = [...new Set([...behind, ...lively])].slice(0, CHECKED_THREADS);
+  if (!threads.length) return { added: 0, changed };
 
   const look = await lookup(db, ownerId);
   let added = 0;
-  for (const m of behind) {
-    const res = await slack.call<{ messages: HistoryMessage[] }>("conversations.replies", { channel: conversation.external_id, ts: m.external_id, limit: 200 });
+  for (const thread of threads) {
+    const res = await slack.call<{ messages: HistoryMessage[] }>("conversations.replies", { channel: conversation.external_id, ts: thread, limit: 200 });
     for (const reply of res.messages) {
       if (reply.subtype && reply.subtype !== "thread_broadcast") continue;
       for (const id of [reply.user, ...mentionedIds(reply.text ?? "")]) await learnName(db, ownerId, look, slack, id);
-      if (await storeMessage(db, ownerId, conversationId, look, reply, m.external_id)) added++;
+      if (await storeMessage(db, ownerId, conversationId, look, reply, thread)) added++;
     }
+    changed += await saveExtras(db, conversationId, myId, res.messages);
   }
   if (added) {
     const known = look.channels.get(conversation.external_id);
     const kind = known?.kind ?? "public";
     await refreshConversation(db, conversationId, { kind, partner: kind === "im" ? (look.names.get(known?.userId ?? "") ?? null) : null }, false);
   }
-  return added;
+  return { added, changed };
 }
 
 export async function slackPull({ db, ownerId, now, cursor }: JobContext, slack: SlackClient): Promise<JobResult> {
@@ -313,6 +395,8 @@ export async function slackPull({ db, ownerId, now, cursor }: JobContext, slack:
       for (const id of [m.user, ...mentionedIds(m.text ?? "")]) await learnName(db, ownerId, look, slack, id);
       if (await storeMessage(db, ownerId, conversationId, look, m, thread)) stored++;
     }
+    // The search that found these carries no reactions and only some pictures. The thread does.
+    await saveExtras(db, conversationId, look.myId, res.messages);
   }
 
   for (const [conversationId, entry] of touched) {

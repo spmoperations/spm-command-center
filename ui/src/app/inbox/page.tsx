@@ -3,9 +3,9 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { DelegateForm } from "@/components/DelegateForm";
-import { Avatar, MessageText } from "@/components/MessageText";
+import { Avatar, MessageText, Pictures, Reactions } from "@/components/MessageText";
 import { PriPill, PrioritySelect, Seg } from "@/components/bits";
-import { LINE_NAME, LIVE_SOURCES, MODE_NAME, MODES, PERSONAL_SIDE, PRIORITIES, PRIORITY_NAME, SOURCE_NAME } from "@/core/config";
+import { LINE_NAME, liveSources, MODE_NAME, MODES, PERSONAL_SIDE, PRIORITIES, PRIORITY_NAME, SOURCE_NAME } from "@/core/config";
 import { ago, stamp } from "@/core/dates";
 import { plainPreview } from "@/core/message-format";
 import { requestSummary } from "@/core/requests";
@@ -17,18 +17,26 @@ import {
   setConversationMode, setConversationPriority, toast, useApp, type App,
 } from "@/store/store";
 
+/** Slack hands a picture over only to an app that may read files. Until this one may, pictures are named and linked instead. */
+const slackPicturesBlocked = (c: Conversation, app: App) => c.source === "slack" && app.state.slackFilesAllowed === false;
+
 /** One message in the conversation. */
 function Bubble({ b, c, app }: { b: ThreadMessage; c: Conversation; app: App }) {
   const who = b.me ? app.state.owner.name : (b.from ?? c.from);
+  const pictures = b.attachments ?? [];
+  // "(sent a photo)" stands in for a picture that is not here. Beside the picture itself it says nothing.
+  const standIn = pictures.length > 0 && /^\(sent an? [^)]*\)$/.test(b.text);
   return (
     <div className={`brow ${b.me ? "me" : ""}`}>
-      {!b.me && <Avatar name={who} src={app.state.avatars[who]} small />}
+      {!b.me && <Avatar name={who} src={c.source === "telegram" ? b.avatar : app.state.avatars[who]} small />}
       <div className={`bubble ${b.me ? "me" : ""}`}>
-        <MessageText text={b.text} />
+        {pictures.length > 0 && <Pictures pictures={pictures} blocked={slackPicturesBlocked(c, app)} />}
+        {!standIn && <MessageText text={b.text} />}
         <div className="bmeta">
           {b.me ? "You" : who} · {stamp(b.at, app.now)}
           {b.status === "queued" && <span className="queued">{app.state.sendingEnabled ? "Sending" : "Saved, not sent"}</span>}
         </div>
+        {b.reactions && <Reactions reactions={b.reactions} />}
       </div>
     </div>
   );
@@ -57,6 +65,8 @@ function Thread({ c, app, draft, onDraft }: { c: Conversation; app: App; draft: 
 
   const groups = groupByThread(c.thread);
   const checking = app.ui.checking.includes(c.id);
+  // Threads are Slack's. A Telegram chat is one line of messages, so nothing there offers one.
+  const threads = c.source === "slack";
   // By default a reply goes where the latest message from someone else is: into its thread.
   const target = picked ?? threadToAnswer(c.thread) ?? "";
   const into = target ? groups.find((g) => g.key === target) : undefined;
@@ -80,7 +90,10 @@ function Thread({ c, app, draft, onDraft }: { c: Conversation; app: App; draft: 
     <div className="thread">
       <div className="bubbles" ref={box}>
         {groups.length === 0 && <p className="muted">No messages in this conversation yet.</p>}
-        {checking && <p className="checking">Checking Slack for replies under these messages…</p>}
+        {checking && <p className="checking">{c.source === "telegram" ? "Checking Telegram for new messages and reactions…" : "Checking Slack for replies, pictures and reactions…"}</p>}
+        {slackPicturesBlocked(c, app) && c.thread.some((m) => m.attachments?.length) && (
+          <p className="checking">Pictures from Slack cannot be shown here yet. The Slack app needs one more permission (files:read). Until then each one has a link that opens it in Slack.</p>
+        )}
         {groups.map((g) => (
           <div className={`tgroup ${into?.key === g.key ? "answering" : ""}`} key={g.key}>
             {g.first && <Bubble b={g.first} c={c} app={app} />}
@@ -88,7 +101,7 @@ function Thread({ c, app, draft, onDraft }: { c: Conversation; app: App; draft: 
               <div className="treplies">
                 <div className="tlabel">
                   {g.first ? `Thread · ${g.replies.length} ${g.replies.length === 1 ? "reply" : "replies"}` : "Replies in a thread that started earlier"}
-                  {g.first?.ts && into?.key !== g.key && (
+                  {threads && g.first?.ts && into?.key !== g.key && (
                     <button className="linkbtn inline" onClick={() => answer(g.key)}>
                       Reply in this thread
                     </button>
@@ -100,7 +113,7 @@ function Thread({ c, app, draft, onDraft }: { c: Conversation; app: App; draft: 
               </div>
             )}
             {/* A single message from someone else can be answered in a thread of its own. */}
-            {g.first?.ts && !g.first.me && !g.threaded && g.replies.length === 0 && into?.key !== g.key && (
+            {threads && g.first?.ts && !g.first.me && !g.threaded && g.replies.length === 0 && into?.key !== g.key && (
               <button className="linkbtn inline tstart" onClick={() => answer(g.key)}>
                 Reply in a thread
               </button>
@@ -170,7 +183,7 @@ function MessageRow({ c, app, open, draft, onDraft }: { c: Conversation; app: Ap
   const canDelegate = c.mode === "professional";
   return (
     <div className={`msg ${c.replied ? "replied" : ""} ${open || delegating ? "open" : ""}`} ref={row}>
-      <Avatar name={c.from} src={app.state.avatars[c.from]} />
+      <Avatar name={c.from} src={c.source === "telegram" ? c.avatar : app.state.avatars[c.from]} />
       <div style={{ minWidth: 0 }}>
         <div className="line1">
           <span className="who">{c.from}</span>
@@ -265,7 +278,7 @@ export default function InboxPage() {
   const list = byLineAndSource.filter((c) => pri === "all" || c.pri === pri);
   const cleared = mine.length - open.length;
   const queued = state.outbox.filter((o) => o.status === "queued").length;
-  const connected = LIVE_SOURCES.filter((s) => state.connections[s].connected);
+  const connected = liveSources(state.telegramAvailable).filter((s) => state.connections[s].connected);
   const other = MODES.find((m) => m !== mode)!;
   const elsewhere = state.inbox.filter((c) => c.mode === other && !c.done).length;
 

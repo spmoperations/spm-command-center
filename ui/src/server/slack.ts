@@ -24,9 +24,12 @@ export interface SlackClient {
   call<T = Record<string, unknown>>(method: string, params?: Params): Promise<T>;
   /** Follows Slack's cursor until the list ends or `maxPages` is reached. */
   list<T>(method: string, key: string, params?: Params, maxPages?: number): Promise<T[]>;
+  /** What the token is allowed to do, as Slack said in its last answer. Null before the first call. */
+  scopes?(): string[] | null;
 }
 
 export function slackClient(token: string, fetchImpl: Fetch = fetch): SlackClient {
+  let allowed: string[] | null = null;
   async function call<T>(method: string, params: Params = {}): Promise<T> {
     const body = new URLSearchParams();
     for (const [k, v] of Object.entries(params)) if (v !== undefined) body.set(k, String(v));
@@ -37,6 +40,8 @@ export function slackClient(token: string, fetchImpl: Fetch = fetch): SlackClien
       body: write ? body : undefined,
     });
     if (res.status === 429) throw new RateLimited("Slack", Number(res.headers.get("retry-after") ?? 60));
+    const granted = res.headers.get("x-oauth-scopes");
+    if (granted) allowed = granted.split(",").map((s) => s.trim()).filter(Boolean);
     const data = (await res.json()) as { ok: boolean; error?: string };
     if (!data.ok) {
       if (data.error === "ratelimited") throw new RateLimited("Slack", Number(res.headers.get("retry-after") ?? 60));
@@ -57,8 +62,13 @@ export function slackClient(token: string, fetchImpl: Fetch = fetch): SlackClien
     return out;
   }
 
-  return { call, list };
+  return { call, list, scopes: () => allowed };
 }
+
+/** The permission that lets the token fetch the pictures and files in messages. */
+export const SLACK_FILES_SCOPE = "files:read";
+/** Slack serves every file and picture in a message from here, and only to a token allowed to read files. */
+export const SLACK_FILES_HOST = "files.slack.com";
 
 /** Checks a token and says whose it is. Used when connecting, before anything is stored. */
 export async function verifySlackToken(token: string, fetchImpl: Fetch = fetch) {

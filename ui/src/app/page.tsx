@@ -238,7 +238,7 @@ export default function TodayPage() {
             <ul className="mini-list">
               {waiting.slice(0, 4).map((c) => (
                 <li key={c.id}>
-                  <Avatar name={c.from} src={state.avatars[c.from]} small />
+                  <Avatar name={c.from} src={c.source === "telegram" ? c.avatar : state.avatars[c.from]} small />
                   <div className="grow">
                     <div className="who">
                       {c.from} {personal && <PriPill p={c.pri} />}

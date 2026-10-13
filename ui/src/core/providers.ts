@@ -3,14 +3,14 @@
 import type { Provider } from "./types";
 
 export const PROVIDERS: Provider[] = ["slack", "telegram", "fathom"];
-/** The ones that can be connected today. The Connections tab shows only these. */
-export const LIVE_PROVIDERS: Provider[] = ["slack", "fathom"];
+/** The ones that can be connected on this server. Telegram only where the server says it can be used. */
+export const liveProviders = (telegram: boolean): Provider[] => (telegram ? ["slack", "telegram", "fathom"] : ["slack", "fathom"]);
 
 export const PROVIDER_NAME: Record<Provider, string> = { slack: "Slack", telegram: "Telegram", fathom: "Fathom" };
 
 export const PROVIDER_ABOUT: Record<Provider, string> = {
   slack: "Reads your messages and sends your replies from your own account.",
-  telegram: "Reads the chats you choose, and sends your replies from your own account.",
+  telegram: "Reads your one-to-one chats and the group messages addressed to you, and sends your replies from your own account.",
   fathom: "Brings in your recorded calls with notes, transcript and action items.",
 };
 
@@ -23,6 +23,8 @@ export const SLACK_USER_SCOPES = [
   "channels:history", "groups:history", "im:history", "mpim:history",
   "channels:read", "groups:read", "im:read", "mpim:read",
   "users:read", "users:read.email", "chat:write", "im:write", "search:read",
+  // To show the pictures people send. Slack gives a picture only to an app that may read files.
+  "files:read",
 ];
 
 /** The Slack app Jeremy creates in SPM's workspace. User scopes only: there is no bot. */
@@ -71,7 +73,7 @@ export const checkPhone = (raw: string): string | null =>
   normalizePhone(raw) ? null : "Type the number with its country code, for example +44 7700 900123.";
 
 export const checkTelegramCode = (raw: string): string | null =>
-  /^\d{5,6}$/.test(raw.trim()) ? null : "The code from Telegram is 5 digits.";
+  /^\d{5,6}$/.test(raw.trim()) ? null : "The code from Telegram is 5 or 6 digits.";
 
 /** "+447700900123" becomes "+44 •••• 0123": enough to recognise, not enough to copy. */
 export function maskPhone(raw: string): string {

@@ -8,9 +8,12 @@ import { clampInterval, defaultJobSettings, JOBS } from "@/core/jobs";
 import { requestSummary } from "@/core/requests";
 import { applyRules } from "@/core/rules";
 import type {
-  AppState, Conversation, FocusBoard, JobId, JobStatus, Meeting, Metric, Mode, Person, Priority, Provider, Rule, Suggestion, Task,
+  AppState, Conversation, FocusBoard, JobId, JobStatus, Meeting, MessagePicture, Metric, Mode, Person, Priority, Provider, Reaction, Rule, Suggestion, Task,
 } from "@/core/types";
 import { aiConfigured } from "./ai";
+import { telegramAvatarIds, type StoredPicture } from "./media";
+import { SLACK_FILES_SCOPE } from "./slack";
+import { telegramAccount, telegramAvailable } from "./telegram";
 import type { Db } from "./db";
 
 /** Phase 1 has one person. Every table already carries the owner, so more can be added later. */
@@ -57,10 +60,17 @@ export async function ensureOwner(db: Db, ownerId = OWNER_ID): Promise<void> {
 // ---------- Reading ----------
 
 interface ConversationRow {
-  id: string; source: Conversation["source"]; from_name: string; ctx: string; direct: boolean; tagged: boolean;
+  id: string; source: Conversation["source"]; external_id: string; from_name: string; ctx: string; direct: boolean; tagged: boolean;
   last_text: string; last_at: number; pri: Priority; line: Conversation["line"]; mode: Mode; project: string; done: boolean; replied: boolean; manual_pri: boolean; manual_mode: boolean;
 }
-interface MessageRow { conversation_id: string; sender_name: string; me: boolean; body: string; at: number; status: "queued" | "sent" | "failed" | null; external_id: string | null; thread_ts: string | null }
+interface MessageRow {
+  id: string; conversation_id: string; sender_name: string; sender_id: string | null; me: boolean; body: string; at: number; status: "queued" | "sent" | "failed" | null; external_id: string | null; thread_ts: string | null;
+  attachments: StoredPicture[] | null; reactions: Reaction[] | null;
+}
+
+/** Where the browser gets a message's picture from. The dashboard hands it over itself, to a signed-in person only. */
+const pictureUrl = (messageId: string, n: number, full = false) => `/api/media?m=${encodeURIComponent(messageId)}&n=${n}${full ? "&full=1" : ""}`;
+const avatarUrl = (id: string) => `/api/media?avatar=${encodeURIComponent(id)}`;
 interface TaskRow {
   id: string; title: string; mode: Mode; dept: string; project: string; pri: Priority; due: string; done: boolean; done_at: number | null;
   src_type: "message" | "meeting" | null; src_id: string | null; delegable: boolean;
@@ -112,23 +122,38 @@ async function loadConversations(db: Db, ownerId: string): Promise<Conversation[
                 row_number() over (partition by conversation_id order by grp_at desc, at desc, id desc) as overall
          from grouped g
        )
-       select conversation_id, sender_name, me, body, at, status, external_id, thread_ts from ranked
+       select id, conversation_id, sender_name, sender_id, me, body, at, status, external_id, thread_ts, attachments, reactions from ranked
        where grp_rank <= $2 and overall <= $4 and (in_grp <= $3 or external_id = grp)
        order by at, id`,
       [ownerId, GROUPS_SHOWN, REPLIES_SHOWN, MESSAGES_SHOWN],
     ),
   ]);
+  // Telegram's profile pictures are files on this machine. Slack's are addresses, in `avatars`.
+  const telegram = new Set(rows.filter((r) => r.source === "telegram").map((r) => r.id));
+  const faces = telegram.size ? telegramAvatarIds() : new Set<string>();
   const threads = new Map<string, Conversation["thread"]>();
   for (const m of messages) {
     const thread = threads.get(m.conversation_id) ?? [];
-    thread.push({ me: m.me, text: m.body, at: Number(m.at), from: m.me ? undefined : m.sender_name, status: m.status === "failed" ? "queued" : (m.status ?? undefined), ts: m.external_id ?? undefined, thread: m.thread_ts ?? undefined });
+    thread.push({
+      me: m.me, text: m.body, at: Number(m.at), from: m.me ? undefined : m.sender_name, status: m.status === "failed" ? "queued" : (m.status ?? undefined), ts: m.external_id ?? undefined, thread: m.thread_ts ?? undefined,
+      attachments: m.attachments?.length
+        ? m.attachments.map((a, n): MessagePicture => ({ kind: a.kind, name: a.name, w: a.w, h: a.h, src: pictureUrl(m.id, n), full: a.url && a.thumb ? pictureUrl(m.id, n, true) : undefined, link: a.link }))
+        : undefined,
+      reactions: m.reactions?.length ? m.reactions : undefined,
+      avatar: !m.me && m.sender_id && telegram.has(m.conversation_id) && faces.has(m.sender_id) ? avatarUrl(m.sender_id) : undefined,
+    });
     threads.set(m.conversation_id, thread);
   }
-  return rows.map((r) => ({
-    id: r.id, source: r.source, from: r.from_name, ctx: r.ctx, direct: r.direct, tagged: r.tagged, text: r.last_text, at: r.last_at,
-    pri: r.pri, line: r.line, mode: r.mode, project: r.project, done: r.done, replied: r.replied, manualPri: r.manual_pri || undefined, manualMode: r.manual_mode || undefined,
-    thread: threads.get(r.id) ?? [],
-  }));
+  return rows.map((r) => {
+    const thread = threads.get(r.id) ?? [];
+    return {
+      id: r.id, source: r.source, from: r.from_name, ctx: r.ctx, direct: r.direct, tagged: r.tagged, text: r.last_text, at: r.last_at,
+      pri: r.pri, line: r.line, mode: r.mode, project: r.project, done: r.done, replied: r.replied, manualPri: r.manual_pri || undefined, manualMode: r.manual_mode || undefined,
+      // A one-to-one chat shows the other person. A group shows whoever wrote last.
+      avatar: r.source !== "telegram" ? undefined : r.direct && faces.has(r.external_id) ? avatarUrl(r.external_id) : thread.findLast((m) => !m.me)?.avatar,
+      thread,
+    };
+  });
 }
 
 interface MeetingRow {
@@ -215,7 +240,7 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
       [ownerId],
     ),
     db.query<{ job_id: JobId; interval_min: number; enabled: boolean }>("select job_id, interval_min, enabled from jobs where owner_id = $1", [ownerId]),
-    db.query<{ provider: Provider; label: string | null; connected_at: number }>("select provider, label, connected_at from connections where owner_id = $1", [ownerId]),
+    db.query<{ provider: Provider; label: string | null; connected_at: number; scopes: string | null }>("select provider, label, connected_at, scopes from connections where owner_id = $1", [ownerId]),
     db.query<{ id: string; name: string; kind: "public" | "private"; selected: boolean }>("select id, name, kind, selected from slack_channels where owner_id = $1 and kind in ('public', 'private') order by name", [ownerId]),
     db.query<{ id: string; name: string }>("select id, name from slack_users where owner_id = $1 and not is_bot and not deleted order by name", [ownerId]),
     // Apps and people who have left come first, so someone current with the same name wins.
@@ -234,6 +259,8 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
   const board = (): FocusBoard => ({ day: {}, week: {} });
   const focus: AppState["focus"] = { professional: board(), personal: board() };
   for (const f of focusRows) (focus[f.mode][f.scope][f.period] ??= []).push({ id: f.id, text: f.body, done: f.done });
+  const telegram = telegramAccount();
+  const slackScopes = connections.find((c) => c.provider === "slack")?.scopes;
   const connection = (p: Provider) => {
     const row = connections.find((c) => c.provider === p);
     return row ? { connected: true, connectedAt: Number(row.connected_at), label: row.label ?? undefined } : { connected: false };
@@ -262,13 +289,17 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
       const row = jobs.find((j) => j.job_id === def.id);
       return { id: def.id, intervalMin: row?.interval_min ?? def.defaultMin, enabled: row?.enabled ?? true };
     }),
-    connections: { slack: connection("slack"), telegram: connection("telegram"), fathom: connection("fathom") },
+    // Telegram's login is kept in a file on this machine, not in the database.
+    connections: { slack: connection("slack"), telegram: telegram ? { connected: true, connectedAt: telegram.connectedAt, label: telegram.label } : { connected: false }, fathom: connection("fathom") },
     jobStatus,
     channels,
     slackPeople,
     avatars: Object.fromEntries(pictures.map((p) => [p.name, p.image])),
     owner: { name: owner?.name ?? "You" },
     sendingEnabled: sendingEnabled(),
+    slackFilesAllowed: slackScopes ? slackScopes.split(",").includes(SLACK_FILES_SCOPE) : null,
+    telegramAvailable: telegramAvailable(),
+    localData: !process.env.DATABASE_URL,
     aiConfigured: aiConfigured(),
   };
 }
@@ -367,7 +398,7 @@ async function delegate(c: ActionContext, taskId: string, personId: string, note
     let place: { target: string; label: string; conversationId: string | null };
     if (where === "chat") {
       const [chat] = task.src_type === "message"
-        ? await c.db.query<{ id: string; external_id: string; ctx: string }>("select id, external_id, ctx from conversations where owner_id = $1 and id = $2", [c.ownerId, task.src_id])
+        ? await c.db.query<{ id: string; external_id: string; ctx: string; source: string }>("select id, external_id, ctx, source from conversations where owner_id = $1 and id = $2", [c.ownerId, task.src_id])
         : [];
       if (!chat || !canAssignInChat(chat)) throw new Error("This task did not come from a channel or a group message. Pick a Slack channel, or send a direct message.");
       place = { target: chat.external_id, label: chat.ctx, conversationId: chat.id };

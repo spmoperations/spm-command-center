@@ -13,8 +13,11 @@ export const DEPT_ABOUT: Record<string, string> = {
 
 /** Every message source the dashboard is built to hold. */
 export const SOURCES: Source[] = ["slack", "telegram"];
-/** The ones that work today. Telegram joins this list when it is connected; until then the screens leave it out. */
-export const LIVE_SOURCES: Source[] = ["slack"];
+/**
+ * The ones that work on this server. Telegram is local-only for now: it counts only where
+ * the server says it can be used (see `AppState.telegramAvailable`).
+ */
+export const liveSources = (telegram: boolean): Source[] => (telegram ? ["slack", "telegram"] : ["slack"]);
 
 /**
  * Departments (the Departments tab, and the department on tasks and team members) are

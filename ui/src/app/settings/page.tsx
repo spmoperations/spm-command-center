@@ -3,9 +3,9 @@
 import Link from "next/link";
 import { useState } from "react";
 import { Combo } from "@/components/Combo";
-import { DEPARTMENTS, DEPTS, LINE_NAME, LIVE_SOURCES, PERSONAL_SIDE, PRIORITY_NAME, SOURCE_NAME } from "@/core/config";
+import { DEPARTMENTS, DEPTS, LINE_NAME, liveSources, PERSONAL_SIDE, PRIORITY_NAME, SOURCE_NAME } from "@/core/config";
 import { ago } from "@/core/dates";
-import { describeInterval, jobById, LIVE_JOBS, type Connection } from "@/core/jobs";
+import { describeInterval, jobById, liveJobs, type Connection } from "@/core/jobs";
 import { PROVIDER_NAME } from "@/core/providers";
 import { ruleHits } from "@/core/rules";
 import type { JobSetting, Line, Person, Priority, Rule, Source } from "@/core/types";
@@ -40,7 +40,7 @@ function Timers({ app }: { app: App }) {
     return app.state.connections[needs].connected ? null : `Waiting for ${PROVIDER_NAME[needs]}`;
   };
   // Only the checks that work today. The one that sends has nothing to do while sending is off.
-  const jobs = LIVE_JOBS.filter((job) => job.id !== "outbox-retry" || app.state.sendingEnabled);
+  const jobs = liveJobs(app.state.telegramAvailable).filter((job) => job.id !== "outbox-retry" || app.state.sendingEnabled);
   const anyAI = jobs.some((job) => job.usesAI);
   return (
     <div className="panel set-sec" id="timers">
@@ -311,6 +311,7 @@ function RuleList<T extends string>({ app, kind, id, title, intro, outcomes, out
 }) {
   const rules = app.state[kind];
   const hits = ruleHits(rules, app.state.inbox);
+  const sources = liveSources(app.state.telegramAvailable);
   const [source, setSource] = useState<Source | "any">("slack");
   const [when, setWhen] = useState<Rule["when"]>("ctx");
   const [op, setOp] = useState<Rule["op"]>("starts");
@@ -330,7 +331,7 @@ function RuleList<T extends string>({ app, kind, id, title, intro, outcomes, out
           <li key={r.id}>
             <div className="when">
               {/* With one app connected there is nothing to tell apart, so the app is not named. */}
-              {LIVE_SOURCES.length > 1 && <>{SOURCE_LABEL[r.source]}: </>}
+              {sources.length > 1 && <>{SOURCE_LABEL[r.source]}: </>}
               <Condition r={r} />
               <span className="arrow">→</span>
               <strong>{outcomeOf(r)}</strong>
@@ -361,9 +362,9 @@ function RuleList<T extends string>({ app, kind, id, title, intro, outcomes, out
           setValue("");
         }}
       >
-        {LIVE_SOURCES.length > 1 && (
+        {sources.length > 1 && (
           <select className="f" value={source} aria-label="App" onChange={(e) => setSource(e.target.value as Source | "any")}>
-            {(["any", ...LIVE_SOURCES] as const).map((s) => (
+            {(["any", ...sources] as const).map((s) => (
               <option key={s} value={s}>
                 {SOURCE_LABEL[s]}
               </option>

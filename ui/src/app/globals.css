@@ -38,6 +38,8 @@ button, input, select { font: inherit; color: inherit; }
 .num { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
 .label { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
 .muted { color: var(--muted); }
+/* Read out by a screen reader, not shown. */
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 
 /* Header */
 header.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); border-bottom: 1px solid var(--line); }
@@ -563,4 +565,21 @@ button.t-title:hover, .task-link:hover { color: var(--accent); text-decoration: 
 .brow .bubble { align-self: auto; min-width: 0; }
 img.avatar { object-fit: cover; background: var(--surface-2); }
 .checking { margin: 0; font-size: 12.5px; color: var(--muted); }
+
+/* Pictures, stickers and reactions on a message */
+.pics { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+.pic { display: block; line-height: 0; border-radius: 8px; overflow: hidden; background: var(--surface-2); }
+.pic img { display: block; max-width: min(300px, 100%); max-height: 220px; height: auto; border-radius: 8px; }
+.pic.sticker { background: none; }
+.pic.sticker img { max-width: 120px; max-height: 120px; }
+.pic:focus-visible { outline-offset: 1px; }
+.pic-missing { display: inline-flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 13px; padding: 5px 10px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); overflow-wrap: anywhere; }
+.pic-missing a { color: var(--accent); font-weight: 600; text-decoration: none; white-space: nowrap; }
+.pic-missing a:hover { text-decoration: underline; }
+.reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.reaction { display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; border-radius: 99px; border: 1px solid var(--line); background: var(--surface-2); font-size: 13px; line-height: 1.65; }
+.reaction .num { font-size: 11.5px; color: var(--muted); }
+.reaction.mine { border-color: var(--accent); background: var(--accent-soft); }
+.reaction.mine .num { color: var(--ink); }
+.bubble.me .reaction { background: var(--surface); }
 

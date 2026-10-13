@@ -5,14 +5,14 @@ import { useState } from "react";
 import { Pill } from "@/components/bits";
 import { ago } from "@/core/dates";
 import {
-  checkFathomKey, checkSlackToken, FATHOM_API_ACCESS_URL, LIVE_PROVIDERS, PROVIDER_ABOUT, PROVIDER_NAME, SLACK_CREATE_APP_URL, SLACK_USER_SCOPES,
+  checkFathomKey, checkPhone, checkSlackToken, checkTelegramCode, FATHOM_API_ACCESS_URL, liveProviders, PROVIDER_ABOUT, PROVIDER_NAME, SLACK_CREATE_APP_URL, SLACK_USER_SCOPES,
 } from "@/core/providers";
 import type { JobId, Provider } from "@/core/types";
-import { connectProvider, disconnectProvider, useApp, type App } from "@/store/store";
+import { connectProvider, disconnectProvider, disconnectTelegram, telegramStep, useApp, type App, type TelegramReply } from "@/store/store";
 
 const BADGE: Record<Provider, string> = { slack: "SL", telegram: "TG", fathom: "FA" };
 // The check that reads each service, shown on its card.
-const READER: Partial<Record<Provider, JobId>> = { slack: "slack-pull", fathom: "fathom-pull" };
+const READER: Partial<Record<Provider, JobId>> = { slack: "slack-pull", telegram: "telegram-pull", fathom: "fathom-pull" };
 
 function Step({ title, help, children }: { title: string; help?: React.ReactNode; children?: React.ReactNode }) {
   return (
@@ -126,17 +126,139 @@ function FathomSteps() {
   );
 }
 
-const TelegramNote = () => (
-  <div className="st-help">
-    Telegram cannot be connected yet. It first needs its app keys, which are set up once on our side. After that you will log in here with your phone number and the code Telegram sends you, the same as logging in on a new device.
-  </div>
-);
+type TelegramStage = "phone" | "code" | "password";
 
-const STEPS: Record<Provider, () => React.ReactNode> = { slack: SlackSteps, telegram: TelegramNote, fathom: FathomSteps };
+const TELEGRAM_FIELD: Record<TelegramStage, { label: string; placeholder: string; type: string; button: string; check(value: string): string | null }> = {
+  phone: { label: "Phone number", placeholder: "+44 7700 900123", type: "tel", button: "Send me the code", check: checkPhone },
+  code: { label: "Code from Telegram", placeholder: "12345", type: "text", button: "Continue", check: checkTelegramCode },
+  password: { label: "Telegram password", placeholder: "Your Telegram password", type: "password", button: "Connect Telegram", check: (v) => (v ? null : "Type your Telegram password.") },
+};
+
+/**
+ * Logging in to Telegram, the same as on a new device: the phone number, then the code
+ * Telegram sends, then the account's password if it has one. Each answer goes to the server
+ * on this machine once and is not kept in the browser.
+ */
+function TelegramSteps() {
+  const [stage, setStage] = useState<TelegramStage>("phone");
+  /** Where Telegram sent the code: inside Telegram, by text message, or to an email address. */
+  const [sentTo, setSentTo] = useState<"app" | "sms" | string>("app");
+  const [hint, setHint] = useState<string | undefined>();
+  const [value, setValue] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const field = TELEGRAM_FIELD[stage];
+
+  const take = (reply: TelegramReply) => {
+    setBusy(false);
+    if ("failed" in reply) {
+      setError(reply.failed);
+      // A login that has ended on the server starts over from the phone number.
+      if (stage !== "phone" && /start again|timed out|cancelled|wait/i.test(reply.failed)) setStage("phone");
+      return;
+    }
+    setValue("");
+    if ("connected" in reply) return;
+    setError(reply.error ?? null);
+    if (reply.need === "code") setSentTo(reply.email ?? (reply.viaApp ? "app" : "sms"));
+    else setHint(reply.hint);
+    setStage(reply.need);
+  };
+
+  const form = (
+    <form
+      onSubmit={async (e) => {
+        e.preventDefault();
+        const problem = field.check(value);
+        setError(problem);
+        if (problem) return;
+        setBusy(true);
+        take(await telegramStep(stage === "phone" ? { step: "start", phone: value } : stage === "code" ? { step: "code", code: value.trim() } : { step: "password", password: value }));
+      }}
+    >
+      <div className="key-row">
+        <input
+          className="f"
+          id="telegram-field"
+          type={field.type}
+          inputMode={stage === "code" ? "numeric" : undefined}
+          autoComplete={stage === "code" ? "one-time-code" : "off"}
+          spellCheck={false}
+          value={value}
+          placeholder={field.placeholder}
+          aria-label={field.label}
+          aria-invalid={error != null}
+          aria-describedby={error ? "telegram-field-error" : undefined}
+          onChange={(e) => {
+            setValue(e.target.value);
+            setError(null);
+          }}
+        />
+        <button className="btn primary" type="submit" disabled={busy}>
+          {busy ? "Checking…" : field.button}
+        </button>
+        {stage !== "phone" && (
+          <button
+            className="btn"
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              void telegramStep({ step: "cancel" });
+              setStage("phone");
+              setValue("");
+              setError(null);
+            }}
+          >
+            Start again
+          </button>
+        )}
+      </div>
+      {error && (
+        <div className="field-error" id="telegram-field-error" role="alert">
+          {error}
+        </div>
+      )}
+    </form>
+  );
+
+  return (
+    <>
+      <ol className="steps">
+        <Step title="Type your phone number" help="The number your Telegram account uses, with its country code. Telegram then sends a login code, the same as logging in on a new device.">
+          {stage === "phone" && form}
+        </Step>
+        <Step
+          title="Type the code Telegram sends"
+          help={
+            stage === "phone"
+              ? "It arrives inside Telegram, in the chat called Telegram."
+              : sentTo === "app"
+                ? "Open Telegram on your phone or computer. The code is in the chat called Telegram. Type it here; do not send it to anyone."
+                : sentTo === "sms"
+                  ? "Telegram sent the code to your phone as a text message."
+                  : `Telegram sent the code to the email on your account (${sentTo}).`
+          }
+        >
+          {stage === "code" && form}
+        </Step>
+        {stage === "password" && (
+          <Step title="Type your Telegram password" help={`This account has two-step verification, so Telegram also asks for the password you set there${hint ? ` (your hint: ${hint})` : ""}. It is used once to log in and is not stored.`}>
+            {form}
+          </Step>
+        )}
+      </ol>
+      <div className="st-help">
+        <strong>This stays on this machine.</strong> The login is saved encrypted in a file here, and the chats go into the local database only. Nothing from Telegram reaches the hosted database or the live site. One-to-one chats come in, and a group only when someone tags you or replies to you. Channels and bots are left out.
+      </div>
+    </>
+  );
+}
+
+const STEPS: Record<Provider, () => React.ReactNode> = { slack: SlackSteps, telegram: TelegramSteps, fathom: FathomSteps };
 
 const TURN_OFF: Record<Provider, string> = {
   slack: "Disconnecting removes the stored token and stops the Command Center reading Slack. To remove the access for good, also delete the app in Slack.",
-  telegram: "Disconnecting stops the Command Center reading Telegram. To remove the access for good, also end the session in Telegram under Settings, Devices.",
+  telegram: "Disconnecting signs this connection out of Telegram and deletes the saved login from this machine. The chats already read stay in the local database unless you also remove them. You can check it is gone in Telegram under Settings, Devices.",
   fathom: "Disconnecting removes the stored key and stops new calls coming in. To remove the access for good, also delete the key in Fathom.",
 };
 
@@ -158,7 +280,7 @@ function ProviderCard({ provider, app }: { provider: Provider; app: App }) {
           <h3>{PROVIDER_NAME[provider]}</h3>
           <div className="about">{PROVIDER_ABOUT[provider]}</div>
         </div>
-        {connection.connected ? <Pill tone="s-ok">Connected</Pill> : <Pill tone="p-low">{provider === "telegram" ? "Not available yet" : "Not connected"}</Pill>}
+        {connection.connected ? <Pill tone="s-ok">Connected</Pill> : <Pill tone="p-low">Not connected</Pill>}
       </div>
       <div className="prov-body">
         {connection.connected ? (
@@ -176,10 +298,26 @@ function ProviderCard({ provider, app }: { provider: Provider; app: App }) {
                   Change how often in <Link href="/settings#timers">Settings, Timers</Link>.
                 </div>
               </div>
-              <button className="btn" onClick={() => disconnectProvider(provider)}>
-                Disconnect
-              </button>
+              {provider === "telegram" ? (
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button className="btn" onClick={() => void disconnectTelegram(false)}>
+                    Disconnect
+                  </button>
+                  <button className="btn" onClick={() => void disconnectTelegram(true)}>
+                    Disconnect and remove its chats
+                  </button>
+                </div>
+              ) : (
+                <button className="btn" onClick={() => disconnectProvider(provider)}>
+                  Disconnect
+                </button>
+              )}
             </div>
+            {provider === "slack" && app.state.slackFilesAllowed === false && (
+              <div className="st-help">
+                <strong>Pictures from Slack are not shown yet.</strong> The Slack app is missing one permission. In Slack, open the app&apos;s page, go to OAuth &amp; Permissions, add <code>files:read</code> under <strong>User Token Scopes</strong>, then click Reinstall. If the User OAuth Token changed, disconnect here and paste the new one. Reactions already show.
+              </div>
+            )}
             <div className="st-help">{TURN_OFF[provider]}</div>
           </>
         ) : (
@@ -193,7 +331,8 @@ function ProviderCard({ provider, app }: { provider: Provider; app: App }) {
 export default function ConnectionsPage() {
   const app = useApp();
   if (!app) return null;
-  const connected = LIVE_PROVIDERS.filter((p) => app.state.connections[p].connected).length;
+  const providers = liveProviders(app.state.telegramAvailable);
+  const connected = providers.filter((p) => app.state.connections[p].connected).length;
 
   return (
     <section className="view">
@@ -201,17 +340,17 @@ export default function ConnectionsPage() {
         <div>
           <h2>Connections</h2>
           <div className="muted" style={{ fontSize: 14 }}>
-            Connect the places your messages and calls come from. {connected} of {LIVE_PROVIDERS.length} connected. A key you paste here is checked, stored encrypted, and never shown again.
+            Connect the places your messages and calls come from. {connected} of {providers.length} connected. A key you paste here is checked, stored encrypted, and never shown again.
           </div>
         </div>
       </div>
       <div className="prov-list">
-        {LIVE_PROVIDERS.map((p) => (
+        {providers.map((p) => (
           <ProviderCard key={p} provider={p} app={app} />
         ))}
       </div>
       <p className="muted" style={{ fontSize: 13.5, marginTop: 16 }}>
-        Coming later: Email, Calendar and WhatsApp.
+        Coming later: {app.state.telegramAvailable ? "" : "Telegram, "}Email, Calendar and WhatsApp.
       </p>
     </section>
   );

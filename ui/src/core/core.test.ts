@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { addDays, dueLabel, weekStart } from "./dates";
 import { assignmentText, candidates, canAssign, canAssignInChat, fitFor, taskStatus } from "./delegation";
-import { clampInterval, describeInterval, isDue, JOBS, LIVE_JOBS, nextRunAt, waitUntil } from "./jobs";
+import { clampInterval, describeInterval, isDue, JOBS, liveJobs, nextRunAt, waitUntil } from "./jobs";
 import { looksLikeRequest, requestDue, requestSummary, whereAsked } from "./requests";
 import { findChoices } from "./search";
 import { checkFathomKey, checkPhone, checkSlackToken, checkTelegramCode, maskPhone, normalizePhone, SLACK_CREATE_APP_URL } from "./providers";
@@ -103,6 +103,8 @@ describe("delegation", () => {
 
   it("can announce an assignment in a channel or a group message, but not in a one-to-one chat", () => {
     expect([canAssignInChat({ ctx: "#sales" }), canAssignInChat({ ctx: "Group message" }), canAssignInChat({ ctx: "Direct message" }), canAssignInChat({ ctx: "App notification" })]).toEqual([true, true, false, false]);
+    // A Telegram group is not a place for a Slack assignment, even one whose name starts with #.
+    expect(canAssignInChat({ ctx: "#launch", source: "telegram" })).toBe(false);
   });
 
   it("words the message for a direct message, and tags the person when it goes in a chat", () => {
@@ -188,7 +190,9 @@ describe("timers", () => {
 
   it("leaves out the checks that cannot work yet", () => {
     expect(JOBS.filter((j) => !j.live).map((j) => j.id)).toEqual(["telegram-pull", "task-suggest"]);
-    expect(LIVE_JOBS.map((j) => j.id)).toEqual(["slack-pull", "fathom-pull", "inbox-rules", "request-finder", "slack-directory-sync", "outbox-retry"]);
+    expect(liveJobs(false).map((j) => j.id)).toEqual(["slack-pull", "fathom-pull", "inbox-rules", "request-finder", "slack-directory-sync", "outbox-retry"]);
+    // Where Telegram can be used, its check joins them; the AI one still waits for credit.
+    expect(liveJobs(true).map((j) => j.id)).toEqual(["slack-pull", "telegram-pull", "fathom-pull", "inbox-rules", "request-finder", "slack-directory-sync", "outbox-retry"]);
   });
 
   it("keeps a timer at or above the fastest allowed", () => {
@@ -300,10 +304,11 @@ describe("connection forms", () => {
     expect(maskPhone("not a number")).toBe("");
   });
 
-  it("takes a 5-digit Telegram code", () => {
-    expect(checkTelegramCode(" 12345 ")).toBeNull();
-    expect(checkTelegramCode("1234")).toMatch(/5 digits/);
-    expect(checkTelegramCode("12a45")).toMatch(/5 digits/);
+  it("takes a Telegram code of 5 digits, or the 6 it sends by email", () => {
+    expect([checkTelegramCode(" 12345 "), checkTelegramCode("123456")]).toEqual([null, null]);
+    expect(checkTelegramCode("1234")).toMatch(/5 or 6 digits/);
+    expect(checkTelegramCode("1234567")).toMatch(/5 or 6 digits/);
+    expect(checkTelegramCode("12a45")).toMatch(/5 or 6 digits/);
   });
 
   it("builds a Slack link that carries the whole manifest", () => {

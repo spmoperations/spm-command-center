@@ -2,6 +2,22 @@
 // and answer "is this person tagged here?". Plain logic, no network. Bold, italics, code and
 // lists are left as Slack wrote them; `core/message-format.ts` lays them out on screen.
 import { emojify } from "node-emoji";
+// Slack's own names for the standard emoji ("thumbsup", "rolling_on_the_floor_laughing",
+// "flag-in"), made from the emoji-data project's list (MIT), which is where Slack's names
+// come from. A general emoji library knows many of them under other names.
+import slackEmoji from "./slack-emoji.json";
+import type { Reaction } from "./types";
+
+const SLACK_EMOJI = new Map(Object.entries(slackEmoji as Record<string, string>));
+
+/** The emoji a Slack name stands for. Undefined for a workspace's own custom emoji, which have no picture here. */
+function emojiNamed(name: string): string | undefined {
+  const known = SLACK_EMOJI.get(name);
+  if (known) return known;
+  const code = `:${name}:`;
+  const found = emojify(code);
+  return found === code ? undefined : found;
+}
 
 const ENTITIES: Record<string, string> = { "&amp;": "&", "&lt;": "<", "&gt;": ">" };
 
@@ -21,15 +37,38 @@ export function slackToText(raw: string, names: (userId: string) => string | und
     .replace(/<((?:https?|mailto|tel):[^>]+)>/g, (_, url: string) => url.replace(/^(?:mailto|tel):/, ""))
     .replace(/&(amp|lt|gt);/g, (m) => ENTITIES[m])
     // ":raised_hands:" becomes the emoji itself. A workspace's own custom emoji have no picture
-    // here, so their names are dropped along with skin-tone markers.
+    // here, so their names are dropped along with skin-tone markers. Numbers between colons
+    // are left alone: "10:30:00" is a time, not an emoji.
     .replace(/:skin-tone-\d:/g, "")
-    .replace(/:[a-z0-9_+-]+:/g, (code) => {
-      const emoji = emojify(code);
-      return emoji === code ? "" : emoji;
-    })
+    .replace(/:[a-z0-9_+-]+:/g, (code) => emojiNamed(code.slice(1, -1)) ?? (/[a-z]/.test(code) ? "" : code))
     .replace(/[ \t]+\n/g, "\n")
     .replace(/ {2,}/g, " ")
     .trim();
+}
+
+/**
+ * A reaction's name as the emoji itself: "thumbsup" becomes the thumb. A workspace's own
+ * custom emoji has no picture here, so it stays as ":name:". Skin tones are left off.
+ */
+export function reactionEmoji(name: string): string {
+  const base = name.split("::")[0];
+  return emojiNamed(base) ?? `:${base}:`;
+}
+
+/** The reactions on a Slack message, as Slack lists them, ready to show. */
+export function slackReactions(raw: unknown, myId: string): Reaction[] {
+  if (!Array.isArray(raw)) return [];
+  // The same emoji in two skin tones is one reaction here.
+  const merged = new Map<string, Reaction>();
+  for (const r of raw as { name?: string; count?: number; users?: string[] }[]) {
+    if (!r?.name) continue;
+    const emoji = reactionEmoji(r.name);
+    const entry = merged.get(emoji) ?? { emoji, count: 0 };
+    entry.count += r.count ?? r.users?.length ?? 1;
+    if (r.users?.includes(myId)) entry.mine = true;
+    merged.set(emoji, entry);
+  }
+  return [...merged.values()];
 }
 
 /** Slack shortens the visible part of a pasted link; it is still the same link. */

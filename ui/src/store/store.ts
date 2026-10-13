@@ -205,7 +205,7 @@ const THREADS_EVERY_MS = 2 * 60_000;
  * brings in threads the owner is part of; this fills in the rest for the one being looked at.
  */
 export async function readThreads(id: string) {
-  if (!id.startsWith("slack:") || Date.now() - (threadsRead.get(id) ?? 0) < THREADS_EVERY_MS) return;
+  if (!(id.startsWith("slack:") || id.startsWith("telegram:")) || Date.now() - (threadsRead.get(id) ?? 0) < THREADS_EVERY_MS) return;
   threadsRead.set(id, Date.now());
   setUi({ checking: [...ui.checking, id] });
   try {
@@ -356,3 +356,40 @@ export async function connectProvider(provider: Provider, secret: string): Promi
 }
 
 export const disconnectProvider = (provider: Provider) => void act("disconnectProvider", [provider], `${PROVIDER_NAME[provider]} disconnected`);
+
+/** What the Telegram login needs next, or that it is done. */
+export type TelegramReply =
+  | { need: "code"; viaApp: boolean; email?: string; error?: string }
+  | { need: "password"; hint?: string; error?: string }
+  | { connected: true; label: string }
+  | { failed: string };
+
+/**
+ * One step of connecting Telegram: the phone number, the code, or the password. What is typed
+ * goes straight to the server on this machine and is never kept in the browser.
+ */
+export async function telegramStep(body: { step: "start"; phone: string } | { step: "code"; code: string } | { step: "password"; password: string } | { step: "cancel" }): Promise<TelegramReply> {
+  try {
+    const reply = await request<TelegramReply & { state?: AppState }>("/api/telegram", body);
+    if ("connected" in reply) {
+      if (reply.state) setState(reply.state);
+      toast(`Telegram connected: ${reply.label}. Reading it now.`);
+      // The first read runs in the background on the server; look again once it has had time.
+      setTimeout(() => void refresh(), 12_000);
+    }
+    return reply;
+  } catch (error) {
+    return { failed: (error as Error).message };
+  }
+}
+
+/** Signs out of Telegram and removes the login from this machine. `forget` also deletes the chats that were read. */
+export async function disconnectTelegram(forget: boolean) {
+  try {
+    const { state } = await request<{ state: AppState }>("/api/telegram", { step: "disconnect", forget });
+    setState(state);
+    toast(forget ? "Telegram disconnected, and its chats removed from this machine" : "Telegram disconnected");
+  } catch (error) {
+    toast((error as Error).message);
+  }
+}

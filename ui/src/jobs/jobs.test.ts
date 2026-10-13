@@ -1,19 +1,21 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { mentionsUser, redactSecrets, slackToText } from "@/core/slack-text";
+import { mentionsUser, reactionEmoji, redactSecrets, slackReactions, slackToText } from "@/core/slack-text";
 import { FIELDS, message, SYSTEM } from "@/prompts/task-finder";
 import type { FoundTask } from "@/server/ai";
 import { connect } from "@/server/connections";
 import type { Db } from "@/server/db";
 import type { FathomMeeting } from "@/server/fathom";
 import { loadState, OWNER_ID } from "@/server/repo";
-import { RateLimited } from "@/server/slack";
-import { fakeSlack, NOW, reset, seed, testDb } from "@/server/testing";
+import { pictureResponse, SLACK_NEEDS_FILES } from "@/server/pictures";
+import { seal } from "@/server/secrets";
+import { RateLimited, slackClient } from "@/server/slack";
+import { fakeSlack, NOW, reset, seed, testDb, TINY } from "@/server/testing";
 import { fathomPull, toMeeting } from "./fathom";
 import { outboxSend } from "./outbox";
 import { requestFinder } from "./request-finder";
 import { JOBS } from "@/core/jobs";
 import { runJob, runNow, syncAll, tick, type JobContext } from "./runner";
-import { slackDirectorySync, slackPull, slackReadThreads, wanted } from "./slack";
+import { slackDirectorySync, slackPictures, slackPull, slackReadThreads, wanted } from "./slack";
 import { taskSuggest } from "./task-suggest";
 
 let db: Db;
@@ -33,9 +35,42 @@ describe("Slack text", () => {
     expect(slackToText("<@U404> ping <https://a.co>", names)).toBe("@someone ping https://a.co");
   });
 
+  it("reads Slack's emoji names in a message, drops a custom one, and leaves a time alone", () => {
+    expect(slackToText("great work :rolling_on_the_floor_laughing: :partyparrot: :thumbsup::skin-tone-3:")).toBe("great work 🤣 👍");
+    expect(slackToText("The call moved to 10:30:00, ratio 1:2:3")).toBe("The call moved to 10:30:00, ratio 1:2:3");
+  });
+
   it("removes anything that looks like a key before text goes to the AI", () => {
     expect(redactSecrets("here is the token xoxb-123456789012-abcdefghij and sk-ant-api03-abcdefghijklmnopqrstuvwx ok")).toBe("here is the token [key removed] and [key removed] ok");
     expect(redactSecrets("ask-me-anything about risk-taking, and the xoxo gang")).toBe("ask-me-anything about risk-taking, and the xoxo gang");
+  });
+
+  it("turns a reaction's name into the emoji, and names the ones it has no picture for", () => {
+    expect([reactionEmoji("thumbsup"), reactionEmoji("+1::skin-tone-4"), reactionEmoji("partyparrot")]).toEqual(["👍", "👍", ":partyparrot:"]);
+    // Slack's own names, which a general emoji list knows under other names or not at all.
+    expect(["rolling_on_the_floor_laughing", "heart_hands", "flag-in", "male_mage", "white_check_mark"].map(reactionEmoji)).toEqual(["🤣", "🫶", "🇮🇳", "🧙‍♂️", "✅"]);
+    expect(["constructor", "toString", "__proto__"].map(reactionEmoji)).toEqual([":constructor:", ":toString:", ":__proto__:"]);
+    // Two skin tones of one emoji are one reaction. The owner's own is marked.
+    expect(slackReactions([{ name: "+1", users: ["U1"], count: 1 }, { name: "+1::skin-tone-2", users: ["UME"], count: 1 }, { name: "tada", users: ["U2", "U3"], count: 2 }], "UME")).toEqual([{ emoji: "👍", count: 2, mine: true }, { emoji: "🎉", count: 2 }]);
+    expect(slackReactions(undefined, "UME")).toEqual([]);
+  });
+
+  it("keeps the pictures among a message's files, and nothing else", () => {
+    const at = "https://files.slack.com/files-";
+    expect(slackPictures([
+      { name: "a.jpg", mimetype: "image/jpeg", mode: "hosted", original_w: 400, original_h: 300, url_private: `${at}pri/a.jpg`, thumb_360: `${at}tmb/a_360.jpg`, thumb_480: `${at}tmb/a_480.jpg`, permalink: "https://spm.slack.com/files/a" },
+      { name: "dance.gif", mimetype: "image/gif", mode: "hosted", url_private: `${at}pri/dance.gif`, thumb_360: `${at}tmb/dance_360.png`, thumb_360_gif: `${at}tmb/dance_360.gif` },
+      { name: "clip.mp4", mimetype: "video/mp4", mode: "hosted", url_private: `${at}pri/clip.mp4`, thumb_360: `${at}tmb/clip.png` },
+      { name: "plan.pdf", mimetype: "application/pdf", mode: "hosted", url_private: `${at}pri/plan.pdf`, thumb_360: `${at}tmb/plan.png` },
+      { name: "logo.svg", mimetype: "image/svg+xml", mode: "hosted", url_private: `${at}pri/logo.svg` },
+      { name: "drive.png", mimetype: "image/png", mode: "external", url_private: "https://drive.example/drive.png" },
+      { name: "elsewhere.png", mimetype: "image/png", mode: "hosted", url_private: "https://elsewhere.example/x.png", thumb_360: "https://elsewhere.example/x_360.png" },
+    ])).toEqual([
+      { kind: "image", name: "a.jpg", w: 400, h: 300, thumb: `${at}tmb/a_480.jpg`, url: `${at}pri/a.jpg`, link: "https://spm.slack.com/files/a" },
+      // A moving picture keeps moving: its own small moving copy is the one shown.
+      { kind: "image", name: "dance.gif", w: undefined, h: undefined, thumb: `${at}tmb/dance_360.gif`, url: `${at}pri/dance.gif`, link: undefined },
+    ]);
+    expect(slackPictures(undefined)).toEqual([]);
   });
 
   it("knows when a person is tagged", () => {
@@ -178,6 +213,27 @@ describe("Slack jobs", () => {
     expect((await loadState(db)).avatars).toEqual({ "Jeremy Moser": "https://pics.example/jeremy-72.png", "Maya Chen": "https://pics.example/maya-48.png" });
   });
 
+  it("notes what the Slack app may do, so the dashboard knows whether it can show pictures", async () => {
+    await db.run("insert into connections (owner_id, provider, secret, label, connected_at) values ($1, 'slack', $2, 'jeremy · SPM', $3)", [OWNER_ID, seal("xoxp-test-token"), NOW]);
+    expect((await loadState(db)).slackFilesAllowed).toBeNull();
+    await slackDirectorySync(ctx(), { ...directory(), scopes: () => ["channels:history", "search:read"] });
+    expect((await loadState(db)).slackFilesAllowed).toBe(false);
+    await slackDirectorySync(ctx(), { ...directory(), scopes: () => ["channels:history", "search:read", "files:read"] });
+    expect((await loadState(db)).slackFilesAllowed).toBe(true);
+    // Opening a conversation asks Slack something too, so a permission added since is noticed there.
+    await db.run("insert into conversations (id, owner_id, source, external_id, from_name, ctx, last_at) values ('slack:C9', $1, 'slack', 'C9', 'Maya Chen', '#plans', $2)", [OWNER_ID, NOW]);
+    await db.run("insert into messages (id, conversation_id, owner_id, external_id, sender_name, body, at) values ('slack:C9:1.0', 'slack:C9', $1, '1.0', 'Maya Chen', 'Hello', $2)", [OWNER_ID, NOW]);
+    const opened = { ...fakeSlack({ "conversations.history": () => ({ messages: [{ ts: "1.0", user: "U1", text: "Hello" }] }) }), scopes: () => ["channels:history"] };
+    expect(await slackReadThreads({ db, ownerId: OWNER_ID }, opened, "slack:C9")).toEqual({ added: 0, changed: 1 });
+    expect((await loadState(db)).slackFilesAllowed).toBe(false);
+    expect(await slackReadThreads({ db, ownerId: OWNER_ID }, opened, "slack:C9")).toEqual({ added: 0, changed: 0 });
+    // The real client reads it from what Slack sends back with every answer.
+    const client = slackClient("xoxp-test-token", async () => new Response(JSON.stringify({ ok: true }), { headers: { "x-oauth-scopes": "channels:history, files:read" } }));
+    expect(client.scopes?.()).toBeNull();
+    await client.call("auth.test");
+    expect(client.scopes?.()).toEqual(["channels:history", "files:read"]);
+  });
+
   it("looks up the picture of someone from another company once, whether or not they have one", async () => {
     await slackDirectorySync(ctx(), directory());
     await db.run("insert into slack_users (owner_id, id, name, is_bot) values ($1, 'UEXT', 'Dana Okafor', false), ($1, 'UGONE', 'No Longer There', false)", [OWNER_ID]);
@@ -211,7 +267,7 @@ describe("Slack jobs", () => {
     it("asks Slack once which messages have replies, and reads only the threads that are missing", async () => {
       await setUp();
       const s = slack();
-      expect(await slackReadThreads({ db, ownerId: OWNER_ID }, s, "slack:C2")).toBe(1);
+      expect(await slackReadThreads({ db, ownerId: OWNER_ID }, s, "slack:C2")).toEqual({ added: 1, changed: 0 });
       expect(s.calls).toEqual([
         ["conversations.history", { channel: "C2", oldest: first, inclusive: true, limit: 200 }],
         ["conversations.replies", { channel: "C2", ts: first, limit: 200 }],
@@ -220,15 +276,99 @@ describe("Slack jobs", () => {
       expect(thread.map((m) => [m.text, m.thread])).toEqual([["Who signs off the pay change?", first], ["Finance says it needs an owner", first], ["Lunch is here", undefined]]);
     });
 
-    it("reads nothing a second time, and nothing for a conversation that is not there", async () => {
+    it("adds nothing a second time, and asks nothing for a conversation that is not there", async () => {
       await setUp();
       await slackReadThreads({ db, ownerId: OWNER_ID }, slack(), "slack:C2");
       const again = slack();
-      expect(await slackReadThreads({ db, ownerId: OWNER_ID }, again, "slack:C2")).toBe(0);
-      expect(again.calls.map(([m]) => m)).toEqual(["conversations.history"]);
+      expect(await slackReadThreads({ db, ownerId: OWNER_ID }, again, "slack:C2")).toEqual({ added: 0, changed: 0 });
+      // The thread is read once more all the same: that is where the reactions on its replies are.
+      expect(again.calls.map(([m]) => m)).toEqual(["conversations.history", "conversations.replies"]);
       const none = slack();
-      expect(await slackReadThreads({ db, ownerId: OWNER_ID }, none, "slack:NOPE")).toBe(0);
+      expect(await slackReadThreads({ db, ownerId: OWNER_ID }, none, "slack:NOPE")).toEqual({ added: 0, changed: 0 });
       expect(none.calls).toEqual([]);
+    });
+
+    const board = { name: "IMG_0412.png", title: "Board photo", mimetype: "image/png", mode: "hosted", original_w: 1600, original_h: 1200, url_private: "https://files.slack.com/files-pri/T1-F1/img_0412.png", thumb_360: "https://files.slack.com/files-tmb/T1-F1-a/img_0412_360.png", thumb_720: "https://files.slack.com/files-tmb/T1-F1-a/img_0412_720.png", permalink: "https://spm.slack.com/files/U1/F1/img_0412.png" };
+    const clip = { name: "walkthrough.mp4", mimetype: "video/mp4", mode: "hosted", url_private: "https://files.slack.com/files-pri/T1-F2/walkthrough.mp4", thumb_360: "https://files.slack.com/files-tmb/T1-F2-b/walkthrough_360.png" };
+    const withExtras = (reactions: unknown[]) =>
+      fakeSlack({
+        "conversations.history": () => ({ messages: [{ ts: plain, user: "U1", text: "Lunch is here", files: [board, clip], reactions }, { ts: first, user: "U1", text: "Who signs off the pay change?" }] }),
+      });
+
+    it("shows the pictures and reactions on messages already here, and leaves a video out", async () => {
+      await setUp();
+      expect(await slackReadThreads({ db, ownerId: OWNER_ID }, withExtras([{ name: "+1", users: ["U1", "UME"], count: 2 }, { name: "partyparrot", users: ["U1"], count: 1 }]), "slack:C2")).toEqual({ added: 0, changed: 1 });
+      const lunch = (await loadState(db)).inbox.find((c) => c.id === "slack:C2")!.thread.find((m) => m.text === "Lunch is here")!;
+      const at = `/api/media?m=${encodeURIComponent(`slack:C2:${plain}`)}&n=0`;
+      expect(lunch.attachments).toEqual([{ kind: "image", name: "Board photo", w: 1600, h: 1200, src: at, full: `${at}&full=1`, link: board.permalink }]);
+      // The owner's own reaction is picked out. A workspace's own emoji has no picture, so it is named.
+      expect(lunch.reactions).toEqual([{ emoji: "👍", count: 2, mine: true }, { emoji: ":partyparrot:", count: 1 }]);
+    });
+
+    it("follows a reaction that is added or taken away later", async () => {
+      await setUp();
+      await slackReadThreads({ db, ownerId: OWNER_ID }, withExtras([{ name: "eyes", users: ["U1"], count: 1 }]), "slack:C2");
+      const reactions = async () => (await loadState(db)).inbox.find((c) => c.id === "slack:C2")!.thread.find((m) => m.text === "Lunch is here")!.reactions;
+      expect(await reactions()).toEqual([{ emoji: "👀", count: 1 }]);
+      expect(await slackReadThreads({ db, ownerId: OWNER_ID }, withExtras([{ name: "eyes", users: ["U1", "UME"], count: 2 }]), "slack:C2")).toEqual({ added: 0, changed: 1 });
+      expect(await reactions()).toEqual([{ emoji: "👀", count: 2, mine: true }]);
+      await slackReadThreads({ db, ownerId: OWNER_ID }, withExtras([]), "slack:C2");
+      expect(await reactions()).toBeUndefined();
+    });
+
+    describe("handing a Slack picture to the browser", () => {
+      const query = (more = "") => new URLSearchParams(`m=${encodeURIComponent(`slack:C2:${plain}`)}&n=0${more}`);
+      const asked: [string, string | null, RequestRedirect | undefined][] = [];
+      const slackFiles = (answer: () => Response): typeof fetch => async (url, init) => {
+        asked.push([String(url), new Headers(init?.headers).get("authorization"), init?.redirect]);
+        return answer();
+      };
+      const png = () => new Response(new Uint8Array(TINY.png), { status: 200, headers: { "content-type": "image/png" } });
+      const ready = async (scopes: string | null) => {
+        asked.length = 0;
+        await setUp();
+        await slackReadThreads({ db, ownerId: OWNER_ID }, withExtras([]), "slack:C2");
+        await db.run("insert into connections (owner_id, provider, secret, label, connected_at, scopes) values ($1, 'slack', $2, 'jeremy · SPM', $3, $4)", [OWNER_ID, seal("xoxp-test-token"), NOW, scopes]);
+      };
+
+      it("fetches it from Slack with the owner's token, and passes it on as a picture and nothing else", async () => {
+        await ready("channels:history,files:read");
+        const res = await pictureResponse(db, OWNER_ID, query(), slackFiles(png));
+        expect([res.status, res.headers.get("content-type"), res.headers.get("x-content-type-options"), res.headers.get("content-security-policy")]).toEqual([200, "image/png", "nosniff", "default-src 'none'; sandbox"]);
+        expect(Buffer.from(await res.arrayBuffer()).equals(TINY.png)).toBe(true);
+        await pictureResponse(db, OWNER_ID, query("&full=1"), slackFiles(png));
+        // The smaller copy for the conversation, the full picture when asked. A redirect is never followed.
+        expect(asked).toEqual([[board.thumb_720, "Bearer xoxp-test-token", "manual"], [board.url_private, "Bearer xoxp-test-token", "manual"]]);
+        expect((await loadState(db)).slackFilesAllowed).toBe(true);
+      });
+
+      it("does not ask Slack at all while the app is known not to have the permission", async () => {
+        await ready("channels:history,search:read");
+        const res = await pictureResponse(db, OWNER_ID, query(), slackFiles(png));
+        expect([res.status, ((await res.json()) as { error: string }).error]).toEqual([403, SLACK_NEEDS_FILES]);
+        expect(asked).toEqual([]);
+        expect((await loadState(db)).slackFilesAllowed).toBe(false);
+      });
+
+      it("passes on nothing that is not a picture: Slack's login page, or a file of another kind", async () => {
+        await ready(null);
+        expect((await loadState(db)).slackFilesAllowed).toBeNull();
+        const login = await pictureResponse(db, OWNER_ID, query(), slackFiles(() => new Response(null, { status: 302, headers: { location: "https://slack.com/signin" } })));
+        const page = await pictureResponse(db, OWNER_ID, query(), slackFiles(() => new Response("<html>", { status: 200, headers: { "content-type": "text/html; charset=utf-8" } })));
+        const drawing = await pictureResponse(db, OWNER_ID, query(), slackFiles(() => new Response("<svg onload='x()'/>", { status: 200, headers: { "content-type": "image/svg+xml" } })));
+        expect([login.status, page.status, drawing.status]).toEqual([403, 403, 403]);
+      });
+
+      it("sends the token nowhere but Slack's file server, and answers for no other message", async () => {
+        await ready("files:read");
+        await db.run("update messages set attachments = $1::jsonb where id = $2", [JSON.stringify([{ kind: "image", name: "x", thumb: "https://files.slack.com.evil.example/x.png", url: "http://files.slack.com/x.png" }]), `slack:C2:${plain}`]);
+        expect((await pictureResponse(db, OWNER_ID, query(), slackFiles(png))).status).toBe(404);
+        expect((await pictureResponse(db, OWNER_ID, query("&full=1"), slackFiles(png))).status).toBe(404);
+        expect((await pictureResponse(db, OWNER_ID, new URLSearchParams("m=slack:C2:nope&n=0"), slackFiles(png))).status).toBe(404);
+        expect((await pictureResponse(db, OWNER_ID, new URLSearchParams(query().toString().replace("n=0", "n=7")), slackFiles(png))).status).toBe(404);
+        expect((await pictureResponse(db, "someone-else", query(), slackFiles(png))).status).toBe(404);
+        expect(asked).toEqual([]);
+      });
     });
   });
 

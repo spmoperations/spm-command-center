@@ -1,16 +1,19 @@
 import { slackReadThreads } from "@/jobs/slack";
+import { telegramRefresh } from "@/jobs/telegram";
 import { ready } from "@/server/boot";
 import { secretFor } from "@/server/connections";
 import { failed, fromDashboard, refused, signedIn, signInFirst } from "@/server/http";
 import { loadState, OWNER_ID } from "@/server/repo";
 import { RateLimited, slackClient } from "@/server/slack";
+import { telegramAccount, telegramApi, telegramAvailable } from "@/server/telegram";
 
 export const maxDuration = 60;
 
 /**
- * { id } reads the threads under the messages of one conversation, when a person opens it.
- * Read-only on Slack's side. Answers with how many messages were added, and the fresh state
- * when there were any.
+ * { id } brings one conversation up to date when a person opens it. On Slack: the threads
+ * under its messages, and the pictures and reactions on them. On Telegram: anything written
+ * since the last check, and the reactions as they are now. Read-only on the other side.
+ * Answers with how many messages were added, and the fresh state when anything changed.
  */
 export async function POST(request: Request) {
   if (!fromDashboard(request)) return refused();
@@ -19,10 +22,20 @@ export async function POST(request: Request) {
     const { id } = (await request.json()) as { id?: unknown };
     if (typeof id !== "string") return failed(new Error("Which conversation?"));
     const db = await ready();
+    if (id.startsWith("telegram:")) {
+      if (!telegramAvailable() || !telegramAccount()) return Response.json({ added: 0 });
+      const telegram = await telegramApi();
+      try {
+        const { added, changed } = await telegramRefresh({ db, ownerId: OWNER_ID, now: Date.now() }, telegram, id);
+        return Response.json(added || changed ? { added, state: await loadState(db) } : { added });
+      } finally {
+        await telegram.close();
+      }
+    }
     const token = await secretFor(db, OWNER_ID, "slack");
     if (!token) return Response.json({ added: 0 });
-    const added = await slackReadThreads({ db, ownerId: OWNER_ID }, slackClient(token), id);
-    return Response.json(added ? { added, state: await loadState(db) } : { added });
+    const { added, changed } = await slackReadThreads({ db, ownerId: OWNER_ID }, slackClient(token), id);
+    return Response.json(added || changed ? { added, state: await loadState(db) } : { added });
   } catch (error) {
     // Slack asking for a pause is not worth an error on screen: the threads come next time.
     if (error instanceof RateLimited) return Response.json({ added: 0 });

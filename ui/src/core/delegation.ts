@@ -51,8 +51,12 @@ export const SLACK_PICK = "slack:";
 export type AssignWhere = "dm" | "chat" | `channel:${string}`;
 export const CHANNEL_PICK = "channel:";
 
-/** A channel or a group message can carry an assignment. A one-to-one chat cannot: the person assigned is not in it. */
-export const canAssignInChat = (c: { ctx: string }) => c.ctx.startsWith("#") || c.ctx === "Group message";
+/**
+ * A Slack channel or group message can carry an assignment. A one-to-one chat cannot: the
+ * person assigned is not in it. Nor can a Telegram chat, whatever it is called: assignments
+ * are announced on Slack.
+ */
+export const canAssignInChat = (c: { ctx: string; source?: string }) => c.source !== "telegram" && (c.ctx.startsWith("#") || c.ctx === "Group message");
 
 /**
  * The message that announces a task. In a chat or channel it starts by tagging the person,

@@ -1,17 +1,19 @@
 // Runs the checks. Each job is one function in this folder; this file decides when a job is
 // due, gives it its bookmark, records the result, and backs off when a service asks it to wait.
-import { isDue, jobById, JOBS, waitUntil } from "@/core/jobs";
+import { isDue, jobById, JOBS, liveJobs, waitUntil } from "@/core/jobs";
 import type { JobId, JobSetting } from "@/core/types";
 import { aiConfigured } from "@/server/ai";
 import { secretFor } from "@/server/connections";
 import type { Db } from "@/server/db";
 import { OWNER_ID, resortInbox, sendingEnabled } from "@/server/repo";
 import { RateLimited, slackClient } from "@/server/slack";
+import { telegramAccount, telegramApi, telegramAvailable, telegramBlocked } from "@/server/telegram";
 import { fathomPull } from "./fathom";
 import { outboxSend } from "./outbox";
 import { requestFinder } from "./request-finder";
 import { slackDirectorySync, slackPull } from "./slack";
 import { taskSuggest } from "./task-suggest";
+import { telegramPull } from "./telegram";
 
 export interface JobContext {
   db: Db;
@@ -65,11 +67,28 @@ async function execute(jobId: JobId, ctx: JobContext): Promise<JobResult> {
       return taskSuggest(ctx);
     case "outbox-retry": {
       const token = await secretFor(ctx.db, ctx.ownerId, "slack");
-      return outboxSend(ctx, token ? slackClient(token) : null);
+      // Telegram is opened only if something is waiting to go there.
+      return outboxSend(ctx, token ? slackClient(token) : null, telegramAccount() ? telegramApi : null);
     }
-    case "telegram-pull":
-      throw new NotReady("Telegram is not connected");
+    case "telegram-pull": {
+      const blocked = telegramBlocked();
+      if (blocked) throw new NotReady(blocked);
+      if (!telegramAccount()) throw new NotReady("Telegram is not connected");
+      const telegram = await telegramApi();
+      try {
+        return await telegramPull(ctx, telegram);
+      } finally {
+        await telegram.close();
+      }
+    }
   }
+}
+
+/** The services that are connected. Slack and Fathom are rows in the database; Telegram's login is a file on this machine. */
+async function connectedTo(db: Db, ownerId: string): Promise<Set<string>> {
+  const connected = new Set((await db.query<{ provider: string }>("select provider from connections where owner_id = $1", [ownerId])).map((r) => r.provider));
+  if (telegramAccount()) connected.add("telegram");
+  return connected;
 }
 
 const running = new Set<string>();
@@ -119,13 +138,14 @@ export async function runJob(db: Db, jobId: JobId, ownerId = OWNER_ID, now = Dat
 /** Runs every job whose timer is up. Called once a minute. */
 export async function tick(db: Db, ownerId = OWNER_ID, now = Date.now()): Promise<JobRun[]> {
   const rows = await db.query<{ job_id: JobId; interval_min: number; enabled: boolean; last_run_at: number | null; not_before: number | null }>("select job_id, interval_min, enabled, last_run_at, not_before from jobs where owner_id = $1", [ownerId]);
-  const connected = new Set((await db.query<{ provider: string }>("select provider from connections where owner_id = $1", [ownerId])).map((r) => r.provider));
+  const connected = await connectedTo(db, ownerId);
+  const live = new Set(liveJobs(telegramAvailable()).map((j) => j.id));
   const runs: JobRun[] = [];
   // In the order they are defined: the people and channel list before messages, messages before tasks.
   for (const def of [...JOBS].sort((a, b) => Number(b.id === "slack-directory-sync") - Number(a.id === "slack-directory-sync"))) {
     const row = rows.find((r) => r.job_id === def.id);
     // A check that cannot work yet is not run on a timer. It can still be run by hand.
-    if (!row || def.follows || !def.live) continue;
+    if (!row || def.follows || !live.has(def.id)) continue;
     // A job whose source is not connected is skipped quietly, not logged as a failure every minute.
     if (def.needs && (def.needs === "ai" ? !aiConfigured() : !connected.has(def.needs))) continue;
     const setting: JobSetting = { id: def.id, intervalMin: row.interval_min, enabled: row.enabled };
@@ -143,10 +163,11 @@ export async function tick(db: Db, ownerId = OWNER_ID, now = Date.now()): Promis
  * says. The people and channel list goes first, then messages, then calls.
  */
 export async function syncAll(db: Db, ownerId = OWNER_ID): Promise<JobRun[]> {
-  const connected = new Set((await db.query<{ provider: string }>("select provider from connections where owner_id = $1", [ownerId])).map((r) => r.provider));
+  const connected = await connectedTo(db, ownerId);
+  const live = new Set(liveJobs(telegramAvailable()).map((j) => j.id));
   const runs: JobRun[] = [];
   for (const def of [...JOBS].sort((a, b) => Number(b.id === "slack-directory-sync") - Number(a.id === "slack-directory-sync"))) {
-    if (!def.live || def.follows) continue;
+    if (!live.has(def.id) || def.follows) continue;
     if (def.needs && (def.needs === "ai" ? !aiConfigured() : !connected.has(def.needs))) continue;
     // Nothing leaves the outbox while sending is switched off.
     if (def.id === "outbox-retry" && !sendingEnabled()) continue;

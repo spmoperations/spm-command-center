@@ -7,6 +7,28 @@ export type Line = "agency" | "consulting";
 /** The two sides of the dashboard. The switch in the header shows one at a time. */
 export type Mode = "professional" | "personal";
 
+/** A picture or sticker sent with a message. Videos are never shown. */
+export interface MessagePicture {
+  kind: "image" | "sticker";
+  /** Where the dashboard serves it from, at a size for the screen. */
+  src: string;
+  /** The same picture at full size, when there is a bigger one. */
+  full?: string;
+  name: string;
+  w?: number;
+  h?: number;
+  /** The message's own page in its app, for when the picture cannot be shown here. */
+  link?: string;
+}
+
+/** An emoji people put on a message. One the dashboard has no picture for reads ":name:". */
+export interface Reaction {
+  emoji: string;
+  count: number;
+  /** The owner is one of the people who reacted. */
+  mine?: boolean;
+}
+
 export interface ThreadMessage {
   me: boolean;
   text: string;
@@ -19,6 +41,10 @@ export interface ThreadMessage {
   ts?: string;
   /** The id of the message that started the thread this one is in, when it is in one. */
   thread?: string;
+  attachments?: MessagePicture[];
+  reactions?: Reaction[];
+  /** The sender's profile picture, when it is kept by the dashboard itself (Telegram). Slack's come from `AppState.avatars`. */
+  avatar?: string;
 }
 
 export interface Conversation {
@@ -42,6 +68,8 @@ export interface Conversation {
   manualPri?: boolean;
   /** Personal or Professional picked by hand in the inbox; rules no longer change it. */
   manualMode?: boolean;
+  /** The profile picture for the row, when it is kept by the dashboard itself (Telegram). */
+  avatar?: string;
   thread: ThreadMessage[];
 }
 
@@ -256,6 +284,15 @@ export interface AppState {
   owner: { name: string };
   /** False while replies are held in the outbox and not sent. */
   sendingEnabled: boolean;
+  /**
+   * Whether the connected Slack app may read files, which showing pictures needs. Null until
+   * the people-and-channels check has asked Slack.
+   */
+  slackFilesAllowed: boolean | null;
+  /** True where Telegram can be connected: its app keys are set and the data stays on this machine. */
+  telegramAvailable: boolean;
+  /** True when the data is the copy on this machine and not the hosted database. */
+  localData: boolean;
   /** False until the AI key is set and has credit to run. */
   aiConfigured: boolean;
 }

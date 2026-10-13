@@ -29,7 +29,7 @@ export interface JobDefinition {
 
 export const JOBS: JobDefinition[] = [
   { id: "slack-pull", name: "Gets new Slack messages", tab: "Inbox", defaultMin: 60, minMin: 5, usesAI: false, needs: "slack", live: true },
-  // Not built yet: needs Telegram app keys.
+  // Local-only for now: it runs only where the server says Telegram can be used (see `liveJobs`).
   { id: "telegram-pull", name: "Gets new Telegram messages", tab: "Inbox", defaultMin: 60, minMin: 30, usesAI: false, needs: "telegram", live: false },
   { id: "fathom-pull", name: "Gets new calls from Fathom", tab: "Meetings", defaultMin: 60, minMin: 15, usesAI: false, needs: "fathom", live: true },
   { id: "inbox-rules", name: "Marks what is urgent, adds labels", tab: "Inbox", defaultMin: 60, minMin: 5, usesAI: false, needs: null, follows: ["slack-pull", "telegram-pull"], live: true },
@@ -40,8 +40,8 @@ export const JOBS: JobDefinition[] = [
   { id: "outbox-retry", name: "Retries anything that failed to send", tab: "Inbox", defaultMin: 1, minMin: 1, usesAI: false, needs: null, live: true },
 ];
 
-/** The checks that work today. */
-export const LIVE_JOBS = JOBS.filter((j) => j.live);
+/** The checks that work on this server. The Telegram one joins them where Telegram can be used. */
+export const liveJobs = (telegram: boolean) => JOBS.filter((j) => j.live || (telegram && j.id === "telegram-pull"));
 
 export const jobById = (id: JobId) => JOBS.find((j) => j.id === id)!;
 
