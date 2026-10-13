@@ -27,11 +27,11 @@ export const liveSources = (telegram: boolean): Source[] => (telegram ? ["slack"
 export const DEPARTMENTS: boolean = false;
 
 /**
- * The Connections tab is left out of the tab bar for now: Slack and Fathom are connected
- * already, from the keys in the environment. The page itself still works at /connections,
- * for the day a key has to be replaced. Change this to `true` to show the tab again.
+ * The Connections tab. It is where a person logs in to Telegram, and it says what is missing
+ * when Telegram is not switched on yet, so it is always shown. Change this to `false` to
+ * leave it out of the tab bar: the page itself still works at /connections.
  */
-export const CONNECTIONS_TAB: boolean = false;
+export const CONNECTIONS_TAB: boolean = true;
 
 /**
  * Targets (the Targets tab, and the month's pace on Today) are switched off for now: the

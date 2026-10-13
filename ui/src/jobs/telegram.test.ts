@@ -70,7 +70,7 @@ afterEach(() => {
 
 describe("where Telegram may be used", () => {
   it("needs its app keys, and with a hosted database also the server's say-so", () => {
-    expect([telegramAvailable(), telegramBlocked()]).toEqual([false, "Telegram's app keys are not set. Add TELEGRAM_API_ID and TELEGRAM_API_HASH to the environment."]);
+    expect([telegramAvailable(), telegramBlocked()]).toEqual([false, "Telegram's app keys are not set: TELEGRAM_API_ID and TELEGRAM_API_HASH. Add them to the environment. On a host that means for Production, followed by a redeploy."]);
     withKeys();
     expect([telegramAvailable(), telegramBlocked()]).toEqual([true, null]);
     // A developer's machine pointed at the hosted database: off, so their own account cannot end up there.
@@ -79,6 +79,31 @@ describe("where Telegram may be used", () => {
     // The live site says it is the one meant to hold a Telegram login.
     process.env.TELEGRAM_HOSTED = "true";
     expect([telegramAvailable(), telegramBlocked()]).toEqual([true, null]);
+  });
+
+  it("says exactly which setting is missing or wrong, and forgives quotes and spaces pasted around a value", async () => {
+    process.env.TELEGRAM_API_HASH = "0123456789abcdef0123456789abcdef";
+    expect(telegramBlocked()).toMatch(/^TELEGRAM_API_ID is not set\. TELEGRAM_API_HASH is\./);
+    process.env.TELEGRAM_API_ID = "TELEGRAM_API_ID=12345";
+    expect(telegramBlocked()).toBe("TELEGRAM_API_ID is not a number. It should be the App api_id from my.telegram.org, digits only.");
+    process.env.TELEGRAM_API_ID = "12345";
+    process.env.TELEGRAM_API_HASH = "";
+    expect(telegramBlocked()).toMatch(/^TELEGRAM_API_HASH is not set\. TELEGRAM_API_ID is\./);
+    process.env.TELEGRAM_API_HASH = "too-short";
+    expect(telegramBlocked()).toMatch(/^TELEGRAM_API_HASH does not look right\./);
+
+    // Pasted the way they sit in a settings file: still good.
+    process.env.TELEGRAM_API_ID = ' "12345" ';
+    process.env.TELEGRAM_API_HASH = "'0123456789abcdef0123456789ABCDEF'\n";
+    expect([telegramAvailable(), telegramBlocked()]).toEqual([true, null]);
+    process.env.DATABASE_URL = HOSTED;
+    expect(telegramBlocked()).toBe(TELEGRAM_OFF_HERE);
+    process.env.TELEGRAM_HOSTED = ' "True" ';
+    expect([telegramAvailable(), telegramBlocked()]).toEqual([true, null]);
+    // The screens are told the same sentence, so the Connections tab can show it.
+    delete process.env.TELEGRAM_HOSTED;
+    const state = await loadState(db, OWNER_ID, new Date(NOW));
+    expect([state.telegramAvailable, state.telegramBlocked]).toEqual([false, TELEGRAM_OFF_HERE]);
   });
 
   it("shows who is connected by name and a masked number", async () => {

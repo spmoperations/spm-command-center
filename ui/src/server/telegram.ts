@@ -14,19 +14,31 @@ import type { Db } from "./db";
 import { seal, unseal } from "./secrets";
 import { RateLimited } from "./slack";
 
+/** A setting as it was meant: a value pasted with quotes or spaces around it still counts. */
+const setting = (name: string) => (process.env[name] ?? "").trim().replace(/^["']+|["']+$/g, "").trim();
+
+/** What is wrong with the app keys from my.telegram.org, or null when both are in place. */
+function keysProblem(): string | null {
+  const id = setting("TELEGRAM_API_ID");
+  const hash = setting("TELEGRAM_API_HASH");
+  const where = "Add them to the environment. On a host that means for Production, followed by a redeploy.";
+  if (!id && !hash) return `Telegram's app keys are not set: TELEGRAM_API_ID and TELEGRAM_API_HASH. ${where}`;
+  if (!id) return `TELEGRAM_API_ID is not set. TELEGRAM_API_HASH is. ${where}`;
+  if (!hash) return `TELEGRAM_API_HASH is not set. TELEGRAM_API_ID is. ${where}`;
+  if (!/^[1-9]\d*$/.test(id)) return "TELEGRAM_API_ID is not a number. It should be the App api_id from my.telegram.org, digits only.";
+  if (!/^[0-9a-f]{32}$/i.test(hash)) return "TELEGRAM_API_HASH does not look right. It should be the App api_hash from my.telegram.org: 32 letters and digits.";
+  return null;
+}
+
 /** The app keys from my.telegram.org are in the environment. */
-export const telegramConfigured = () => Boolean(Number(process.env.TELEGRAM_API_ID) && process.env.TELEGRAM_API_HASH);
+export const telegramConfigured = () => keysProblem() === null;
 
 export const TELEGRAM_OFF_HERE =
-  "Telegram is switched off while the app uses the hosted database. The live site turns it on with TELEGRAM_HOSTED=true. On your own machine, start the app with: npm run dev:local";
+  "The app keys are in place, but Telegram is switched off while the app uses the hosted database. The live site turns it on with TELEGRAM_HOSTED=true (on a host: for Production, followed by a redeploy). On your own machine, start the app with: npm run dev:local";
 
 /** Why Telegram cannot be used here, in words for the person, or null when it can. */
 export const telegramBlocked = (): string | null =>
-  !telegramConfigured()
-    ? "Telegram's app keys are not set. Add TELEGRAM_API_ID and TELEGRAM_API_HASH to the environment."
-    : process.env.DATABASE_URL && process.env.TELEGRAM_HOSTED !== "true"
-      ? TELEGRAM_OFF_HERE
-      : null;
+  keysProblem() ?? (process.env.DATABASE_URL && setting("TELEGRAM_HOSTED").toLowerCase() !== "true" ? TELEGRAM_OFF_HERE : null);
 
 /** Telegram can be used: its keys are set, and this server is one that may hold a Telegram login. */
 export const telegramAvailable = () => telegramBlocked() === null;
@@ -105,7 +117,7 @@ const nameOf = (entity: unknown): string => {
   return [e.firstName, e.lastName].filter(Boolean).join(" ") || e.title || e.username || "Someone";
 };
 
-const appKeys = () => ({ apiId: Number(process.env.TELEGRAM_API_ID), apiHash: process.env.TELEGRAM_API_HASH! });
+const appKeys = () => ({ apiId: Number(setting("TELEGRAM_API_ID")), apiHash: setting("TELEGRAM_API_HASH") });
 
 /** The library is loaded only when Telegram is used, so nothing else pays for it. */
 async function newClient(session: string): Promise<{ client: Client; lib: Library }> {

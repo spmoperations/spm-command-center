@@ -13,7 +13,7 @@ import type {
 import { aiConfigured } from "./ai";
 import { telegramAvatarIds, type StoredPicture } from "./media";
 import { SLACK_FILES_SCOPE } from "./slack";
-import { telegramAvailable } from "./telegram";
+import { telegramAvailable, telegramBlocked } from "./telegram";
 import type { Db } from "./db";
 
 /** Phase 1 has one person. Every table already carries the owner, so more can be added later. */
@@ -300,6 +300,7 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     sendingEnabled: sendingEnabled(),
     slackFilesAllowed: slackScopes ? slackScopes.split(",").includes(SLACK_FILES_SCOPE) : null,
     telegramAvailable: telegramAvailable(),
+    telegramBlocked: telegramBlocked(),
     localData: !process.env.DATABASE_URL,
     aiConfigured: aiConfigured(),
   };

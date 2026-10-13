@@ -44,7 +44,6 @@ These are built or planned but left off the screens for now. Each has one line t
 | The Personal side | Asked to be parked for now | `PERSONAL_SIDE = true` in `ui/src/core/config.ts` |
 | Departments (the tab, and the department on tasks and team members) | Nothing yet says which department a task or person belongs to | `DEPARTMENTS = true` in `ui/src/core/config.ts` |
 | Targets (the tab, and the month's pace on Today) | The numbers are the prototype's examples; nothing fills them in yet | `TARGETS = true` in `ui/src/core/config.ts` |
-| The Connections tab | Slack and Fathom are connected already from the keys in the environment. The page still works at `/connections` | `CONNECTIONS_TAB = true` in `ui/src/core/config.ts` |
 | Finding tasks with AI | The Claude account has no credit, so every run fails | `live: true` on `task-suggest` in `ui/src/core/jobs.ts` |
 | Telegram | It needs its two app keys (`TELEGRAM_API_ID` and `TELEGRAM_API_HASH`, from my.telegram.org). With the hosted database it also needs `TELEGRAM_HOSTED=true`, which only the live site sets, so a developer's own account can never end up in the hosted database | Set the keys (and on the live site the switch). The Connections tab then shows the Telegram login. On your own machine use `npm run dev:local`, which keeps the data on your computer |
 

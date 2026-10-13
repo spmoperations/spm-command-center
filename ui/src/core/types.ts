@@ -292,8 +292,10 @@ export interface AppState {
    * the people-and-channels check has asked Slack.
    */
   slackFilesAllowed: boolean | null;
-  /** True where Telegram can be connected: its app keys are set and the data stays on this machine. */
+  /** True where Telegram can be connected: its app keys are set, and this server may hold a Telegram login. */
   telegramAvailable: boolean;
+  /** Why Telegram cannot be connected here, in a sentence for whoever sets the server up. Null when it can. */
+  telegramBlocked: string | null;
   /** True when the data is the copy on this machine and not the hosted database. */
   localData: boolean;
   /** False until the AI key is set and has credit to run. */

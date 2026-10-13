@@ -5,7 +5,7 @@ import { useState } from "react";
 import { Pill } from "@/components/bits";
 import { ago } from "@/core/dates";
 import {
-  checkFathomKey, checkPhone, checkSlackToken, checkTelegramCode, FATHOM_API_ACCESS_URL, liveProviders, PROVIDER_ABOUT, PROVIDER_NAME, SLACK_CREATE_APP_URL, SLACK_USER_SCOPES,
+  checkFathomKey, checkPhone, checkSlackToken, checkTelegramCode, FATHOM_API_ACCESS_URL, liveProviders, PROVIDER_ABOUT, PROVIDER_NAME, PROVIDERS, SLACK_CREATE_APP_URL, SLACK_USER_SCOPES,
 } from "@/core/providers";
 import type { JobId, Provider } from "@/core/types";
 import { connectProvider, disconnectProvider, disconnectTelegram, telegramStep, useApp, type App, type TelegramReply } from "@/store/store";
@@ -271,9 +271,30 @@ const TURN_OFF: Record<Provider, string> = {
   fathom: "Disconnecting removes the stored key and stops new calls coming in. To remove the access for good, also delete the key in Fathom.",
 };
 
+/**
+ * Telegram before it is switched on for this site. A person looking for the login is told it
+ * is on its way. Whoever sets the server up is told exactly what is missing.
+ */
+function TelegramNotReady({ why }: { why: string | null }) {
+  return (
+    <>
+      <div className="st-help">
+        <strong>Telegram is not switched on for this site yet.</strong> It needs its app keys in place first. As soon as they are, the login appears here: your phone number, then the code Telegram sends you.
+      </div>
+      {why && (
+        <details className="fallback">
+          <summary>What is missing, for whoever sets it up</summary>
+          <div className="st-help">{why}</div>
+        </details>
+      )}
+    </>
+  );
+}
+
 function ProviderCard({ provider, app }: { provider: Provider; app: App }) {
   const connection = app.state.connections[provider];
   const Steps = STEPS[provider];
+  const notReady = provider === "telegram" && !app.state.telegramAvailable;
   const reader = READER[provider];
   const status = reader ? app.state.jobStatus[reader] : undefined;
   const since = connection.connectedAt
@@ -289,7 +310,7 @@ function ProviderCard({ provider, app }: { provider: Provider; app: App }) {
           <h3>{PROVIDER_NAME[provider]}</h3>
           <div className="about">{PROVIDER_ABOUT[provider]}</div>
         </div>
-        {connection.connected ? <Pill tone="s-ok">Connected</Pill> : <Pill tone="p-low">Not connected</Pill>}
+        {connection.connected ? <Pill tone="s-ok">Connected</Pill> : <Pill tone="p-low">{notReady ? "Not switched on yet" : "Not connected"}</Pill>}
       </div>
       <div className="prov-body">
         {connection.connected ? (
@@ -330,7 +351,7 @@ function ProviderCard({ provider, app }: { provider: Provider; app: App }) {
             <div className="st-help">{TURN_OFF[provider]}</div>
           </>
         ) : (
-          <Steps local={app.state.localData} />
+          notReady ? <TelegramNotReady why={app.state.telegramBlocked} /> : <Steps local={app.state.localData} />
         )}
       </div>
     </div>
@@ -354,12 +375,12 @@ export default function ConnectionsPage() {
         </div>
       </div>
       <div className="prov-list">
-        {providers.map((p) => (
+        {PROVIDERS.map((p) => (
           <ProviderCard key={p} provider={p} app={app} />
         ))}
       </div>
       <p className="muted" style={{ fontSize: 13.5, marginTop: 16 }}>
-        Coming later: {app.state.telegramAvailable ? "" : "Telegram, "}Email, Calendar and WhatsApp.
+        Coming later: Email, Calendar and WhatsApp.
       </p>
     </section>
   );
