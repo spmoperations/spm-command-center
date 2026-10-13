@@ -16,11 +16,12 @@ interface Fresh {
 }
 
 export async function requestFinder({ db, ownerId, now }: JobContext): Promise<JobResult> {
-  // A request the owner has since answered or cleared is no longer waiting.
+  // A request the owner has since answered or cleared is no longer waiting. One that only
+  // grew old and left the inbox by itself still is: its suggestion stays.
   const settled = await db.run(
     `update suggestions s set status = 'dismissed'
      where s.owner_id = $1 and s.status = 'new' and s.dedupe_key like 'ask:%'
-       and exists (select 1 from conversations c where c.id = s.src_id and (c.replied or c.done))`,
+       and exists (select 1 from conversations c where c.id = s.src_id and (c.replied or (c.done and not c.auto_done)))`,
     [ownerId],
   );
 

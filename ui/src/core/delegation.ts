@@ -1,6 +1,8 @@
 // Who can take a task: matched against the team list, no AI involved.
+import { PRIORITY_NAME } from "./config";
+import { parseDay } from "./dates";
 import { norm } from "./rules";
-import type { Person, Task } from "./types";
+import type { Person, Priority, Task } from "./types";
 
 type Delegable = Pick<Task, "title" | "project" | "dept">;
 
@@ -62,10 +64,13 @@ export const canAssignInChat = (c: { ctx: string; source?: string }) => c.source
  * The message that announces a task. In a chat or channel it starts by tagging the person,
  * when one was picked; with nobody picked it is addressed to the channel as a whole.
  */
-export function assignmentText(o: { where: AssignWhere; who: string; title: string; due: string; note: string }): string {
-  const task = `${o.title} (due ${o.due})${o.note ? `\n\n${o.note}` : ""}`;
-  if (o.where === "dm") return `New task for you: ${task}`;
-  return o.who ? `${o.who} new task for you: ${task}` : `New task: ${task}`;
+export function assignmentText(o: { where: AssignWhere; who: string; title: string; due: string; note: string; pri?: Priority; project?: string }): string {
+  const head = o.where === "dm" ? `New task for you: ${o.title}` : o.who ? `${o.who} new task for you: ${o.title}` : `New task: ${o.title}`;
+  // What the task is, when it is due, how much it matters and what it belongs to, then the
+  // note. The task's description is not here: it follows as a reply in this message's thread.
+  const due = parseDay(o.due).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  const facts = [`Due ${due}`, o.pri ? `${PRIORITY_NAME[o.pri]} priority` : "", o.project?.trim() ?? ""].filter(Boolean).join(" · ");
+  return [`${head}\n${facts}`, o.note.trim()].filter(Boolean).join("\n\n");
 }
 
 export type TaskStatus = "done" | "overdue" | "ontrack";

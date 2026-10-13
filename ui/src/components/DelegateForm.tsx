@@ -2,7 +2,7 @@
 
 import { useId, useState } from "react";
 import { assignmentText, candidates, CHANNEL_PICK, SLACK_PICK, type AssignWhere } from "@/core/delegation";
-import type { Channel, Person } from "@/core/types";
+import type { Channel, Person, Priority } from "@/core/types";
 import { toast } from "@/store/store";
 import { Combo } from "./Combo";
 
@@ -12,8 +12,8 @@ interface Props {
   slackPeople: { id: string; name: string }[];
   /** The Slack channels the owner is in. The task can be announced in any of them. */
   channels: Channel[];
-  /** What is being assigned. An empty `dept` offers the whole team. */
-  subject: { title: string; project: string; dept: string; due: string };
+  /** What is being assigned. An empty `dept` offers the whole team. The priority and project go in the message; the description follows in its thread. */
+  subject: { title: string; project: string; dept: string; due: string; description?: string; pri?: Priority };
   today: string;
   /** The chat this came from, e.g. "#sales", when the task can be announced there. */
   chat?: string | null;
@@ -168,7 +168,7 @@ export function DelegateForm({ team, slackPeople, channels, subject, today, chat
       <label className="label" htmlFor={noteId}>
         Note (optional)
       </label>
-      <textarea id={noteId} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Context, what done looks like, and anything they need from you" />
+      <textarea id={noteId} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Anything to add for them. The task's description follows by itself, as a reply under the message." />
       <div className="dg-actions">
         <label className="label" htmlFor={dueId} style={{ margin: 0 }}>
           Due
@@ -181,15 +181,30 @@ export function DelegateForm({ team, slackPeople, channels, subject, today, chat
           Cancel
         </button>
         <span className="hint">
-          {inChannel
-            ? `You post in ${place || "the channel"}${selectedName ? ", tagging them," : ""} with the task, the due date and your note.`
-            : "They get a Slack direct message from you with the task, the due date and your note."}
+          {inChannel ? `You post this in ${place || "the channel"}${selectedName ? ", tagging them." : "."}` : "They get this as a Slack direct message from you."}
         </span>
       </div>
-      {inChannel && place && (
+      {/* The whole message, as it will arrive, so it can be read before it is sent. */}
+      {(inChannel ? Boolean(place) : Boolean(selected)) && (
         <div className="dg-preview">
-          <span className="label">What will be posted in {place}</span>
-          <p>{assignmentText({ where: "chat", who: selectedName ? `@${selectedName}` : "", title: subject.title, due: due || subject.due, note: note.trim() })}</p>
+          <span className="label">{inChannel ? `What will be posted in ${place}` : `What ${selectedName || "they"} will get on Slack`}</span>
+          <p>
+            {assignmentText({
+              where: inChannel ? "chat" : "dm",
+              who: selectedName ? `@${selectedName}` : "",
+              title: subject.title,
+              due: due || subject.due,
+              note: note.trim(),
+              pri: subject.pri,
+              project: subject.project,
+            })}
+          </p>
+          {subject.description?.trim() && (
+            <>
+              <span className="label">Then, as a reply in that message&apos;s thread</span>
+              <p>{subject.description.trim()}</p>
+            </>
+          )}
         </div>
       )}
     </form>

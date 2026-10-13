@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { DelegateForm } from "@/components/DelegateForm";
 import { Avatar, MessageText, Pictures, Reactions } from "@/components/MessageText";
 import { PriPill, PrioritySelect, Seg } from "@/components/bits";
-import { LINE_NAME, liveSources, MODE_NAME, MODES, PERSONAL_SIDE, PRIORITIES, PRIORITY_NAME, SOURCE_NAME } from "@/core/config";
+import { INBOX_DAYS, LINE_NAME, liveSources, MODE_NAME, MODES, PERSONAL_SIDE, PRIORITIES, PRIORITY_NAME, SOURCE_NAME } from "@/core/config";
 import { ago, stamp } from "@/core/dates";
 import { plainPreview } from "@/core/message-format";
 import { requestSummary } from "@/core/requests";
@@ -13,7 +13,7 @@ import { groupByThread, threadToAnswer } from "@/core/threads";
 import { canAssignInChat } from "@/core/delegation";
 import type { Conversation, Line, Mode, Priority, Source, ThreadMessage } from "@/core/types";
 import {
-  conversationToTask, delegateConversation, markConversationDone, openConversation, readThreads, restoreInbox, sendReply,
+  conversationToTask, delegateConversation, markConversationDone, openConversation, readThreads, restoreConversation, sendReply,
   setConversationMode, setConversationPriority, toast, useApp, type App,
 } from "@/store/store";
 
@@ -67,8 +67,9 @@ function Thread({ c, app, draft, onDraft }: { c: Conversation; app: App; draft: 
   const checking = app.ui.checking.includes(c.id);
   // Threads are Slack's. A Telegram chat is one line of messages, so nothing there offers one.
   const threads = c.source === "slack";
-  // By default a reply goes where the latest message from someone else is: into its thread.
-  const target = picked ?? threadToAnswer(c.thread) ?? "";
+  // A row that is one thread is answered in that thread. Otherwise a reply goes by default
+  // where the latest message from someone else is: into its thread.
+  const target = c.root ?? picked ?? threadToAnswer(c.thread) ?? "";
   const into = target ? groups.find((g) => g.key === target) : undefined;
   const chat = c.ctx.startsWith("#") ? c.ctx : `your chat with ${c.from}`;
   const where = c.ctx.startsWith("#") ? `${SOURCE_NAME[c.source]} in ${c.ctx}` : `${SOURCE_NAME[c.source]} to ${c.from}`;
@@ -95,7 +96,7 @@ function Thread({ c, app, draft, onDraft }: { c: Conversation; app: App; draft: 
           <p className="checking">Pictures from Slack cannot be shown here yet. The Slack app needs one more permission (files:read). Until then each one has a link that opens it in Slack.</p>
         )}
         {groups.map((g) => (
-          <div className={`tgroup ${into?.key === g.key ? "answering" : ""}`} key={g.key}>
+          <div className={`tgroup ${!c.root && into?.key === g.key ? "answering" : ""}`} key={g.key}>
             {g.first && <Bubble b={g.first} c={c} app={app} />}
             {(g.replies.length > 0 || g.threaded) && (
               <div className="treplies">
@@ -131,9 +132,11 @@ function Thread({ c, app, draft, onDraft }: { c: Conversation; app: App; draft: 
               <span>
                 In the thread{into.first ? ` ${into.first.me ? "you" : (into.first.from ?? c.from)} started: “${plainPreview(into.first.text, 60)}”` : ""}
               </span>
-              <button className="linkbtn inline" onClick={() => setPicked("")}>
-                Post in {chat} instead
-              </button>
+              {!c.root && (
+                <button className="linkbtn inline" onClick={() => setPicked("")}>
+                  Post in {chat} instead
+                </button>
+              )}
             </>
           ) : (
             <span>As a new message in {chat}</span>
@@ -170,8 +173,11 @@ function Thread({ c, app, draft, onDraft }: { c: Conversation; app: App; draft: 
   );
 }
 
-/** One conversation: who, where, the latest message, and what can be done with it. */
-function MessageRow({ c, app, open, draft, onDraft }: { c: Conversation; app: App; open: boolean; draft: string; onDraft(text: string): void }) {
+/**
+ * One conversation: who, where, the latest message, and what can be done with it. A cleared
+ * one can only be read and put back.
+ */
+function MessageRow({ c, app, open, draft, onDraft, cleared }: { c: Conversation; app: App; open: boolean; draft: string; onDraft(text: string): void; cleared?: boolean }) {
   const [delegating, setDelegating] = useState(false);
   const row = useRef<HTMLDivElement>(null);
   // Arriving from another tab's "Reply" link: bring the opened conversation into view.
@@ -189,8 +195,10 @@ function MessageRow({ c, app, open, draft, onDraft }: { c: Conversation; app: Ap
           <span className="who">{c.from}</span>
           <span className="ctx">
             {SOURCE_NAME[c.source]} · {c.ctx}
+            {c.root && c.thread.length > 1 ? " · thread" : ""}
           </span>
           {c.tagged && <span className="chip me">Tagged you</span>}
+          {cleared && c.autoCleared && <span className="chip">Nothing new for {INBOX_DAYS} days</span>}
           {c.mode === "professional" && c.line === "consulting" && <span className="chip biz">{LINE_NAME[c.line]}</span>}
         </div>
         <p className="txt">
@@ -209,9 +217,14 @@ function MessageRow({ c, app, open, draft, onDraft }: { c: Conversation; app: Ap
               openConversation(open ? null : c.id);
             }}
           >
-            {open ? "Close" : "Reply"}
+            {open ? "Close" : cleared ? "Open" : "Reply"}
           </button>
-          {PERSONAL_SIDE && (
+          {cleared && (
+            <button className="btn" title="Puts this chat back in the inbox" onClick={() => restoreConversation(c.id)}>
+              Restore
+            </button>
+          )}
+          {!cleared && PERSONAL_SIDE && (
             <select className="f" value={c.mode} aria-label="Personal or Professional" onChange={(e) => setConversationMode(c.id, e.target.value as Mode)}>
               {MODES.map((m) => (
                 <option key={m} value={m}>
@@ -220,11 +233,13 @@ function MessageRow({ c, app, open, draft, onDraft }: { c: Conversation; app: Ap
               ))}
             </select>
           )}
-          <PrioritySelect value={c.pri} onChange={(p) => setConversationPriority(c.id, p)} />
-          <button className="btn" title="Adds a task to reply, due today, and clears this from the inbox" onClick={() => conversationToTask(c.id, app.today)}>
-            Make task
-          </button>
-          {canDelegate && (
+          {!cleared && <PrioritySelect value={c.pri} onChange={(p) => setConversationPriority(c.id, p)} />}
+          {!cleared && (
+            <button className="btn" title="Adds a task to reply, due today, and clears this from the inbox" onClick={() => conversationToTask(c.id, app.today)}>
+              Make task
+            </button>
+          )}
+          {!cleared && canDelegate && (
             <button
               className="btn dg"
               title="Turns this into a task for someone else and tells them on Slack"
@@ -237,9 +252,11 @@ function MessageRow({ c, app, open, draft, onDraft }: { c: Conversation; app: Ap
               Assign
             </button>
           )}
-          <button className="btn" title="Clears this from the inbox. A new message brings it back." onClick={() => markConversationDone(c.id)}>
-            Done
-          </button>
+          {!cleared && (
+            <button className="btn" title="Clears this from the inbox. A new message brings it back." onClick={() => markConversationDone(c.id)}>
+              Done
+            </button>
+          )}
         </div>
       </div>
       {delegating && (
@@ -267,6 +284,8 @@ export default function InboxPage() {
   const [pri, setPri] = useState<"all" | Priority>("all");
   const [source, setSource] = useState<"all" | Source>("all");
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  /** Looking at what was cleared, to read a chat or put one back. */
+  const [showCleared, setShowCleared] = useState(false);
   if (!app) return null;
   const { state, ui } = app;
   const mode = ui.mode;
@@ -276,7 +295,10 @@ export default function InboxPage() {
   const consulting = open.filter((c) => c.line === "consulting").length;
   const byLineAndSource = open.filter((c) => (mode !== "professional" || line === "all" || c.line === line) && (source === "all" || c.source === source));
   const list = byLineAndSource.filter((c) => pri === "all" || c.pri === pri);
-  const cleared = mine.length - open.length;
+  // Newest first. Only the most recently cleared are kept to hand.
+  const clearedList = mine.filter((c) => c.done).sort((a, b) => b.at - a.at);
+  const cleared = clearedList.length;
+  const viewingCleared = showCleared && cleared > 0;
   const queued = state.outbox.filter((o) => o.status === "queued").length;
   const connected = liveSources(state.telegramAvailable).filter((s) => state.connections[s].connected);
   const other = MODES.find((m) => m !== mode)!;
@@ -294,7 +316,7 @@ export default function InboxPage() {
         <div>
           <h2>Inbox</h2>
           <div className="muted" style={{ fontSize: 14 }}>
-            {PERSONAL_SIDE ? `${MODE_NAME[mode]} conversations` : "Conversations"} from {connected.length ? connected.map((s) => SOURCE_NAME[s]).join(" and ") : "Slack"}, sorted by priority. Reply without leaving the page.
+            {PERSONAL_SIDE ? `${MODE_NAME[mode]} conversations` : "Conversations"} from {connected.length ? connected.map((s) => SOURCE_NAME[s]).join(" and ") : "Slack"}, sorted by priority. Reply without leaving the page. A chat with nothing new for {INBOX_DAYS} days is cleared by itself.
           </div>
         </div>
         <div className="brand-meta">
@@ -304,41 +326,67 @@ export default function InboxPage() {
             </span>
           )}
           {cleared > 0 && (
-            <button className="linkbtn" onClick={restoreInbox}>
-              Restore {cleared} cleared
+            <button
+              className="linkbtn"
+              aria-expanded={viewingCleared}
+              title="See the chats you cleared, and put one back in the inbox"
+              onClick={() => {
+                openConversation(null);
+                setShowCleared(!viewingCleared);
+              }}
+            >
+              {viewingCleared ? "Back to the inbox" : `Restore: see ${cleared} cleared`}
             </button>
           )}
         </div>
       </div>
 
-      <div className="filters">
-        {mode === "professional" && consulting > 0 && (
-          <Seg
-            label="Business line"
-            value={line}
-            onChange={(v) => setLine(v)}
-            options={[["all", `All ${open.length}`], ["consulting", `Consulting ${consulting}`], ["agency", `Agency ${open.length - consulting}`]]}
-          />
-        )}
-        <Seg
-          label="Priority"
-          value={pri}
-          onChange={(v) => setPri(v)}
-          options={[["all", `Any priority ${byLineAndSource.length}`], ...PRIORITIES.map((p): [Priority, string] => [p, `${PRIORITY_NAME[p]} ${byLineAndSource.filter((c) => c.pri === p).length}`])]}
-        />
-        {connected.length > 1 && (
-          <select className="f" value={source} aria-label="Source" onChange={(e) => setSource(e.target.value as "all" | Source)}>
-            <option value="all">All sources</option>
-            {connected.map((s) => (
-              <option key={s} value={s}>
-                {SOURCE_NAME[s]}
-              </option>
+      {viewingCleared && (
+        <div className="inbox-group">
+          <div className="group-head">
+            <span className="chip">Cleared</span>
+            <span className="n">
+              {cleared} {cleared === 1 ? "conversation" : "conversations"}. Open one to read it, or click Restore to put it back in the inbox. A restored chat stays for {INBOX_DAYS} days, or longer if something new arrives.
+            </span>
+          </div>
+          <div className="panel">
+            {clearedList.map((c) => (
+              <MessageRow key={c.id} c={c} app={app} cleared open={ui.openConversation === c.id} draft={drafts[c.id] ?? ""} onDraft={(text) => setDrafts({ ...drafts, [c.id]: text })} />
             ))}
-          </select>
-        )}
-      </div>
+          </div>
+        </div>
+      )}
 
-      {groups.map(({ p, items }) => (
+      {!viewingCleared && (
+        <div className="filters">
+          {mode === "professional" && consulting > 0 && (
+            <Seg
+              label="Business line"
+              value={line}
+              onChange={(v) => setLine(v)}
+              options={[["all", `All ${open.length}`], ["consulting", `Consulting ${consulting}`], ["agency", `Agency ${open.length - consulting}`]]}
+            />
+          )}
+          <Seg
+            label="Priority"
+            value={pri}
+            onChange={(v) => setPri(v)}
+            options={[["all", `Any priority ${byLineAndSource.length}`], ...PRIORITIES.map((p): [Priority, string] => [p, `${PRIORITY_NAME[p]} ${byLineAndSource.filter((c) => c.pri === p).length}`])]}
+          />
+          {connected.length > 1 && (
+            <select className="f" value={source} aria-label="Source" onChange={(e) => setSource(e.target.value as "all" | Source)}>
+              <option value="all">All sources</option>
+              {connected.map((s) => (
+                <option key={s} value={s}>
+                  {SOURCE_NAME[s]}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
+
+      {!viewingCleared && groups.map(({ p, items }) => (
         <div className="inbox-group" key={p}>
           <div className="group-head">
             <PriPill p={p} />
@@ -354,7 +402,7 @@ export default function InboxPage() {
         </div>
       ))}
 
-      {groups.length === 0 && (
+      {!viewingCleared && groups.length === 0 && (
         <div className="panel">
           <p className="empty" style={{ padding: 18 }}>
             {!state.connections.slack.connected ? (

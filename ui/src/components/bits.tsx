@@ -20,9 +20,10 @@ export function SrcBadge({ source }: { source: Source }) {
   );
 }
 
-export function PrioritySelect({ value, onChange, label = "Priority" }: { value: Priority; onChange(p: Priority): void; label?: string }) {
+/** `tag` draws it as the colored priority tag, which can still be clicked to change it. */
+export function PrioritySelect({ value, onChange, label = "Priority", tag }: { value: Priority; onChange(p: Priority): void; label?: string; tag?: boolean }) {
   return (
-    <select className="f" value={value} aria-label={label} onChange={(e) => onChange(e.target.value as Priority)}>
+    <select className={tag ? `f pri-tag p-${value}` : "f"} value={value} aria-label={label} title={tag ? "Click to change the priority" : undefined} onChange={(e) => onChange(e.target.value as Priority)}>
       {PRIORITIES.map((p) => (
         <option key={p} value={p}>
           {PRIORITY_NAME[p]}

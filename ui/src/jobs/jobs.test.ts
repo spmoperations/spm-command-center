@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { mentionsUser, reactionEmoji, redactSecrets, slackReactions, slackToText } from "@/core/slack-text";
+import { mentionsUser, reactionEmoji, redactSecrets, slackReactions, slackToText, slackTsToMs } from "@/core/slack-text";
 import { FIELDS, message, SYSTEM } from "@/prompts/task-finder";
 import type { FoundTask } from "@/server/ai";
 import { connect } from "@/server/connections";
@@ -127,13 +127,16 @@ describe("Slack jobs", () => {
     expect(result.message).toBe("3 new messages in 2 conversations. 1 in channels that are not ticked in Settings were left out");
 
     const inbox = (await loadState(db)).inbox;
-    expect(inbox.map((c) => c.id).sort()).toEqual(["slack:C2", "slack:D1"]);
+    // A message that tags the owner in a channel is a row of its own, named after the message.
+    const tag = `slack:C2:${T - 30}.000100`;
+    expect(inbox.map((c) => c.id).sort()).toEqual([tag, "slack:D1"]);
     const dm = inbox.find((c) => c.id === "slack:D1")!;
     expect(dm).toMatchObject({ from: "Maya Chen", ctx: "Direct message", direct: true, text: "Can we swap the hook?", replied: false, tagged: false });
     expect(dm.thread.map((m) => [m.me, m.text])).toEqual([[false, "earlier context"], [true, "Clips are in the folder"], [false, "Can we swap the hook?"]]);
-    expect(inbox.find((c) => c.id === "slack:C2")).toMatchObject({ ctx: "#ops", tagged: true, text: "@Jeremy Moser need your OK on the pay change" });
-    // Earlier context is fetched once per new conversation, and only for those.
-    expect(slack.calls.filter(([m]) => m === "conversations.history")).toHaveLength(2);
+    expect(inbox.find((c) => c.id === tag)).toMatchObject({ ctx: "#ops", tagged: true, root: `${T - 30}.000100`, text: "@Jeremy Moser need your OK on the pay change" });
+    // Earlier context is fetched once for a new chat. A row that is one thread needs none.
+    expect(slack.calls.filter(([m]) => m === "conversations.history")).toEqual([["conversations.history", { channel: "D1", latest: `${T - 120}.000100`, limit: 8, inclusive: false }]]);
+    expect(result.cursor).toMatchObject({ threadItems: true });
   });
 
   describe("threads", () => {
@@ -154,7 +157,8 @@ describe("Slack jobs", () => {
         "conversations.history": () => ({ messages: [] }),
         "conversations.replies": () => ({ messages: thread }),
       });
-    const inThread = async () => (await loadState(db)).inbox.find((c) => c.id === "slack:C2")!.thread;
+    // The thread is an inbox row of its own, named after the message that started it.
+    const inThread = async () => (await loadState(db)).inbox.find((c) => c.id === `slack:C2:${first}`)!.thread;
 
     it("reads the whole thread when the owner is tagged in a reply: the message it answers and the replies around it", async () => {
       await slackDirectorySync(ctx(), directory());
@@ -195,6 +199,162 @@ describe("Slack jobs", () => {
       const parent = { ts: first, thread_ts: first, user: "U1", text: "<@UME> who signs off the pay change?" };
       await slackPull(ctx({ lastTs: first }), slackWith([{ ts: reply, channel: ops, user: "U1", text: "<@UME> bump", permalink: link(reply, first) }], [parent, { ts: reply, thread_ts: first, user: "U1", text: "<@UME> bump" }]));
       expect((await inThread()).map((m) => [m.text, m.thread])).toEqual([["@Jeremy Moser who signs off the pay change?", first], ["@Jeremy Moser bump", first]]);
+    });
+  });
+
+  describe("one inbox row per thread in a channel", () => {
+    const link = (channel: string, ts: string, thread?: string) => `https://acme.slack.com/archives/${channel}/p${ts.replace(".", "")}${thread ? `?thread_ts=${thread}` : ""}`;
+    const ops = { id: "C2", name: "ops", is_private: true };
+    const sales = { id: "C1", name: "sales" };
+    const at = (seconds: number) => `${T + seconds}.000100`;
+    const [a, a2, b, b2] = [at(-400), at(-300), at(-200), at(-100)];
+    // Two threads in #ops, and the owner is tagged in a reply in each.
+    const threadA = [{ ts: a, thread_ts: a, user: "U1", text: "Launch plan is in the doc" }, { ts: a2, thread_ts: a, user: "U1", text: "<@UME> can you approve the budget?" }];
+    const threadB = [{ ts: b, thread_ts: b, user: "U1", text: "Venue options attached" }, { ts: b2, thread_ts: b, user: "U1", text: "<@UME> which venue do you prefer?" }];
+    const slackWith = (found: Record<string, unknown>[], threads: Record<string, unknown[]>) =>
+      fakeSlack({
+        "search.messages": () => ({ messages: { matches: found, paging: { pages: 1 } } }),
+        "conversations.history": () => ({ messages: [] }),
+        "conversations.replies": (p) => ({ messages: threads[String(p.ts)] ?? [] }),
+      });
+    const twoThreads = () =>
+      slackWith(
+        [
+          { ts: b2, channel: ops, user: "U1", text: "<@UME> which venue do you prefer?", permalink: link("C2", b2, b) },
+          { ts: a2, channel: ops, user: "U1", text: "<@UME> can you approve the budget?", permalink: link("C2", a2, a) },
+        ],
+        { [a]: threadA, [b]: threadB },
+      );
+    const row = async (id: string) => (await loadState(db)).inbox.find((c) => c.id === id);
+    const act = async (type: string, args: unknown[]) => (await import("@/server/repo")).applyAction(db, type, args, OWNER_ID, new Date(NOW));
+
+    it("shows two threads in the same channel as two rows, each with its own messages", async () => {
+      await slackDirectorySync(ctx(), directory());
+      await slackPull(ctx(), twoThreads());
+      const inOps = (await loadState(db)).inbox.filter((c) => c.ctx === "#ops").sort((x, y) => x.at - y.at);
+      expect(inOps.map((c) => [c.id, c.root, c.tagged, c.thread.map((m) => m.text)])).toEqual([
+        [`slack:C2:${a}`, a, true, ["Launch plan is in the doc", "@Jeremy Moser can you approve the budget?"]],
+        [`slack:C2:${b}`, b, true, ["Venue options attached", "@Jeremy Moser which venue do you prefer?"]],
+      ]);
+      // No row for the channel as a whole: nothing else there is addressed to the owner.
+      expect(await row("slack:C2")).toBeUndefined();
+    });
+
+    it("answers, clears and suggests a task for each thread by itself", async () => {
+      await slackDirectorySync(ctx(), directory());
+      await slackPull(ctx(), twoThreads());
+      await requestFinder(ctx());
+      expect((await loadState(db)).suggestions.filter((g) => g.status === "new").map((g) => g.src?.id).sort()).toEqual([`slack:C2:${a}`, `slack:C2:${b}`]);
+
+      await act("sendReply", [`slack:C2:${a}`, "Approved.", true]);
+      const [one, two] = [(await row(`slack:C2:${a}`))!, (await row(`slack:C2:${b}`))!];
+      expect([[one.replied, one.done], [two.replied, two.done]]).toEqual([[true, true], [false, false]]);
+      // The reply goes into the thread it answers, in the channel.
+      expect(await db.query("select target, thread_ts, body from outbox")).toEqual([{ target: "C2", thread_ts: a, body: "Approved." }]);
+      // The answered thread's suggestion is settled. The other one is still waiting.
+      await requestFinder(ctx());
+      expect((await loadState(db)).suggestions.filter((g) => g.status === "new").map((g) => g.src?.id)).toEqual([`slack:C2:${b}`]);
+    });
+
+    it("makes a single message that tags the owner a row, answers under it, and lets later replies join it", async () => {
+      await slackDirectorySync(ctx(), directory());
+      const lone = at(-50);
+      const id = `slack:C2:${lone}`;
+      const question = { ts: lone, user: "U1", text: "<@UME> are you in tomorrow?" };
+      await slackPull(ctx(), slackWith([{ ...question, channel: ops, permalink: link("C2", lone) }], {}));
+      expect(await row(id)).toMatchObject({ root: lone, tagged: true, ctx: "#ops" });
+
+      // Written in the dashboard, it becomes the first reply in a thread under that message.
+      await act("sendReply", [id, "Yes, from 10.", false]);
+      expect(await db.query("select target, thread_ts from outbox")).toEqual([{ target: "C2", thread_ts: lone }]);
+
+      // Someone answers there later without tagging the owner. It lands in the same row.
+      const later = at(60);
+      const next = slackWith([{ ts: later, channel: ops, user: "U1", text: "Great, see you then", permalink: link("C2", later, lone) }], { [lone]: [{ ...question, thread_ts: lone }, { ts: later, thread_ts: lone, user: "U1", text: "Great, see you then" }] });
+      const result = await slackPull(ctx({ lastTs: lone, threadItems: true }), next);
+      expect(result.message).toBe("1 new message in 1 conversation");
+      expect((await row(id))!.thread.map((m) => m.text)).toEqual(["@Jeremy Moser are you in tomorrow?", "Yes, from 10.", "Great, see you then"]);
+      expect((await loadState(db)).inbox.filter((c) => c.ctx === "#ops")).toHaveLength(1);
+    });
+
+    it("keeps the rest of a followed channel in the channel's own row, and moves a thread out once someone tags the owner in it", async () => {
+      await slackDirectorySync(ctx(), directory());
+      await db.run("update slack_channels set selected = true where id = 'C1'");
+      const [root, reply, other, tagging] = [at(-500), at(-450), at(-430), at(40)];
+      const before = [{ ts: root, thread_ts: root, user: "U1", text: "Pricing page draft" }, { ts: reply, thread_ts: root, user: "U1", text: "Looks good to me" }];
+      await slackPull(
+        ctx(),
+        slackWith(
+          [
+            { ts: other, channel: sales, user: "U1", text: "Booked two calls", permalink: link("C1", other) },
+            { ts: reply, channel: sales, user: "U1", text: "Looks good to me", permalink: link("C1", reply, root) },
+            { ts: root, channel: sales, user: "U1", text: "Pricing page draft", permalink: link("C1", root, root) },
+          ],
+          { [root]: before },
+        ),
+      );
+      expect(await row("slack:C1")).toMatchObject({ root: undefined, tagged: false });
+      expect((await row("slack:C1"))!.thread.map((m) => m.text)).toEqual(["Pricing page draft", "Looks good to me", "Booked two calls"]);
+
+      const after = [...before, { ts: tagging, thread_ts: root, user: "U1", text: "<@UME> OK to publish?" }];
+      await slackPull(ctx({ lastTs: other, threadItems: true }), slackWith([{ ts: tagging, channel: sales, user: "U1", text: "<@UME> OK to publish?", permalink: link("C1", tagging, root) }], { [root]: after }));
+      const item = (await row(`slack:C1:${root}`))!;
+      expect([item.tagged, item.thread.map((m) => m.text)]).toEqual([true, ["Pricing page draft", "Looks good to me", "@Jeremy Moser OK to publish?"]]);
+      // The thread has left the channel's row. What was never addressed to the owner stays.
+      expect((await row("slack:C1"))!.thread.map((m) => m.text)).toEqual(["Booked two calls"]);
+      expect(await db.query("select count(*)::int as n from messages where body = 'Pricing page draft'")).toEqual([{ n: 1 }]);
+    });
+
+    it("reads only its own thread again when a thread's row is opened", async () => {
+      await slackDirectorySync(ctx(), directory());
+      await slackPull(ctx(), twoThreads());
+      const more = slackWith([], { [a]: [...threadA, { ts: at(20), thread_ts: a, user: "U1", text: "Any update?", reactions: [{ name: "eyes", users: ["UME"], count: 1 }] }] });
+      expect(await slackReadThreads({ db, ownerId: OWNER_ID }, more, `slack:C2:${a}`)).toEqual({ added: 1, changed: 0 });
+      expect(more.calls).toEqual([["conversations.replies", { channel: "C2", ts: a, limit: 200 }]]);
+      expect((await row(`slack:C2:${a}`))!.thread.at(-1)).toMatchObject({ text: "Any update?", reactions: [{ emoji: "👀", count: 1, mine: true }] });
+      expect((await row(`slack:C2:${b}`))!.thread).toHaveLength(2);
+    });
+
+    it("announces a task made from a thread in that thread", async () => {
+      await slackDirectorySync(ctx(), directory());
+      await slackPull(ctx(), twoThreads());
+      await db.run("insert into team_members (id, owner_id, name, role, depts, handles, slack_user_id) values ('u_luis', $1, 'Luis Ramos', 'Lead editor', '[]', '[]', 'ULUIS')", [OWNER_ID]);
+      await act("delegateConversation", [`slack:C2:${b}`, "u_luis", "", "2026-10-09", "chat"]);
+      expect(await db.query("select target, thread_ts, conversation_id from outbox")).toEqual([{ target: "C2", thread_ts: b, conversation_id: `slack:C2:${b}` }]);
+      expect((await row(`slack:C2:${b}`))!.thread.at(-1)).toMatchObject({ me: true, thread: b, status: "queued" });
+    });
+
+    it("splits what was read before threads had rows of their own, once, and takes tasks and written replies along", async () => {
+      await slackDirectorySync(ctx(), directory());
+      // As an earlier version stored it: one conversation for the whole channel.
+      await db.run("insert into conversations (id, owner_id, source, external_id, from_name, ctx, tagged, last_text, last_at, pri) values ('slack:C2', $1, 'slack', 'C2', 'Maya Chen', '#ops', true, 'x', $2, 'high')", [OWNER_ID, NOW]);
+      const old = (ts: string, body: string, thread: string | null) =>
+        db.run("insert into messages (id, conversation_id, owner_id, external_id, sender_name, body, at, thread_ts, asked, scanned) values ($1, 'slack:C2', $2, $3, 'Maya Chen', $4, $5, $6, true, true)", [`slack:C2:${ts}`, OWNER_ID, ts, body, slackTsToMs(ts), thread]);
+      await old(at(-600), "earlier background", null);
+      await old(a, "Launch plan is in the doc", a);
+      await old(a2, "@Jeremy Moser can you approve the budget?", a);
+      await old(b, "@Jeremy Moser which venue do you prefer?", null);
+      await db.run("insert into messages (id, conversation_id, owner_id, sender_name, me, body, at, thread_ts, status, asked, scanned) values ('m_sent', 'slack:C2', $1, 'Jeremy Moser', true, 'Approved.', $2, $3, 'sent', true, true)", [OWNER_ID, NOW - 1000, a]);
+      await db.run("insert into tasks (id, owner_id, title, dept, pri, due, created_at, src_type, src_id) values ('t_old', $1, 'Reply to Maya', 'Operations', 'high', '2026-10-09', $2, 'message', 'slack:C2')", [OWNER_ID, NOW]);
+
+      const quiet = () => slackWith([], {});
+      const result = await slackPull(ctx(), quiet());
+      expect(result.cursor).toMatchObject({ threadItems: true });
+      const [one, two] = [(await row(`slack:C2:${a}`))!, (await row(`slack:C2:${b}`))!];
+      // The answered thread, with the reply that was written in the dashboard, and its priority kept.
+      expect([one.thread.map((m) => m.text), one.root, one.pri, one.replied, one.tagged, one.done]).toEqual([["Launch plan is in the doc", "@Jeremy Moser can you approve the budget?", "Approved."], a, "high", true, false, false]);
+      // The single message that tags the owner, still waiting.
+      expect([two.thread.map((m) => m.text), two.root, two.replied, two.tagged, two.done]).toEqual([["@Jeremy Moser which venue do you prefer?"], b, false, true, false]);
+      expect(await db.query("select src_id from tasks where id = 't_old'")).toEqual([{ src_id: `slack:C2:${b}` }]);
+      // What is left is background nobody addressed to the owner, in a channel they do not follow: cleared, not lost.
+      expect(await row("slack:C2")).toMatchObject({ done: true, tagged: false });
+      expect((await row("slack:C2"))!.thread.map((m) => m.text)).toEqual(["earlier background"]);
+
+      // It happens once: with the bookmark saying so, the old layout is not looked for again.
+      await db.run("insert into conversations (id, owner_id, source, external_id, from_name, ctx, last_text, last_at) values ('slack:C1', $1, 'slack', 'C1', 'Maya Chen', '#sales', 'x', $2)", [OWNER_ID, NOW]);
+      await db.run("insert into messages (id, conversation_id, owner_id, external_id, sender_name, body, at) values ('slack:C1:9.0', 'slack:C1', $1, '9.0', 'Maya Chen', '@Jeremy Moser hello', $2)", [OWNER_ID, NOW]);
+      await slackPull(ctx(result.cursor), quiet());
+      expect(await row("slack:C1:9.0")).toBeUndefined();
     });
   });
 
@@ -401,7 +561,7 @@ describe("Slack jobs", () => {
     const first = await slackPull(ctx(), messaging());
     const again = await slackPull(ctx(first.cursor), messaging());
     expect(again.items).toBe(0);
-    expect(await db.query("select count(*)::int as n from messages")).toEqual([{ n: 5 }]);
+    expect(await db.query("select count(*)::int as n from messages")).toEqual([{ n: 4 }]);
   });
 
   it("marks a conversation answered when the owner spoke last, and reopens a cleared one on a new message", async () => {
@@ -573,7 +733,7 @@ describe("request finder", () => {
   });
 
   it("runs after the message check, once the inbox has been sorted", async () => {
-    const runs = await runNow(db, "inbox-rules");
+    const runs = await runNow(db, "inbox-rules", OWNER_ID, NOW);
     expect(runs.map((r) => r.jobId)).toEqual(["inbox-rules"]);
     expect(JOBS.filter((j) => j.follows?.includes("slack-pull")).map((j) => j.id)).toEqual(["inbox-rules", "request-finder"]);
     expect(await runJob(db, "request-finder", OWNER_ID, NOW)).toMatchObject({ ok: true, items: 1 });
@@ -612,7 +772,7 @@ describe("outbox", () => {
     expect(slack.calls).toEqual([
       ["chat.postMessage", { channel: "D1", text: "Swapping it today" }],
       ["conversations.open", { users: "ULUIS" }],
-      ["chat.postMessage", { channel: "D-LUIS", text: "New task for you: Swap hook on Harbor clip 4 (due 2026-10-09)\n\nPlease swap it." }],
+      ["chat.postMessage", { channel: "D-LUIS", text: "New task for you: Swap hook on Harbor clip 4\nDue Fri, Oct 9 · High priority · Harbor Realty\n\nPlease swap it." }],
     ]);
     expect(await db.query("select status, last_error from outbox order by created_at, to_name")).toEqual([
       { status: "sent", last_error: null },
@@ -629,8 +789,62 @@ describe("outbox", () => {
     process.env.SENDING_ENABLED = "true";
     const slack = sender();
     expect((await outboxSend(ctx(), slack)).items).toBe(1);
-    expect(slack.calls).toEqual([["chat.postMessage", { channel: "C1", text: "<@ULUIS> new task for you: From Priya: Booked 2 more discovery calls for tomorrow. (due 2026-10-09)\n\nBefore Friday please." }]]);
+    expect(slack.calls).toEqual([["chat.postMessage", { channel: "C1", text: "<@ULUIS> new task for you: From Priya: Booked 2 more discovery calls for tomorrow.\nDue Fri, Oct 9 · Low priority\n\nBefore Friday please." }]]);
     expect((await loadState(db)).inbox.find((c) => c.id === "slack:C1")!.thread.at(-1)).toMatchObject({ me: true, status: "sent" });
+  });
+
+  it("posts a task's description as a reply in the thread under its announcement", async () => {
+    await seed(db);
+    const { applyAction } = await import("@/server/repo");
+    await applyAction(db, "setTaskDescription", ["t_hook", "The new hook is in the shared folder."], OWNER_ID, new Date(NOW));
+    await applyAction(db, "delegateTask", ["t_hook", "u_luis", "Today if you can.", "2026-10-09"], OWNER_ID, new Date(NOW));
+    process.env.SENDING_ENABLED = "true";
+    const slack = fakeSlack({ "conversations.open": () => ({ channel: { id: "D-LUIS" } }), "chat.postMessage": (p) => ({ ok: true, ts: p.thread_ts ? "1700000000.000300" : "1700000000.000200" }) });
+    expect(await outboxSend(ctx(), slack)).toMatchObject({ items: 2, message: "Sent 2 of 2" });
+    // First what the task is, with the note. Then its description, under that message.
+    expect(slack.calls.filter(([m]) => m === "chat.postMessage").map(([, p]) => p)).toEqual([
+      { channel: "D-LUIS", text: "New task for you: Swap hook on Harbor clip 4\nDue Fri, Oct 9 · High priority · Harbor Realty\n\nToday if you can." },
+      { channel: "D-LUIS", text: "The new hook is in the shared folder.", thread_ts: "1700000000.000200" },
+    ]);
+    expect(await db.query("select status from outbox")).toEqual([{ status: "sent" }, { status: "sent" }]);
+  });
+
+  it("posts the description into the same thread when the task is announced in one", async () => {
+    await seed(db);
+    const { applyAction } = await import("@/server/repo");
+    // A row that is one thread in #sales, as the Slack check files it.
+    await db.run("insert into conversations (id, owner_id, source, external_id, thread_ts, from_name, ctx, last_text, last_at) values ('slack:C1:5.0', $1, 'slack', 'C1', '5.0', 'Priya', '#sales', 'Can someone take the venue?', $2)", [OWNER_ID, NOW]);
+    await db.run("insert into messages (id, conversation_id, owner_id, external_id, sender_name, body, at) values ('slack:C1:5.0:5.0', 'slack:C1:5.0', $1, '5.0', 'Priya', 'Can someone take the venue?', $2)", [OWNER_ID, NOW]);
+    await db.run("insert into tasks (id, owner_id, title, description, dept, pri, due, created_at, src_type, src_id) values ('t_venue', $1, 'Book the venue', 'Shortlist is in the doc.', 'Operations', 'mid', '2026-10-09', $2, 'message', 'slack:C1:5.0')", [OWNER_ID, NOW]);
+    await applyAction(db, "delegateTask", ["t_venue", "u_luis", "", "2026-10-09", "chat"], OWNER_ID, new Date(NOW));
+    process.env.SENDING_ENABLED = "true";
+    const slack = fakeSlack({ "chat.postMessage": () => ({ ok: true, ts: "6.0" }) });
+    await outboxSend(ctx(), slack);
+    expect(slack.calls.map(([, p]) => p)).toEqual([
+      { channel: "C1", text: "<@ULUIS> new task for you: Book the venue\nDue Fri, Oct 9 · Medium priority", thread_ts: "5.0" },
+      { channel: "C1", text: "Shortlist is in the doc.", thread_ts: "5.0" },
+    ]);
+  });
+
+  it("holds the description back until its announcement has gone, and gives up on it when that cannot be sent", async () => {
+    await seed(db);
+    const { applyAction } = await import("@/server/repo");
+    await db.run("insert into tasks (id, owner_id, title, description, dept, pri, due, created_at) values ('t_check', $1, 'Check the invoice', 'The total looks off.', 'Finances', 'mid', '2026-10-09', $2)", [OWNER_ID, NOW]);
+    // Rene has no Slack account linked, so the announcement cannot go.
+    await applyAction(db, "delegateTask", ["t_check", "u_rene", "", "2026-10-09"], OWNER_ID, new Date(NOW));
+    const states = async () => (await db.query<{ status: string; last_error: string | null }>("select status, last_error from outbox order by created_at")).map((o) => [o.status, o.last_error]);
+    // Sending switched off: both wait.
+    const slack = fakeSlack({});
+    await outboxSend(ctx(), slack);
+    expect(await states()).toEqual([["queued", null], ["queued", null]]);
+
+    process.env.SENDING_ENABLED = "true";
+    await outboxSend(ctx(), slack);
+    expect(await states()).toEqual([["queued", "Rene Park has no Slack account linked in Settings"], ["queued", null]]);
+    for (let k = 0; k < 4; k++) await outboxSend(ctx(), slack);
+    expect(await states()).toEqual([["failed", "Rene Park has no Slack account linked in Settings"], ["failed", "The message this goes under could not be sent"]]);
+    // Nothing was ever posted: the description never goes out by itself.
+    expect(slack.calls).toEqual([]);
   });
 
   it("sends a reply written under a thread into that thread", async () => {
@@ -691,6 +905,44 @@ describe("runner", () => {
     const run = await runJob(db, "inbox-rules", OWNER_ID, NOW);
     expect(run).toMatchObject({ ok: true, items: 1, message: "1 re-sorted" });
     expect((await loadState(db)).inbox.find((c) => c.id === "slack:D1")!.pri).toBe("mid");
+  });
+
+  it("clears what has had nothing new for three days in the same pass, and keeps the request that is still waiting", async () => {
+    await seed(db);
+    await requestFinder(ctx());
+    const waiting = async () => (await loadState(db, OWNER_ID, new Date(NOW))).suggestions.filter((g) => g.status === "new").map((g) => g.src?.id);
+    expect(await waiting()).toEqual(["slack:D1"]);
+
+    const later = NOW + 4 * 86_400_000;
+    expect(await runJob(db, "inbox-rules", OWNER_ID, later)).toMatchObject({ ok: true, message: "1 re-sorted, 2 older than 3 days cleared" });
+    const inbox = (await loadState(db)).inbox;
+    expect(inbox.map((c) => [c.id, c.done, c.autoCleared]).sort()).toEqual([["slack:C1", true, true], ["slack:D1", true, true]]);
+    // Growing old is not the same as being dealt with: the suggested reply is still there.
+    await requestFinder({ db, ownerId: OWNER_ID, now: later, cursor: {} });
+    expect(await waiting()).toEqual(["slack:D1"]);
+    // Cleared by the owner, it is settled.
+    await (await import("@/server/repo")).applyAction(db, "markConversationDone", ["slack:D1"], OWNER_ID, new Date(later));
+    await requestFinder({ db, ownerId: OWNER_ID, now: later, cursor: {} });
+    expect(await waiting()).toEqual([]);
+  });
+
+  it("brings a conversation that was cleared for its age back when something new arrives", async () => {
+    await seed(db);
+    const later = NOW + 4 * 86_400_000;
+    await runJob(db, "inbox-rules", OWNER_ID, later);
+    expect((await loadState(db)).inbox.find((c) => c.id === "slack:D1")).toMatchObject({ done: true, autoCleared: true });
+
+    const ts = `${Math.floor(later / 1000)}.000100`;
+    const slack = fakeSlack({
+      "search.messages": () => ({ messages: { matches: [{ ts, channel: { id: "D1", is_im: true }, user: "U1", text: "Any news on the hook?" }], paging: { pages: 1 } } }),
+      "users.info": () => ({ user: { id: "U1", profile: { real_name: "Maya Chen" } } }),
+    });
+    await slackPull({ db, ownerId: OWNER_ID, now: later, cursor: { lastTs: `${Math.floor(later / 1000) - 10}.000000`, threadItems: true } }, slack);
+    const row = (await loadState(db)).inbox.find((c) => c.id === "slack:D1")!;
+    expect([row.done, row.autoCleared, row.text]).toEqual([false, undefined, "Any news on the hook?"]);
+    // New again, it is left alone on the next pass.
+    expect((await runJob(db, "inbox-rules", OWNER_ID, later + 60_000)).message).not.toContain("cleared");
+    expect((await loadState(db)).inbox.find((c) => c.id === "slack:D1")!.done).toBe(false);
   });
 
   it("holds a job back for as long as a service asks", async () => {

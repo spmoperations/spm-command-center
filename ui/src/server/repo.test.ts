@@ -4,7 +4,7 @@ import { connect, secretFor } from "./connections";
 import fs from "node:fs";
 import type { Db } from "./db";
 import { databaseHome, describeDbError, migrate, openDb, openRemote, splitStatements } from "./db";
-import { applyAction, loadState, OWNER_ID } from "./repo";
+import { ageOutInbox, applyAction, loadState, OWNER_ID } from "./repo";
 import { seal, unseal } from "./secrets";
 import { NOW, reset, seed, testDb } from "./testing";
 
@@ -24,7 +24,7 @@ beforeEach(async () => {
 
 describe("database", () => {
   it("applies each migration once and records it", async () => {
-    expect(await db.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }, { name: "0006_pictures_and_reactions.sql" }, { name: "0007_media.sql" }]);
+    expect(await db.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }, { name: "0006_pictures_and_reactions.sql" }, { name: "0007_media.sql" }, { name: "0008_thread_items.sql" }, { name: "0009_inbox_age.sql" }, { name: "0010_task_description.sql" }, { name: "0011_outbox_thread_reply.sql" }]);
     expect(await migrate(db)).toEqual([]);
   });
 
@@ -60,8 +60,8 @@ describe("database", () => {
   it("accepts a first schema that was run by hand, then applies what came after", async () => {
     const fresh = await openDb(undefined, { migrate: false });
     for (const statement of splitStatements(fs.readFileSync("db/migrations/0001_init.sql", "utf8"))) await fresh.run(statement);
-    expect(await migrate(fresh)).toEqual(["0002_row_level_security.sql", "0003_personal_and_requests.sql", "0004_threads.sql", "0005_slack_pictures.sql", "0006_pictures_and_reactions.sql", "0007_media.sql"]);
-    expect(await fresh.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }, { name: "0006_pictures_and_reactions.sql" }, { name: "0007_media.sql" }]);
+    expect(await migrate(fresh)).toEqual(["0002_row_level_security.sql", "0003_personal_and_requests.sql", "0004_threads.sql", "0005_slack_pictures.sql", "0006_pictures_and_reactions.sql", "0007_media.sql", "0008_thread_items.sql", "0009_inbox_age.sql", "0010_task_description.sql", "0011_outbox_thread_reply.sql"]);
+    expect(await fresh.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }, { name: "0006_pictures_and_reactions.sql" }, { name: "0007_media.sql" }, { name: "0008_thread_items.sql" }, { name: "0009_inbox_age.sql" }, { name: "0010_task_description.sql" }, { name: "0011_outbox_thread_reply.sql" }]);
     expect(await fresh.query("select relrowsecurity from pg_class where relname = 'messages'")).toEqual([{ relrowsecurity: true }]);
     await fresh.close();
   });
@@ -73,7 +73,7 @@ describe("database", () => {
     }
     await migrate(fresh);
     expect(await fresh.query("select relname from pg_class where relnamespace = 'public'::regnamespace and relkind = 'r' and not relrowsecurity")).toEqual([]);
-    expect(await fresh.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }, { name: "0006_pictures_and_reactions.sql" }, { name: "0007_media.sql" }]);
+    expect(await fresh.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }, { name: "0006_pictures_and_reactions.sql" }, { name: "0007_media.sql" }, { name: "0008_thread_items.sql" }, { name: "0009_inbox_age.sql" }, { name: "0010_task_description.sql" }, { name: "0011_outbox_thread_reply.sql" }]);
     expect(await fresh.query("select mode, asked from messages m join conversations c on c.id = m.conversation_id")).toEqual([]);
     await fresh.close();
   });
@@ -92,6 +92,55 @@ describe("database", () => {
 });
 
 describe("inbox actions", () => {
+  describe("a conversation with nothing new for three days", () => {
+    const DAY = 86_400_000;
+    const lastAt = (id: string, at: number) => db.run("update conversations set last_at = $1 where id = $2", [at, id]);
+    const row = async (id: string) => (await state()).inbox.find((c) => c.id === id)!;
+
+    it("is cleared by itself, and a newer one is left alone", async () => {
+      await lastAt("slack:D1", NOW - 3 * DAY - 1000);
+      await lastAt("slack:C1", NOW - 3 * DAY + 60_000);
+      expect(await ageOutInbox(db, OWNER_ID, NOW)).toBe(1);
+      expect([(await row("slack:D1")).done, (await row("slack:D1")).autoCleared, (await row("slack:C1")).done, (await row("slack:C1")).autoCleared]).toEqual([true, true, false, undefined]);
+      expect(await ageOutInbox(db, OWNER_ID, NOW)).toBe(0);
+    });
+
+    it("stays once it is put back by hand, for three more days", async () => {
+      await lastAt("slack:D1", NOW - 10 * DAY);
+      await ageOutInbox(db, OWNER_ID, NOW);
+      await act("restoreConversation", "slack:D1");
+      expect(await row("slack:D1")).toMatchObject({ done: false });
+      expect((await row("slack:D1")).autoCleared).toBeUndefined();
+      // Its three days count from when it was put back, not from its last message.
+      await ageOutInbox(db, OWNER_ID, NOW + 2 * DAY);
+      expect((await row("slack:D1")).done).toBe(false);
+      await ageOutInbox(db, OWNER_ID, NOW + 3 * DAY + 1000);
+      expect(await row("slack:D1")).toMatchObject({ done: true, autoCleared: true });
+    });
+
+    it("is cleared by the owner, not by age, once they mark it done or answer and close it", async () => {
+      await lastAt("slack:D1", NOW - 10 * DAY);
+      await lastAt("slack:C1", NOW - 10 * DAY);
+      await ageOutInbox(db, OWNER_ID, NOW);
+      await act("markConversationDone", "slack:D1");
+      await act("sendReply", "slack:C1", "On it.", true);
+      expect([(await row("slack:D1")).autoCleared, (await row("slack:C1")).autoCleared]).toEqual([undefined, undefined]);
+      expect([(await row("slack:D1")).done, (await row("slack:C1")).done]).toEqual([true, true]);
+    });
+  });
+
+  it("puts one cleared conversation back in the inbox, and leaves the other cleared ones where they are", async () => {
+    await applyAction(db, "markConversationDone", ["slack:D1"], OWNER_ID, new Date(NOW));
+    await applyAction(db, "markConversationDone", ["slack:C1"], OWNER_ID, new Date(NOW));
+    const cleared = async () => (await loadState(db)).inbox.filter((c) => c.done).map((c) => c.id).sort();
+    expect(await cleared()).toEqual(["slack:C1", "slack:D1"]);
+    await applyAction(db, "restoreConversation", ["slack:D1"], OWNER_ID, new Date(NOW));
+    expect(await cleared()).toEqual(["slack:C1"]);
+    // Restoring everything at once is gone: a chat comes back only when it is picked.
+    await expect(applyAction(db, "restoreInbox", [], OWNER_ID, new Date(NOW))).rejects.toThrow();
+    expect(await cleared()).toEqual(["slack:C1"]);
+  });
+
   it("saves a reply in the thread and queues it for the same Slack conversation", async () => {
     await act("sendReply", "slack:D1", "Sounds good, swapping it today.", false);
     const s = await state();
@@ -145,6 +194,38 @@ describe("inbox actions", () => {
 });
 
 describe("task actions", () => {
+  it("keeps a description with a task, lets it be changed, and sends the whole task when it is assigned", async () => {
+    await act("addTask", { title: "Book the venue", description: "  Shortlist is in the doc.\nNeeds a deposit by Friday.  ", dept: "Operations", project: "Launch", pri: "high", due: "2026-10-09" });
+    const task = async () => (await state()).tasks.find((t) => t.title === "Book the venue")!;
+    expect((await task()).description).toBe("Shortlist is in the doc.\nNeeds a deposit by Friday.");
+
+    await act("setTaskDescription", (await task()).id, "Deposit is paid. Confirm the date.");
+    expect((await task()).description).toBe("Deposit is paid. Confirm the date.");
+    await act("setTaskDescription", (await task()).id, "   ");
+    expect((await task()).description).toBe("");
+    await expect(act("setTaskDescription", "t_missing", "x")).rejects.toThrow("That task no longer exists.");
+    // A task made without one has an empty description, not a missing one.
+    expect((await state()).tasks.find((t) => t.id === "t_hook")!.description).toBe("");
+
+    // Making a task only makes it: nobody is told anything, whatever else is sent along.
+    await act("addTask", { title: "Draft the invite", description: "Use last year's as the base.", dept: "Operations", project: "Launch", pri: "mid", due: "2026-10-09", assignTo: "u_luis" });
+    const invite = async () => (await state()).tasks.find((t) => t.title === "Draft the invite")!;
+    expect([(await invite()).delegatedTo, await db.query("select body from outbox")]).toEqual([null, []]);
+    // Assigning it is the next step. The message says what and when, with the note. The description waits to go under it, in its thread.
+    await act("delegateTask", (await invite()).id, "u_luis", "Send me a draft first.", "2026-10-09");
+    const queued = await db.query<{ id: string; body: string; after_id: string | null; target: string; thread_ts: string | null }>("select id, body, after_id, target, thread_ts from outbox order by created_at");
+    expect(queued.map((o) => [o.body, o.target, o.thread_ts])).toEqual([
+      ["New task for you: Draft the invite\nDue Fri, Oct 9 · Medium priority · Launch\n\nSend me a draft first.", "ULUIS", null],
+      ["Use last year's as the base.", "ULUIS", null],
+    ]);
+    expect([queued[0].after_id, queued[1].after_id]).toEqual([null, queued[0].id]);
+    expect((await invite()).delegatedTo).toMatchObject({ name: "Luis Ramos", note: "Send me a draft first." });
+    expect((await state()).outbox.map((o) => o.inThread).sort()).toEqual([true, undefined].sort());
+    // Taken back before it was sent, both are withdrawn.
+    await act("undelegateTask", (await invite()).id);
+    expect(await db.query("select id from outbox")).toEqual([]);
+  });
+
   it("delegates a task and takes it back, withdrawing the unsent message", async () => {
     await act("delegateTask", "t_hook", "u_luis", "Use the neighborhood-first hook.", "2026-10-12");
     expect((await state()).tasks.find((t) => t.id === "t_hook")).toMatchObject({ due: "2026-10-12", delegatedTo: { name: "Luis Ramos" } });
@@ -326,7 +407,7 @@ describe("assigning to anyone on Slack", () => {
     const s = await state();
     expect(s.tasks.find((x) => x.id === "t_hook")).toMatchObject({ due: "2026-10-13", delegatedTo: { name: "Dana Okafor", role: "Team member", note: "Use the new hook." } });
     expect(s.team.filter((p) => p.slackUserId === "UDANA")).toMatchObject([{ name: "Dana Okafor", depts: [], handles: [] }]);
-    expect(await outbox()).toEqual([{ target: "UDANA", to_name: "Dana Okafor", body: "New task for you: Swap hook on Harbor clip 4 (due 2026-10-13)\n\nUse the new hook." }]);
+    expect(await outbox()).toEqual([{ target: "UDANA", to_name: "Dana Okafor", body: "New task for you: Swap hook on Harbor clip 4\nDue Tue, Oct 13 · High priority · Harbor Realty\n\nUse the new hook." }]);
   });
 
   it("uses the team member when the Slack person is on the list already, and leaves the note out when there is none", async () => {
@@ -334,7 +415,7 @@ describe("assigning to anyone on Slack", () => {
     const s = await state();
     expect(s.tasks.find((x) => x.id === "t_hook")!.delegatedTo).toMatchObject({ personId: "u_luis", name: "Luis Ramos", role: "Lead editor" });
     expect(s.team.filter((p) => p.slackUserId === "ULUIS")).toHaveLength(1);
-    expect((await outbox())[0].body).toBe("New task for you: Swap hook on Harbor clip 4 (due 2026-10-12)");
+    expect((await outbox())[0].body).toBe("New task for you: Swap hook on Harbor clip 4\nDue Mon, Oct 12 · High priority · Harbor Realty");
   });
 
   it("refuses an app or someone who is not in Slack, and changes nothing", async () => {
@@ -344,13 +425,13 @@ describe("assigning to anyone on Slack", () => {
     expect(await outbox()).toEqual([]);
   });
 
-  it("adds a new task already assigned, and keeps a personal one with the owner", async () => {
-    await act("addTask", { title: "Draft the proposal", dept: "SPM Sales", project: "", pri: "mid", due: "2026-10-14", assignTo: "slack:UDANA" });
-    await act("addTask", { title: "Book the dentist", dept: "", project: "", pri: "low", due: "2026-10-14", mode: "personal", assignTo: "slack:UDANA" });
-    const tasks = (await state()).tasks;
-    expect(tasks.find((x) => x.title === "Draft the proposal")!.delegatedTo).toMatchObject({ name: "Dana Okafor" });
-    expect(tasks.find((x) => x.title === "Book the dentist")!.delegatedTo).toBeNull();
-    expect((await outbox()).map((o) => o.body)).toEqual(["New task for you: Draft the proposal (due 2026-10-14)"]);
+  it("assigns a new task to someone from Slack once it has been made", async () => {
+    await act("addTask", { title: "Draft the proposal", dept: "SPM Sales", project: "", pri: "mid", due: "2026-10-14" });
+    const proposal = async () => (await state()).tasks.find((x) => x.title === "Draft the proposal")!;
+    expect((await proposal()).delegatedTo).toBeNull();
+    await act("delegateTask", (await proposal()).id, "slack:UDANA", "", "2026-10-14");
+    expect((await proposal()).delegatedTo).toMatchObject({ name: "Dana Okafor" });
+    expect((await outbox()).map((o) => o.body)).toEqual(["New task for you: Draft the proposal\nDue Wed, Oct 14 · Medium priority"]);
   });
 
   it("assigns a message to someone from Slack as a task for them", async () => {
@@ -415,15 +496,15 @@ describe("assigning in the chat", () => {
     await act("delegateConversation", "slack:C1", "u_luis", "Before Friday please.", "2026-10-09", "chat");
     const [task] = (await state()).tasks.filter((x) => x.src?.id === "slack:C1");
     expect(task).toMatchObject({ title: "From Priya: Booked 2 more discovery calls for tomorrow.", delegatedTo: { name: "Luis Ramos", note: "Before Friday please." } });
-    expect(await outbox()).toEqual([{ target: "C1", ctx: "#sales", conversation_id: "slack:C1", task_id: task.id, body: "<@ULUIS> new task for you: From Priya: Booked 2 more discovery calls for tomorrow. (due 2026-10-09)\n\nBefore Friday please." }]);
+    expect(await outbox()).toEqual([{ target: "C1", ctx: "#sales", conversation_id: "slack:C1", task_id: task.id, body: "<@ULUIS> new task for you: From Priya: Booked 2 more discovery calls for tomorrow.\nDue Fri, Oct 9 · Low priority\n\nBefore Friday please." }]);
     const c = await chat("slack:C1");
     expect(c).toMatchObject({ done: true, replied: true });
-    expect(c.thread.at(-1)).toMatchObject({ me: true, status: "queued", text: "@Luis Ramos new task for you: From Priya: Booked 2 more discovery calls for tomorrow. (due 2026-10-09)\n\nBefore Friday please." });
+    expect(c.thread.at(-1)).toMatchObject({ me: true, status: "queued", text: "@Luis Ramos new task for you: From Priya: Booked 2 more discovery calls for tomorrow.\nDue Fri, Oct 9 · Low priority\n\nBefore Friday please." });
   });
 
   it("uses the person's name when they have no Slack account to tag", async () => {
     await act("delegateConversation", "slack:C1", "u_rene", "", "2026-10-09", "chat");
-    expect((await outbox())[0].body).toBe("Rene Park new task for you: From Priya: Booked 2 more discovery calls for tomorrow. (due 2026-10-09)");
+    expect((await outbox())[0].body).toBe("Rene Park new task for you: From Priya: Booked 2 more discovery calls for tomorrow.\nDue Fri, Oct 9 · Low priority");
   });
 
   it("takes the unsent chat message back with the task", async () => {
@@ -440,7 +521,7 @@ describe("assigning in the chat", () => {
     await act("conversationToTask", "slack:C1", "2026-10-08");
     const [task] = (await state()).tasks.filter((x) => x.src?.id === "slack:C1");
     await act("delegateTask", task.id, "u_luis", "", "2026-10-10", "chat");
-    expect((await outbox())[0]).toMatchObject({ target: "C1", body: "<@ULUIS> new task for you: Reply to Priya: Booked 2 more discovery calls for tomorrow. (due 2026-10-10)" });
+    expect((await outbox())[0]).toMatchObject({ target: "C1", body: "<@ULUIS> new task for you: Reply to Priya: Booked 2 more discovery calls for tomorrow.\nDue Sat, Oct 10 · Low priority" });
   });
 
   it("refuses a one-to-one chat and a task that came from nowhere, and changes nothing", async () => {
@@ -464,7 +545,7 @@ describe("assigning in a Slack channel", () => {
   it("posts a task to any channel with nobody tagged: the channel takes it", async () => {
     await act("delegateTask", "t_hook", "", "Whoever is free.", "2026-10-12", "channel:C7");
     expect((await hook()).delegatedTo).toMatchObject({ personId: "channel:C7", name: "#ops-team", role: "Slack channel", note: "Whoever is free." });
-    expect(await outbox()).toEqual([{ target: "C7", to_name: "#ops-team", ctx: "#ops-team", conversation_id: null, body: "New task: Swap hook on Harbor clip 4 (due 2026-10-12)\n\nWhoever is free." }]);
+    expect(await outbox()).toEqual([{ target: "C7", to_name: "#ops-team", ctx: "#ops-team", conversation_id: null, body: "New task: Swap hook on Harbor clip 4\nDue Mon, Oct 12 · High priority · Harbor Realty\n\nWhoever is free." }]);
     await act("undelegateTask", "t_hook");
     expect((await hook()).delegatedTo).toBeNull();
     expect(await outbox()).toEqual([]);
@@ -473,26 +554,28 @@ describe("assigning in a Slack channel", () => {
   it("tags the person when one is picked, and the task is theirs", async () => {
     await act("delegateTask", "t_hook", "u_luis", "", "2026-10-12", "channel:C7");
     expect((await hook()).delegatedTo).toMatchObject({ personId: "u_luis", name: "Luis Ramos" });
-    expect((await outbox())[0]).toMatchObject({ target: "C7", to_name: "Luis Ramos", body: "<@ULUIS> new task for you: Swap hook on Harbor clip 4 (due 2026-10-12)" });
+    expect((await outbox())[0]).toMatchObject({ target: "C7", to_name: "Luis Ramos", body: "<@ULUIS> new task for you: Swap hook on Harbor clip 4\nDue Mon, Oct 12 · High priority · Harbor Realty" });
   });
 
   it("shows the post in the thread when the dashboard follows that channel", async () => {
     await act("delegateTask", "t_hook", "", "", "2026-10-12", "channel:C1");
     expect((await outbox())[0]).toMatchObject({ target: "C1", conversation_id: "slack:C1" });
-    expect((await state()).inbox.find((c) => c.id === "slack:C1")!.thread.at(-1)).toMatchObject({ me: true, status: "queued", text: "New task: Swap hook on Harbor clip 4 (due 2026-10-12)" });
+    expect((await state()).inbox.find((c) => c.id === "slack:C1")!.thread.at(-1)).toMatchObject({ me: true, status: "queued", text: "New task: Swap hook on Harbor clip 4\nDue Mon, Oct 12 · High priority · Harbor Realty" });
   });
 
   it("assigns a conversation to a channel without picking anyone", async () => {
     await act("delegateConversation", "slack:D1", "", "", "2026-10-09", "channel:C7");
     const [task] = (await state()).tasks.filter((x) => x.src?.id === "slack:D1");
     expect(task).toMatchObject({ dept: "Operations", delegatedTo: { name: "#ops-team" } });
-    expect((await outbox())[0].body).toBe("New task: From Maya Chen: Can we swap the hook on clip 4 before Friday? (due 2026-10-09)");
+    expect((await outbox())[0].body).toBe("New task: From Maya Chen: Can we swap the hook on clip 4 before Friday?\nDue Fri, Oct 9 · Low priority");
   });
 
-  it("adds a new task straight into a channel", async () => {
-    await act("addTask", { title: "Draft the proposal", dept: "SPM Sales", project: "", pri: "mid", due: "2026-10-14", assignTo: "channel:C7" });
-    expect((await state()).tasks.find((x) => x.title === "Draft the proposal")!.delegatedTo).toMatchObject({ name: "#ops-team" });
-    expect((await outbox()).map((o) => o.body)).toEqual(["New task: Draft the proposal (due 2026-10-14)"]);
+  it("posts a new task into a channel once it has been made, description and all", async () => {
+    await act("addTask", { title: "Draft the proposal", description: "Two pages, pricing on the second.", dept: "SPM Sales", project: "", pri: "mid", due: "2026-10-14" });
+    const proposal = async () => (await state()).tasks.find((x) => x.title === "Draft the proposal")!;
+    await act("delegateTask", (await proposal()).id, "", "", "2026-10-14", "channel:C7");
+    expect((await proposal()).delegatedTo).toMatchObject({ name: "#ops-team" });
+    expect((await outbox()).map((o) => o.body)).toEqual(["New task: Draft the proposal\nDue Wed, Oct 14 · Medium priority", "Two pages, pricing on the second."]);
   });
 
   it("needs a person for a direct message, and a channel from the owner's own list", async () => {

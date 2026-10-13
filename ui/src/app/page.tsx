@@ -279,7 +279,7 @@ export default function TodayPage() {
           )}
           {suggested > 0 && (
             <div className="sg-foot">
-              {suggested} suggested {suggested === 1 ? "task" : "tasks"} from your inbox and calls. <Link href="/tasks">Review</Link>
+              {suggested} suggested {suggested === 1 ? "task" : "tasks"} from your inbox and calls. <Link href="/tasks#suggested">Review</Link>
             </div>
           )}
         </div>

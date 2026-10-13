@@ -1,11 +1,12 @@
 // Runs the checks. Each job is one function in this folder; this file decides when a job is
 // due, gives it its bookmark, records the result, and backs off when a service asks it to wait.
+import { INBOX_DAYS } from "@/core/config";
 import { isDue, jobById, JOBS, liveJobs, waitUntil } from "@/core/jobs";
 import type { JobId, JobSetting } from "@/core/types";
 import { aiConfigured } from "@/server/ai";
 import { secretFor } from "@/server/connections";
 import type { Db } from "@/server/db";
-import { OWNER_ID, resortInbox, sendingEnabled } from "@/server/repo";
+import { ageOutInbox, OWNER_ID, resortInbox, sendingEnabled } from "@/server/repo";
 import { RateLimited, slackClient } from "@/server/slack";
 import { telegramApi, telegramAvailable, telegramBlocked, telegramConnected } from "@/server/telegram";
 import { fathomPull } from "./fathom";
@@ -58,7 +59,9 @@ async function execute(jobId: JobId, ctx: JobContext): Promise<JobResult> {
     }
     case "inbox-rules": {
       const changed = await resortInbox(ctx.db, ctx.ownerId);
-      return { items: changed, message: `${changed} re-sorted` };
+      // Then what has had nothing new for a few days leaves the inbox.
+      const aged = await ageOutInbox(ctx.db, ctx.ownerId, ctx.now);
+      return { items: changed + aged, message: `${changed} re-sorted${aged ? `, ${aged} older than ${INBOX_DAYS} days cleared` : ""}` };
     }
     case "request-finder":
       return requestFinder(ctx);
@@ -177,9 +180,9 @@ export async function syncAll(db: Db, ownerId = OWNER_ID): Promise<JobRun[]> {
 }
 
 /** What "Run now" does: the job itself, then anything that follows it. */
-export async function runNow(db: Db, jobId: JobId, ownerId = OWNER_ID): Promise<JobRun[]> {
-  const runs = [await runJob(db, jobId, ownerId)];
-  if (runs[0].ok) for (const follower of JOBS.filter((j) => j.follows?.includes(jobId))) runs.push(await runJob(db, follower.id, ownerId));
+export async function runNow(db: Db, jobId: JobId, ownerId = OWNER_ID, now = Date.now()): Promise<JobRun[]> {
+  const runs = [await runJob(db, jobId, ownerId, now)];
+  if (runs[0].ok) for (const follower of JOBS.filter((j) => j.follows?.includes(jobId))) runs.push(await runJob(db, follower.id, ownerId, now));
   return runs;
 }
 

@@ -47,6 +47,12 @@ export const TARGETS: boolean = false;
  */
 export const PERSONAL_SIDE: boolean = false;
 export const SOURCE_NAME: Record<Source, string> = { slack: "Slack", telegram: "Telegram" };
+
+/**
+ * A conversation with nothing new for this many days is cleared from the inbox by itself.
+ * It stays in the cleared list, and a new message brings it back.
+ */
+export const INBOX_DAYS = 3;
 export const SOURCE_SHORT: Record<Source, string> = { slack: "SL", telegram: "TG" };
 
 export const PRIORITIES: Priority[] = ["high", "mid", "low"];

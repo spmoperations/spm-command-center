@@ -248,7 +248,7 @@ export function sendReply(id: string, text: string, markDone: boolean, thread: s
 }
 
 export const markConversationDone = (id: string) => void act("markConversationDone", [id], "Marked done", inInbox(id, { done: true }));
-export const restoreInbox = () => void act("restoreInbox", []);
+export const restoreConversation = (id: string) => void act("restoreConversation", [id], "Back in the inbox", inInbox(id, { done: false }));
 export const conversationToTask = (id: string, today: string) => void act("conversationToTask", [id, today], "Task added, due today", inInbox(id, { done: true }));
 
 const delegated = () => (app?.state.sendingEnabled ? "Assigned. They have been told on Slack." : "Assigned. Their Slack message waits in the outbox, because sending is off.");
@@ -264,12 +264,11 @@ export function delegateConversation(id: string, personId: string, note: string,
 
 export const openTask = (id: string | null) => setUi({ openTask: id });
 
-/** `assignTo` is a team member's id, or "slack:<id>" for someone picked straight from Slack. */
-export const addTask = (input: Pick<Task, "title" | "dept" | "project" | "pri" | "due" | "mode"> & { assignTo?: string }) =>
-  void act("addTask", [input], input.assignTo ? `Task added. ${delegated()}` : "Task added");
+export const addTask = (input: Pick<Task, "title" | "description" | "dept" | "project" | "pri" | "due" | "mode">) => void act("addTask", [input], "Task added");
 export const actionItemToTask = (meetingId: string, index: number) => void act("actionItemToTask", [meetingId, index], "Task added");
 export const toggleTask = (id: string, done: boolean) => void act("toggleTask", [id, done], done ? "Task done" : undefined, inTasks(id, { done, doneAt: done ? Date.now() : null }));
 export const setTaskPriority = (id: string, pri: Priority) => void act("setTaskPriority", [id, pri], undefined, inTasks(id, { pri }));
+export const setTaskDescription = (id: string, description: string) => void act("setTaskDescription", [id, description], "Description saved", inTasks(id, { description: description.trim() }));
 export const delegateTask = (id: string, personId: string, note: string, due: string, where: AssignWhere = "dm") => void act("delegateTask", [id, personId, note, due, where], delegatedIn(where));
 export const undelegateTask = (id: string) => void act("undelegateTask", [id], "Task is back on your plate");
 

@@ -74,7 +74,7 @@ describe("delegation", () => {
     { id: "u3", name: "Rene Park", role: "Bookkeeper", depts: ["Finances"], handles: ["Invoices"] },
   ];
   const task = (over: Partial<Task>): Task => ({
-    id: "t", title: "Swap hook on Harbor clip #4", mode: "professional", dept: "Client Sales", project: "Harbor Realty", pri: "high",
+    id: "t", title: "Swap hook on Harbor clip #4", description: "", mode: "professional", dept: "Client Sales", project: "Harbor Realty", pri: "high",
     due: "2026-10-09", done: false, createdAt: 0, delegable: true, ...over,
   });
 
@@ -109,13 +109,21 @@ describe("delegation", () => {
 
   it("words the message for a direct message, and tags the person when it goes in a chat", () => {
     const about = { title: "Swap the hook", due: "2026-10-12" };
-    expect(assignmentText({ ...about, where: "dm", who: "Luis Ramos", note: "" })).toBe("New task for you: Swap the hook (due 2026-10-12)");
-    expect(assignmentText({ ...about, where: "chat", who: "<@ULUIS>", note: "Use the new one." })).toBe("<@ULUIS> new task for you: Swap the hook (due 2026-10-12)\n\nUse the new one.");
+    expect(assignmentText({ ...about, where: "dm", who: "Luis Ramos", note: "" })).toBe("New task for you: Swap the hook\nDue Mon, Oct 12");
+    expect(assignmentText({ ...about, where: "chat", who: "<@ULUIS>", note: "Use the new one." })).toBe("<@ULUIS> new task for you: Swap the hook\nDue Mon, Oct 12\n\nUse the new one.");
+  });
+
+  it("says what the task is, when it is due, how much it matters and what it belongs to, then the note", () => {
+    const whole = { where: "dm" as const, who: "Luis Ramos", title: "Book the venue", due: "2026-10-16", pri: "high" as const, project: "Launch", note: "Ask me if the price moves." };
+    expect(assignmentText(whole)).toBe("New task for you: Book the venue\nDue Fri, Oct 16 · High priority · Launch\n\nAsk me if the price moves.");
+    // What is not there is left out, with no empty lines in its place.
+    expect(assignmentText({ ...whole, note: "", project: "" })).toBe("New task for you: Book the venue\nDue Fri, Oct 16 · High priority");
+    expect(assignmentText({ ...whole, pri: "mid", note: "Before Friday." })).toBe("New task for you: Book the venue\nDue Fri, Oct 16 · Medium priority · Launch\n\nBefore Friday.");
   });
 
   it("addresses the channel as a whole when nobody is tagged", () => {
-    expect(assignmentText({ where: "channel:C9", who: "", title: "Swap the hook", due: "2026-10-12", note: "" })).toBe("New task: Swap the hook (due 2026-10-12)");
-    expect(assignmentText({ where: "channel:C9", who: "@Luis Ramos", title: "Swap the hook", due: "2026-10-12", note: "" })).toBe("@Luis Ramos new task for you: Swap the hook (due 2026-10-12)");
+    expect(assignmentText({ where: "channel:C9", who: "", title: "Swap the hook", due: "2026-10-12", note: "" })).toBe("New task: Swap the hook\nDue Mon, Oct 12");
+    expect(assignmentText({ where: "channel:C9", who: "@Luis Ramos", title: "Swap the hook", due: "2026-10-12", note: "" })).toBe("@Luis Ramos new task for you: Swap the hook\nDue Mon, Oct 12");
   });
 
   it("marks a task overdue only before its due day", () => {

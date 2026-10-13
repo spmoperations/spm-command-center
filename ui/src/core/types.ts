@@ -70,6 +70,13 @@ export interface Conversation {
   manualMode?: boolean;
   /** The profile picture for the row, when it is kept by the dashboard itself (Telegram). */
   avatar?: string;
+  /** Cleared by itself, for having nothing new in `INBOX_DAYS` days, and not by the owner. */
+  autoCleared?: boolean;
+  /**
+   * Set when this row is one thread in a Slack channel: the id of the message that started
+   * it. A reply written here goes into that thread.
+   */
+  root?: string;
   thread: ThreadMessage[];
 }
 
@@ -89,6 +96,8 @@ export interface Delegation {
 export interface Task {
   id: string;
   title: string;
+  /** The rest of it: context, links, what done looks like. Empty when none was written. */
+  description: string;
   mode: Mode;
   dept: string;
   project: string;
@@ -215,6 +224,8 @@ export interface OutboxItem {
   status: "queued" | "sent" | "failed";
   conversationId?: string;
   taskId?: string;
+  /** True for a reply that goes under another message, in its thread: a task's description under its announcement. */
+  inThread?: boolean;
 }
 
 export type JobId =

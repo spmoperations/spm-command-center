@@ -1,7 +1,7 @@
 // Reads and writes for the dashboard. `loadState` builds what the screens show; `ACTIONS`
 // holds every change a person can make. Jobs write through their own modules in `src/jobs`.
 import crypto from "node:crypto";
-import { PERSONAL } from "@/core/config";
+import { INBOX_DAYS, PERSONAL } from "@/core/config";
 import { assignmentText, canAssignInChat, CHANNEL_PICK, SLACK_PICK, type AssignWhere } from "@/core/delegation";
 import { addDays, isoDay, monthKey, pad } from "@/core/dates";
 import { clampInterval, defaultJobSettings, JOBS } from "@/core/jobs";
@@ -60,8 +60,8 @@ export async function ensureOwner(db: Db, ownerId = OWNER_ID): Promise<void> {
 // ---------- Reading ----------
 
 interface ConversationRow {
-  id: string; source: Conversation["source"]; external_id: string; from_name: string; ctx: string; direct: boolean; tagged: boolean;
-  last_text: string; last_at: number; pri: Priority; line: Conversation["line"]; mode: Mode; project: string; done: boolean; replied: boolean; manual_pri: boolean; manual_mode: boolean;
+  id: string; source: Conversation["source"]; external_id: string; thread_ts: string | null; from_name: string; ctx: string; direct: boolean; tagged: boolean;
+  last_text: string; last_at: number; pri: Priority; line: Conversation["line"]; mode: Mode; project: string; done: boolean; auto_done: boolean; replied: boolean; manual_pri: boolean; manual_mode: boolean;
 }
 interface MessageRow {
   id: string; conversation_id: string; sender_name: string; sender_id: string | null; me: boolean; body: string; at: number; status: "queued" | "sent" | "failed" | null; external_id: string | null; thread_ts: string | null;
@@ -72,7 +72,7 @@ interface MessageRow {
 const pictureUrl = (messageId: string, n: number, full = false) => `/api/media?m=${encodeURIComponent(messageId)}&n=${n}${full ? "&full=1" : ""}`;
 const avatarUrl = (id: string) => `/api/media?avatar=${encodeURIComponent(id)}`;
 interface TaskRow {
-  id: string; title: string; mode: Mode; dept: string; project: string; pri: Priority; due: string; done: boolean; done_at: number | null;
+  id: string; title: string; description: string | null; mode: Mode; dept: string; project: string; pri: Priority; due: string; done: boolean; done_at: number | null;
   src_type: "message" | "meeting" | null; src_id: string | null; delegable: boolean;
   delegated_to: string | null; delegated_name: string | null; delegated_role: string | null; delegated_note: string | null; delegated_at: number | null;
   created_at: number;
@@ -88,7 +88,7 @@ const MESSAGES_SHOWN = 150;
 const toRule = (r: RuleRow): Rule => ({ id: r.id, source: r.source, when: r.match_on, op: r.op, value: r.value, pri: r.pri ?? undefined, line: r.line ?? undefined, mode: r.mode ?? undefined });
 
 const toTask = (t: TaskRow): Task => ({
-  id: t.id, title: t.title, mode: t.mode, dept: t.dept, project: t.project, pri: t.pri, due: t.due, done: t.done, doneAt: t.done_at, createdAt: Number(t.created_at),
+  id: t.id, title: t.title, description: t.description ?? "", mode: t.mode, dept: t.dept, project: t.project, pri: t.pri, due: t.due, done: t.done, doneAt: t.done_at, createdAt: Number(t.created_at),
   src: t.src_type && t.src_id ? { type: t.src_type, id: t.src_id } : null,
   delegable: t.delegable,
   delegatedTo: t.delegated_to ? { personId: t.delegated_to, name: t.delegated_name ?? "", role: t.delegated_role ?? "", note: t.delegated_note ?? "", at: t.delegated_at ?? 0 } : null,
@@ -149,6 +149,8 @@ async function loadConversations(db: Db, ownerId: string): Promise<Conversation[
     return {
       id: r.id, source: r.source, from: r.from_name, ctx: r.ctx, direct: r.direct, tagged: r.tagged, text: r.last_text, at: r.last_at,
       pri: r.pri, line: r.line, mode: r.mode, project: r.project, done: r.done, replied: r.replied, manualPri: r.manual_pri || undefined, manualMode: r.manual_mode || undefined,
+      root: r.thread_ts ?? undefined,
+      autoCleared: (r.done && r.auto_done) || undefined,
       // A one-to-one chat shows the other person. A group shows whoever wrote last.
       avatar: r.source !== "telegram" ? undefined : r.direct && faces.has(r.external_id) ? avatarUrl(r.external_id) : thread.findLast((m) => !m.me)?.avatar,
       thread,
@@ -237,7 +239,7 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     db.query<{ metric_id: string; day: string; value: number }>("select metric_id, day, value from metric_logs where owner_id = $1 and day like $2", [ownerId, `${month}-%`]),
     db.query<{ id: string; scope: "day" | "week"; period: string; body: string; done: boolean; mode: Mode }>("select * from focus_items where owner_id = $1 and period >= $2 order by position", [ownerId, addDays(now, -14)]),
     db.query<{ id: string; label: string; url: string; mode: Mode }>("select id, label, url, mode from quick_links where owner_id = $1 order by position", [ownerId]),
-    db.query<{ id: string; source: "slack" | "telegram"; to_name: string; ctx: string; body: string; created_at: number; status: "queued" | "sent" | "failed"; conversation_id: string | null; task_id: string | null }>(
+    db.query<{ id: string; source: "slack" | "telegram"; to_name: string; ctx: string; body: string; created_at: number; status: "queued" | "sent" | "failed"; conversation_id: string | null; task_id: string | null; after_id: string | null }>(
       "select * from outbox where owner_id = $1 order by created_at desc limit 100",
       [ownerId],
     ),
@@ -285,7 +287,7 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     logs,
     focus,
     links,
-    outbox: outbox.map((o) => ({ id: o.id, source: o.source, to: o.to_name, ctx: o.ctx, text: o.body, at: Number(o.created_at), status: o.status, conversationId: o.conversation_id ?? undefined, taskId: o.task_id ?? undefined })),
+    outbox: outbox.map((o) => ({ id: o.id, source: o.source, to: o.to_name, ctx: o.ctx, text: o.body, at: Number(o.created_at), status: o.status, conversationId: o.conversation_id ?? undefined, taskId: o.task_id ?? undefined, inThread: Boolean(o.after_id) || undefined })),
     jobs: JOBS.map((def) => {
       const row = jobs.find((j) => j.job_id === def.id);
       return { id: def.id, intervalMin: row?.interval_min ?? def.defaultMin, enabled: row?.enabled ?? true };
@@ -325,6 +327,14 @@ export async function resortInbox(db: Db, ownerId: string): Promise<number> {
   return changed;
 }
 
+/**
+ * Clears conversations with nothing new for `INBOX_DAYS` days, so the inbox holds what is
+ * current. One the owner put back by hand counts from when they did. Returns how many.
+ */
+export async function ageOutInbox(db: Db, ownerId: string, now: number): Promise<number> {
+  return db.run("update conversations set done = true, auto_done = true where owner_id = $1 and not done and greatest(last_at, coalesce(restored_at, 0)) < $2", [ownerId, now - INBOX_DAYS * 86_400_000]);
+}
+
 // ---------- Actions ----------
 
 export interface ActionContext {
@@ -338,14 +348,17 @@ const kindOf = (k: RuleKind) => (k === "labelRules" ? "label" : "priority");
 
 const asMode = (value: unknown): Mode => (value === "personal" ? "personal" : "professional");
 
-async function insertTask(c: ActionContext, t: { title: string; dept: string; project: string; pri: Priority; due: string; mode?: Mode; src?: { type: "message" | "meeting"; id: string } | null; delegable?: boolean }): Promise<string> {
+/** A description as it is kept: trimmed, and not longer than a page. */
+const asDescription = (text: unknown) => String(text ?? "").trim().slice(0, 4000);
+
+async function insertTask(c: ActionContext, t: { title: string; description?: string; dept: string; project: string; pri: Priority; due: string; mode?: Mode; src?: { type: "message" | "meeting"; id: string } | null; delegable?: boolean }): Promise<string> {
   const id = uid("t");
   const mode = asMode(t.mode);
   // A personal task has no department or client: it is filed under "Personal".
   const [dept, project] = mode === "personal" ? [PERSONAL, PERSONAL] : [t.dept, t.project];
   await c.db.run(
-    "insert into tasks (id, owner_id, title, dept, project, pri, due, src_type, src_id, delegable, mode, created_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
-    [id, c.ownerId, t.title, dept, project, t.pri, t.due, t.src?.type ?? null, t.src?.id ?? null, t.delegable ?? true, mode, c.now.getTime()],
+    "insert into tasks (id, owner_id, title, description, dept, project, pri, due, src_type, src_id, delegable, mode, created_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+    [id, c.ownerId, t.title, asDescription(t.description), dept, project, t.pri, t.due, t.src?.type ?? null, t.src?.id ?? null, t.delegable ?? true, mode, c.now.getTime()],
   );
   return id;
 }
@@ -383,32 +396,49 @@ async function assignee(c: ActionContext, personId: string): Promise<Assignee> {
  */
 async function delegate(c: ActionContext, taskId: string, personId: string, note: string, due: string, where: AssignWhere = "dm") {
   const person = personId ? await assignee(c, personId) : null;
-  const [task] = await c.db.query<{ title: string; src_type: string | null; src_id: string | null }>("select title, src_type, src_id from tasks where owner_id = $1 and id = $2", [c.ownerId, taskId]);
+  const [task] = await c.db.query<{ title: string; description: string | null; pri: Priority; project: string; mode: Mode; src_type: string | null; src_id: string | null }>(
+    "select title, description, pri, project, mode, src_type, src_id from tasks where owner_id = $1 and id = $2",
+    [c.ownerId, taskId],
+  );
   if (!task) throw new Error("That task or person no longer exists.");
-  const text = (who: string) => assignmentText({ where, who, title: task.title, due, note });
+  // The message says what the task is, when it is due and how much it matters. Its description follows in the thread.
+  const text = (who: string) => assignmentText({ where, who, title: task.title, due, note, pri: task.pri, project: task.mode === "personal" ? "" : task.project });
+  const description = asDescription(task.description);
+  /** Queues the description to go under the message with this id, as a reply in its thread. */
+  const thenDescription = async (firstId: string, target: string | null, toName: string, ctx: string, thread: string | null) => {
+    if (!description) return;
+    await c.db.run(
+      "insert into outbox (id, owner_id, source, target, to_name, ctx, body, task_id, thread_ts, after_id, created_at) values ($1, $2, 'slack', $3, $4, $5, $6, $7, $8, $9, $10)",
+      [uid("o"), c.ownerId, target, toName, ctx, description, taskId, thread, firstId, now + 1],
+    );
+  };
   const now = c.now.getTime();
   let holder = person ? { id: person.id, name: person.name, role: person.role } : null;
 
   if (where === "dm") {
     if (!person) throw new Error("Pick who should get the direct message.");
+    const first = uid("o");
     await c.db.run(
       "insert into outbox (id, owner_id, source, target, to_name, ctx, body, task_id, created_at) values ($1, $2, 'slack', $3, $4, 'Direct message', $5, $6, $7)",
-      [uid("o"), c.ownerId, person.slack_user_id, person.name, text(person.name), taskId, now],
+      [first, c.ownerId, person.slack_user_id, person.name, text(person.name), taskId, now],
     );
+    await thenDescription(first, person.slack_user_id, person.name, "Direct message", null);
   } else {
     // Where it is posted, and the conversation it shows in when the dashboard follows that chat.
-    let place: { target: string; label: string; conversationId: string | null };
+    let place: { target: string; label: string; conversationId: string | null; thread?: string | null };
     if (where === "chat") {
       const [chat] = task.src_type === "message"
-        ? await c.db.query<{ id: string; external_id: string; ctx: string; source: string }>("select id, external_id, ctx, source from conversations where owner_id = $1 and id = $2", [c.ownerId, task.src_id])
+        ? await c.db.query<{ id: string; external_id: string; ctx: string; source: string; thread_ts: string | null }>("select id, external_id, ctx, source, thread_ts from conversations where owner_id = $1 and id = $2", [c.ownerId, task.src_id])
         : [];
       if (!chat || !canAssignInChat(chat)) throw new Error("This task did not come from a channel or a group message. Pick a Slack channel, or send a direct message.");
-      place = { target: chat.external_id, label: chat.ctx, conversationId: chat.id };
+      // A task from one thread is announced in that thread, where the people it concerns are.
+      place = { target: chat.external_id, label: chat.ctx, conversationId: chat.id, thread: chat.thread_ts };
     } else {
       const channelId = where.slice(CHANNEL_PICK.length);
       const [channel] = await c.db.query<{ id: string; name: string }>("select id, name from slack_channels where owner_id = $1 and id = $2", [c.ownerId, channelId]);
       if (!channel) throw new Error("That Slack channel is not on your channel list.");
-      const [followed] = await c.db.query<{ id: string }>("select id from conversations where owner_id = $1 and source = 'slack' and external_id = $2", [c.ownerId, channel.id]);
+      // The channel's own row, not the row of one thread in it: this is a new message in the channel.
+      const [followed] = await c.db.query<{ id: string }>("select id from conversations where owner_id = $1 and source = 'slack' and external_id = $2 and thread_ts is null", [c.ownerId, channel.id]);
       place = { target: channel.id, label: `#${channel.name}`, conversationId: followed?.id ?? null };
     }
     holder ??= { id: `${CHANNEL_PICK}${place.target}`, name: place.label, role: "Slack channel" };
@@ -418,13 +448,17 @@ async function delegate(c: ActionContext, taskId: string, personId: string, note
       const [owner] = await c.db.query<{ name: string }>("select name from users where id = $1", [c.ownerId]);
       messageId = uid("m");
       // In the dashboard the tag reads as a name; Slack needs the person's id to notify them.
-      await c.db.run("insert into messages (id, conversation_id, owner_id, sender_name, me, body, at, status, scanned, asked) values ($1, $2, $3, $4, true, $5, $6, 'queued', true, true)", [messageId, place.conversationId, c.ownerId, owner?.name ?? "You", text(person ? `@${person.name}` : ""), now]);
+      await c.db.run("insert into messages (id, conversation_id, owner_id, sender_name, me, body, at, status, scanned, asked, thread_ts) values ($1, $2, $3, $4, true, $5, $6, 'queued', true, true, $7)", [messageId, place.conversationId, c.ownerId, owner?.name ?? "You", text(person ? `@${person.name}` : ""), now, place.thread ?? null]);
+      if (place.thread) await c.db.run("update messages set thread_ts = $1 where conversation_id = $2 and external_id = $1 and thread_ts is null", [place.thread, place.conversationId]);
       await c.db.run("update conversations set replied = true where id = $1", [place.conversationId]);
     }
+    const first = uid("o");
     await c.db.run(
-      "insert into outbox (id, owner_id, source, target, to_name, ctx, body, conversation_id, message_id, task_id, created_at) values ($1, $2, 'slack', $3, $4, $5, $6, $7, $8, $9, $10)",
-      [uid("o"), c.ownerId, place.target, holder.name, place.label, text(person ? (person.slack_user_id ? `<@${person.slack_user_id}>` : person.name) : ""), place.conversationId, messageId, taskId, now],
+      "insert into outbox (id, owner_id, source, target, to_name, ctx, body, conversation_id, message_id, task_id, thread_ts, created_at) values ($1, $2, 'slack', $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+      [first, c.ownerId, place.target, holder.name, place.label, text(person ? (person.slack_user_id ? `<@${person.slack_user_id}>` : person.name) : ""), place.conversationId, messageId, taskId, place.thread ?? null, now],
     );
+    // In a thread that exists already it goes into that same thread, right after the message.
+    await thenDescription(first, place.target, holder.name, place.label, place.thread ?? null);
   }
   await c.db.run("update tasks set due = $1, delegated_to = $2, delegated_name = $3, delegated_role = $4, delegated_note = $5, delegated_at = $6 where id = $7", [due, holder!.id, holder!.name, holder!.role, note, now, taskId]);
 }
@@ -465,6 +499,8 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
     const conv = await conversation(c, id);
     const [owner] = await c.db.query<{ name: string }>("select name from users where id = $1", [c.ownerId]);
     let threadTs: string | null = null;
+    // A row that is one thread in a channel is answered in that thread, never beside it.
+    thread = conv.thread_ts ?? thread;
     if (thread) {
       // Only a thread that really is in this conversation.
       const [known] = await c.db.query<{ n: number }>("select count(*)::int as n from messages where conversation_id = $1 and (external_id = $2 or thread_ts = $2)", [id, thread]);
@@ -475,17 +511,19 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
     }
     const messageId = uid("m");
     await c.db.run("insert into messages (id, conversation_id, owner_id, sender_name, me, body, at, status, scanned, asked, thread_ts) values ($1, $2, $3, $4, true, $5, $6, 'queued', true, true, $7)", [messageId, id, c.ownerId, owner?.name ?? "You", text, c.now.getTime(), threadTs]);
-    await c.db.run("update conversations set replied = true, done = done or $1 where id = $2", [markDone, id]);
+    await c.db.run("update conversations set replied = true, done = done or $1, auto_done = auto_done and not $1 where id = $2", [markDone, id]);
     await c.db.run(
       "insert into outbox (id, owner_id, source, target, to_name, ctx, body, conversation_id, message_id, thread_ts, created_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
       [uid("o"), c.ownerId, conv.source, conv.external_id, conv.from_name, conv.ctx, text, id, messageId, threadTs, c.now.getTime()],
     );
   },
   async markConversationDone(c, id: string) {
-    await c.db.run("update conversations set done = true where owner_id = $1 and id = $2", [c.ownerId, id]);
+    await c.db.run("update conversations set done = true, auto_done = false where owner_id = $1 and id = $2", [c.ownerId, id]);
   },
-  async restoreInbox(c) {
-    await c.db.run("update conversations set done = false where owner_id = $1 and done", [c.ownerId]);
+  /** Puts one cleared conversation back in the inbox. */
+  async restoreConversation(c, id: string) {
+    // Its age counts from now, so the rule that clears old conversations leaves it for a few days.
+    await c.db.run("update conversations set done = false, auto_done = false, restored_at = $3 where owner_id = $1 and id = $2", [c.ownerId, id, c.now.getTime()]);
   },
   async conversationToTask(c, id: string, today: string) {
     const conv = await conversation(c, id);
@@ -493,7 +531,7 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
     if (!(await openTaskFor(c, id))) {
       await insertTask(c, { title: await replyTitle(c, `Reply to ${conv.from_name}`, conv.last_text), dept: "Operations", project: conv.project, pri: conv.pri, due: today, mode: conv.mode, src: { type: "message", id } });
     }
-    await c.db.run("update conversations set done = true where id = $1", [id]);
+    await c.db.run("update conversations set done = true, auto_done = false where id = $1", [id]);
   },
   async delegateConversation(c, id: string, personId: string, note: string, due: string, where: AssignWhere = "dm") {
     const conv = await conversation(c, id);
@@ -505,16 +543,17 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
     const [team] = person ? await c.db.query<{ depts: string[] }>("select depts from team_members where owner_id = $1 and id = $2", [c.ownerId, person.id]) : [];
     const taskId = existing?.id ?? (await insertTask(c, { title: await replyTitle(c, `From ${conv.from_name}`, conv.last_text), dept: team?.depts?.[0] ?? "Operations", project: conv.project, pri: conv.pri, due, src: { type: "message", id } }));
     await delegate(c, taskId, person?.id ?? "", note, due, where);
-    await c.db.run("update conversations set done = true where id = $1", [id]);
+    await c.db.run("update conversations set done = true, auto_done = false where id = $1", [id]);
   },
 
   // Tasks
-  /** `assignTo` hands the new task straight to a person, or to a channel ("channel:<id>"). Personal tasks stay with the owner. */
-  async addTask(c, input: { title: string; dept: string; project: string; pri: Priority; due: string; mode?: Mode; assignTo?: string }) {
-    const id = await insertTask(c, input);
-    if (!input.assignTo || asMode(input.mode) !== "professional") return;
-    if (input.assignTo.startsWith(CHANNEL_PICK)) await delegate(c, id, "", "", input.due, input.assignTo as AssignWhere);
-    else await delegate(c, id, input.assignTo, "", input.due);
+  /** Makes the task, on the owner's plate. Handing it to someone is a step of its own (`delegateTask`), so the whole task can be read first. */
+  async addTask(c, input: { title: string; description?: string; dept: string; project: string; pri: Priority; due: string; mode?: Mode }) {
+    await insertTask(c, input);
+  },
+  async setTaskDescription(c, id: string, description: string) {
+    const changed = await c.db.run("update tasks set description = $1 where owner_id = $2 and id = $3", [asDescription(description), c.ownerId, id]);
+    if (!changed) throw new Error("That task no longer exists.");
   },
   /** Turns one action item from a call into a task, once. Someone else's becomes a follow-up. */
   async actionItemToTask(c, meetingId: string, index: number) {

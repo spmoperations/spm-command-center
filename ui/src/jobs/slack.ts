@@ -237,7 +237,7 @@ export async function refreshConversation(db: Db, conversationId: string, look: 
   const [before] = await db.query<{ last_at: number; done: boolean; tagged: boolean }>("select last_at, done, tagged from conversations where id = $1", [conversationId]);
   const newIncoming = Boolean(lastIncoming && Number(lastIncoming.at) > Number(before?.last_at ?? 0));
   await db.run(
-    `update conversations set from_name = $1, last_text = $2, last_at = $3, replied = $4, tagged = $5, done = $6 where id = $7`,
+    `update conversations set from_name = $1, last_text = $2, last_at = $3, replied = $4, tagged = $5, done = $6, auto_done = auto_done and $6 where id = $7`,
     [
       look.kind === "im" ? (look.partner ?? lastIncoming?.sender_name ?? "Someone") : (lastIncoming?.sender_name ?? last.sender_name),
       (lastIncoming ?? last).body,
@@ -272,8 +272,26 @@ const FRESH_THREADS = 3;
  * Returns how many messages were added, and how many already here changed.
  */
 export async function slackReadThreads({ db, ownerId }: Pick<JobContext, "db" | "ownerId">, slack: SlackClient, conversationId: string): Promise<{ added: number; changed: number }> {
-  const [conversation] = await db.query<{ external_id: string }>("select external_id from conversations where owner_id = $1 and id = $2 and source = 'slack'", [ownerId, conversationId]);
+  const [conversation] = await db.query<{ external_id: string; thread_ts: string | null }>("select external_id, thread_ts from conversations where owner_id = $1 and id = $2 and source = 'slack'", [ownerId, conversationId]);
   if (!conversation) return { added: 0, changed: 0 };
+  // A row that is one thread: that thread is read again, and that is all there is to it.
+  if (conversation.thread_ts) {
+    const res = await slack.call<{ messages: HistoryMessage[] }>("conversations.replies", { channel: conversation.external_id, ts: conversation.thread_ts, limit: 200 });
+    const look = await lookup(db, ownerId);
+    let added = 0;
+    for (const reply of res.messages) {
+      if (reply.subtype && reply.subtype !== "thread_broadcast") continue;
+      for (const id of [reply.user, ...mentionedIds(reply.text ?? "")]) await learnName(db, ownerId, look, slack, id);
+      // A message nobody has answered is not in a thread yet. Once it has replies it is the first of one.
+      if (await storeMessage(db, ownerId, conversationId, look, reply, res.messages.length > 1 ? conversation.thread_ts : null)) added++;
+    }
+    const changed = (await saveExtras(db, conversationId, look.myId, res.messages)) + (await noteScopes(db, ownerId, slack));
+    if (added) {
+      const fresh = res.messages.filter((m) => m.user !== look.myId).some((m) => mentionsUser(m.text ?? "", look.myId));
+      await refreshConversation(db, conversationId, { kind: look.channels.get(conversation.external_id)?.kind ?? "public", partner: null }, fresh);
+    }
+    return { added, changed };
+  }
   // The messages that could have a thread under them, with how many replies are here already.
   const onScreen = await db.query<{ external_id: string; replies: number }>(
     `select m.external_id,
@@ -321,22 +339,97 @@ export async function slackReadThreads({ db, ownerId }: Pick<JobContext, "db" | 
   return { added, changed };
 }
 
+/** A channel's own row: what is said there that is not addressed to the owner. */
+const channelRow = (channelId: string) => `slack:${channelId}`;
+/** The row of one thread in a channel. `root` is the id of the message that started it. */
+const threadItem = (channelId: string, root: string) => `slack:${channelId}:${root}`;
+
+/** Tasks, suggestions and sent messages that point at a row follow it to the row that replaced it. */
+async function repoint(db: Db, ownerId: string, from: string, to: string): Promise<void> {
+  await db.run("update tasks set src_id = $1 where owner_id = $2 and src_type = 'message' and src_id = $3", [to, ownerId, from]);
+  await db.run("update suggestions set src_id = $1 where owner_id = $2 and src_type = 'message' and src_id = $3", [to, ownerId, from]);
+  await db.run("update outbox set conversation_id = $1 where owner_id = $2 and conversation_id = $3", [to, ownerId, from]);
+}
+
+/**
+ * One time, for what was read before each thread had a row of its own: a channel's
+ * conversation is split the same way. Every thread the owner is tagged in or part of, and
+ * every single message that tags them, becomes its own row and keeps the channel's label,
+ * priority and whether it was cleared. What is left is background: it stays in the channel's
+ * row for a channel the owner follows, and is cleared away otherwise.
+ * Returns how many rows were made.
+ */
+export async function splitChannelThreads(db: Db, ownerId: string, look: Lookup): Promise<number> {
+  const [owner] = await db.query<{ name: string }>("select name from users where id = $1", [ownerId]);
+  const tag = `@${owner?.name ?? ""}`;
+  const rows = await db.query<{ id: string; external_id: string; done: boolean }>(
+    "select id, external_id, done from conversations where owner_id = $1 and source = 'slack' and thread_ts is null and not direct and ctx like '#%'",
+    [ownerId],
+  );
+  let made = 0;
+  for (const row of rows) {
+    const channel = look.channels.get(row.external_id);
+    const kind = channel?.kind ?? "public";
+    const groups = await db.query<{ root: string; threaded: boolean; tagged: boolean; newest: number }>(
+      `select coalesce(thread_ts, external_id) as root, bool_or(thread_ts is not null) as threaded,
+              bool_or(not me and length($2) > 1 and position($2 in body) > 0) as tagged, max(at) as newest
+       from messages where conversation_id = $1 and external_id is not null group by 1 order by max(at)`,
+      [row.id, tag],
+    );
+    // In a channel the owner follows, a thread nobody tagged them in is part of the channel's own flow.
+    const own = groups.filter((g) => g.tagged || (g.threaded && !channel?.selected));
+    let latest: string | null = null;
+    for (const g of own) {
+      const id = threadItem(row.external_id, g.root);
+      await db.run(
+        `insert into conversations (id, owner_id, source, external_id, thread_ts, from_name, ctx, direct, last_at, pri, line, mode, project, done, manual_pri, manual_mode)
+         select $1, owner_id, source, external_id, $2, from_name, ctx, false, 0, pri, line, mode, project, done, manual_pri, manual_mode from conversations where id = $3
+         on conflict (id) do nothing`,
+        [id, g.root, row.id],
+      );
+      // What Slack sent is filed under the new row, and is named after it like everything read from now on.
+      await db.run("update messages set conversation_id = $1, id = $1 || ':' || external_id where conversation_id = $2 and external_id is not null and coalesce(thread_ts, external_id) = $3", [id, row.id, g.root]);
+      // Replies written in the dashboard into this thread go with it.
+      await db.run("update messages set conversation_id = $1 where conversation_id = $2 and external_id is null and thread_ts = $3", [id, row.id, g.root]);
+      await refreshConversation(db, id, { kind, partner: null }, g.tagged);
+      // Splitting is not news: a row that was cleared stays cleared.
+      await db.run("update conversations set done = $1 where id = $2", [row.done, id]);
+      latest = id;
+      made++;
+    }
+    if (!latest) continue;
+    await repoint(db, ownerId, row.id, latest);
+    const [{ left }] = await db.query<{ left: number }>("select count(*)::int as left from messages where conversation_id = $1", [row.id]);
+    if (!left) await db.run("delete from conversations where id = $1", [row.id]);
+    else {
+      await refreshConversation(db, row.id, { kind, partner: null }, false);
+      await db.run("update conversations set tagged = false, done = $1 where id = $2", [row.done || !channel?.selected, row.id]);
+    }
+  }
+  return made;
+}
+
 export async function slackPull({ db, ownerId, now, cursor }: JobContext, slack: SlackClient): Promise<JobResult> {
   const look = await lookup(db, ownerId);
+  if (!cursor.threadItems) await splitChannelThreads(db, ownerId, look);
   const lastTs = typeof cursor.lastTs === "string" ? cursor.lastTs : String((now - BACKFILL_DAYS * 86_400_000) / 1000);
   // Search works in whole days, so ask from the day before the bookmark and drop what is already stored.
   const query = `after:${day(Number(lastTs) * 1000 - 2 * 86_400_000)}`;
 
-  const touched = new Map<string, { kind: SlackKind; partner: string | null; tagged: boolean; isNew: boolean; firstTs: string; channelId: string }>();
+  const touched = new Map<string, { kind: SlackKind; partner: string | null; tagged: boolean; isNew: boolean; firstTs: string; channelId: string; root: string | null }>();
   // Threads the owner is already part of: a new reply in one of these comes in even from a
   // channel that is not ticked and without tagging them.
   const following = new Set<string>();
   for (const row of await db.query<{ conversation_id: string; thread_ts: string }>("select distinct conversation_id, thread_ts from messages where owner_id = $1 and thread_ts is not null and at > $2", [ownerId, now - FOLLOW_DAYS * 86_400_000])) {
     following.add(`${row.conversation_id}:${row.thread_ts}`);
   }
+  // Threads in a channel that have a row of their own already: a new reply joins it, tagged or not.
+  const items = new Set(
+    (await db.query<{ id: string }>("select id from conversations where owner_id = $1 and source = 'slack' and thread_ts is not null and last_at > $2", [ownerId, now - FOLLOW_DAYS * 86_400_000])).map((r) => r.id),
+  );
   // Threads to read whole once the search is done: a reply alone says little without the
   // message it answers and the replies around it.
-  const threads = new Map<string, { conversationId: string; channelId: string; thread: string }>();
+  const threads = new Map<string, { conversationId: string; channelId: string; thread: string; own: boolean }>();
   let newest = lastTs;
   let stored = 0;
   let leftOut = 0;
@@ -355,9 +448,15 @@ export async function slackPull({ db, ownerId, now, cursor }: JobContext, slack:
       const known = look.channels.get(m.channel.id);
       const kind = known?.kind ?? channelKind(m.channel);
       const raw = m.text ?? "";
-      const conversationId = `slack:${m.channel.id}`;
+      const general = channelRow(m.channel.id);
       const thread = threadOf(m.permalink);
-      if (!wanted(kind, known?.selected ?? false, raw, look.myId) && !(thread && following.has(`${conversationId}:${thread}`))) {
+      // In a channel, what is addressed to the owner is an inbox item of its own: one per
+      // thread, and a single message counts as a thread of one. So two threads in the same
+      // channel are two rows, each answered and cleared by itself. Later replies join the row.
+      const root = thread ?? m.ts;
+      const own = (kind === "public" || kind === "private") && (mentionsUser(raw, look.myId) || items.has(threadItem(m.channel.id, root)));
+      const conversationId = own ? threadItem(m.channel.id, root) : general;
+      if (!own && !wanted(kind, known?.selected ?? false, raw, look.myId) && !(thread && following.has(`${general}:${thread}`))) {
         leftOut++;
         continue;
       }
@@ -369,26 +468,28 @@ export async function slackPull({ db, ownerId, now, cursor }: JobContext, slack:
       let entry = touched.get(conversationId);
       if (!entry) {
         const created = await db.run(
-          `insert into conversations (id, owner_id, source, external_id, from_name, ctx, direct, last_at) values ($1, $2, 'slack', $3, $4, $5, $6, 0)
+          `insert into conversations (id, owner_id, source, external_id, thread_ts, from_name, ctx, direct, last_at) values ($1, $2, 'slack', $3, $4, $5, $6, $7, 0)
            on conflict (id) do nothing`,
-          [conversationId, ownerId, m.channel.id, partner ?? "Someone", fromApp ? "App notification" : contextLabel(kind, known?.name ?? m.channel.name ?? "channel"), !fromApp && (kind === "im" || kind === "mpim")],
+          [conversationId, ownerId, m.channel.id, own ? root : null, partner ?? "Someone", fromApp ? "App notification" : contextLabel(kind, known?.name ?? m.channel.name ?? "channel"), !fromApp && (kind === "im" || kind === "mpim")],
         );
-        entry = { kind, partner, tagged: false, isNew: created > 0, firstTs: m.ts, channelId: m.channel.id };
+        entry = { kind, partner, tagged: false, isNew: created > 0, firstTs: m.ts, channelId: m.channel.id, root: own ? root : null };
         touched.set(conversationId, entry);
+        if (own) items.add(conversationId);
       }
       // Names of the sender and of anyone tagged, so the text reads "@Maya Chen" and not an id.
       for (const id of [m.user, ...mentionedIds(raw)]) await learnName(db, ownerId, look, slack, id);
       if (Number(m.ts) < Number(entry.firstTs)) entry.firstTs = m.ts;
       if (m.user !== look.myId && mentionsUser(raw, look.myId)) entry.tagged = true;
       if (await storeMessage(db, ownerId, conversationId, look, m, thread)) stored++;
-      if (thread) threads.set(`${conversationId}:${thread}`, { conversationId, channelId: m.channel.id, thread });
+      if (thread) threads.set(`${conversationId}:${thread}`, { conversationId, channelId: m.channel.id, thread, own });
       if (Number(m.ts) > Number(newest)) newest = m.ts;
     }
   }
 
   // Each thread that was touched is read whole: the message that started it and every reply.
   // The search ran newest first, so when there are too many for one run the newest are read.
-  for (const { conversationId, channelId, thread } of [...threads.values()].slice(0, MAX_THREADS)) {
+  const emptied = new Map<string, string>();
+  for (const { conversationId, channelId, thread, own } of [...threads.values()].slice(0, MAX_THREADS)) {
     const res = await slack.call<{ messages: HistoryMessage[] }>("conversations.replies", { channel: channelId, ts: thread, limit: 200 });
     for (const m of res.messages) {
       if (m.subtype && m.subtype !== "thread_broadcast") continue;
@@ -397,11 +498,24 @@ export async function slackPull({ db, ownerId, now, cursor }: JobContext, slack:
     }
     // The search that found these carries no reactions and only some pictures. The thread does.
     await saveExtras(db, conversationId, look.myId, res.messages);
+    // The thread has a row of its own now. Its earlier messages, filed under the channel
+    // before anyone tagged the owner in it, are here already and leave the channel's row.
+    if (own && (await db.run("delete from messages where conversation_id = $1 and (thread_ts = $2 or external_id = $2)", [channelRow(channelId), thread]))) emptied.set(channelRow(channelId), conversationId);
+  }
+  for (const [general, item] of emptied) {
+    if (touched.has(general)) continue;
+    const [{ left }] = await db.query<{ left: number }>("select count(*)::int as left from messages where conversation_id = $1", [general]);
+    if (left) await refreshConversation(db, general, { kind: look.channels.get(general.slice("slack:".length))?.kind ?? "public", partner: null }, false);
+    else {
+      await repoint(db, ownerId, general, item);
+      await db.run("delete from conversations where id = $1", [general]);
+    }
   }
 
   for (const [conversationId, entry] of touched) {
-    if (entry.isNew) {
-      // A conversation seen for the first time gets a little earlier context, so the thread reads properly.
+    // A direct message or a followed channel seen for the first time gets a little earlier
+    // context, so it reads properly. A thread's row is the thread, which was read whole.
+    if (entry.isNew && !entry.root) {
       const history = await slack.call<{ messages: HistoryMessage[] }>("conversations.history", { channel: entry.channelId, latest: entry.firstTs, limit: CONTEXT_MESSAGES, inclusive: false });
       for (const m of history.messages) {
         if (m.subtype && m.subtype !== "thread_broadcast") continue;
@@ -416,7 +530,7 @@ export async function slackPull({ db, ownerId, now, cursor }: JobContext, slack:
 
   return {
     items: stored,
-    cursor: { lastTs: newest },
+    cursor: { lastTs: newest, threadItems: true },
     // Saying what was left out answers "why did nothing come in?" on the Timers page.
     message: `${stored} new ${stored === 1 ? "message" : "messages"} in ${touched.size} ${touched.size === 1 ? "conversation" : "conversations"}${leftOut ? `. ${leftOut} in channels that are not ticked in Settings were left out` : ""}${!caughtUp && pages > MAX_PAGES ? ". There was more than one run can read, so the oldest were skipped." : ""}`,
   };
