@@ -360,6 +360,8 @@ export interface TelegramChat {
   kind: "direct" | "group" | "channel" | "bot" | "self" | "service";
   /** Id of the newest message in the chat. */
   topId: number;
+  /** When the newest message was written, epoch milliseconds. */
+  at?: number;
 }
 
 /** A picture or sticker that came with a message. */
@@ -534,7 +536,7 @@ export async function telegramApi(db: Db, ownerId: string): Promise<TelegramApi>
         const entity = (d.entity ?? {}) as { bot?: boolean; self?: boolean; support?: boolean };
         const service = String(d.id) === TELEGRAM_SERVICE_ID || Boolean(entity.support);
         const kind = d.isUser ? (service ? "service" : entity.self ? "self" : entity.bot ? "bot" : "direct") : d.isGroup ? "group" : "channel";
-        return { id: String(d.id), name: d.title ?? d.name ?? nameOf(d.entity), kind, topId: d.message?.id ?? 0 };
+        return { id: String(d.id), name: d.title ?? d.name ?? nameOf(d.entity), kind, topId: d.message?.id ?? 0, at: d.date ? d.date * 1000 : undefined };
       });
     },
     async messages(chatId, { afterId, limit }) {

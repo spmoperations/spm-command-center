@@ -66,6 +66,7 @@ export async function POST(request: Request) {
       // "forget" also removes the chats that were read and their pictures, so nothing of the account is left here.
       if (body.forget === true) {
         await db.run("delete from conversations where owner_id = $1 and source = 'telegram'", [OWNER_ID]);
+        await db.run("delete from telegram_chats where owner_id = $1", [OWNER_ID]);
         await forgetTelegramMedia(db, OWNER_ID);
       }
       await db.run("update jobs set cursor = '{}', last_run_at = null where owner_id = $1 and job_id = 'telegram-pull'", [OWNER_ID]);

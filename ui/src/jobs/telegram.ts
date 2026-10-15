@@ -6,9 +6,13 @@
 //
 // Pictures and stickers are kept in the database, and so are the profile pictures of the
 // people who wrote. Videos are never fetched.
+//
+// The names of the account's groups and channels are kept too, without their messages, so a
+// person can choose which ones should always show.
+import type { Db } from "@/server/db";
 import { saveTelegramAvatar, saveTelegramPicture, telegramAvatarsDue, type StoredPicture } from "@/server/media";
 import { RateLimited } from "@/server/slack";
-import type { TelegramApi, TelegramMessage } from "@/server/telegram";
+import type { TelegramApi, TelegramChat, TelegramMessage } from "@/server/telegram";
 import type { JobContext, JobResult } from "./runner";
 import { refreshConversation } from "./slack";
 
@@ -20,6 +24,9 @@ const MESSAGES_PER_CHAT = 30;
 const PICTURES_PER_RUN = Number(process.env.TELEGRAM_MAX_PICTURES ?? 40);
 /** Profile pictures fetched in one run. */
 const AVATARS_PER_RUN = 30;
+/** Once a day the run reads this many chats instead of MAX_CHATS, to keep the list of groups and channels whole. */
+const LIST_CHATS = 200;
+const LIST_EVERY = 86_400_000;
 
 /** How many downloads are left in this run. */
 interface Budget { pictures: number; avatars: number }
@@ -99,6 +106,23 @@ async function storeChat(
   return { fresh, changed };
 }
 
+/**
+ * Keeps the names of the groups and channels among these chats. After reading the whole list,
+ * one that is no longer in it is removed: the owner left it, or it was deleted.
+ */
+async function noteChats(db: Db, ownerId: string, chats: TelegramChat[], now: number, whole: boolean): Promise<void> {
+  const rows = chats.filter((c) => c.kind === "group" || c.kind === "channel").map((c) => ({ id: c.id, name: c.name, kind: c.kind, last_at: c.at ?? null }));
+  if (rows.length) {
+    await db.run(
+      `insert into telegram_chats (owner_id, id, name, kind, last_at, seen_at)
+       select $1, r.id, r.name, r.kind, r.last_at, $3 from jsonb_to_recordset($2::jsonb) as r(id text, name text, kind text, last_at bigint)
+       on conflict (owner_id, id) do update set name = excluded.name, kind = excluded.kind, last_at = excluded.last_at, seen_at = excluded.seen_at`,
+      [ownerId, JSON.stringify(rows), now],
+    );
+  }
+  if (whole) await db.run("delete from telegram_chats where owner_id = $1 and seen_at < $2", [ownerId, now]);
+}
+
 export async function telegramPull({ db, ownerId, now, cursor }: JobContext, telegram: TelegramApi): Promise<JobResult> {
   // The bookmark: the newest message already read in each chat.
   const seen: Record<string, number> = { ...((cursor.seen as Record<string, number> | undefined) ?? {}) };
@@ -106,10 +130,17 @@ export async function telegramPull({ db, ownerId, now, cursor }: JobContext, tel
   const [owner] = await db.query<{ name: string }>("select name from users where id = $1", [ownerId]);
   const budget: Budget = { pictures: PICTURES_PER_RUN, avatars: AVATARS_PER_RUN };
 
+  // Messages are read from the most recent chats only. Once a day the whole list is read for its names.
+  let listedAt = Number(cursor.listedAt ?? 0);
+  const whole = now - listedAt >= LIST_EVERY;
+  const chats = await telegram.chats(whole ? LIST_CHATS : MAX_CHATS);
+  await noteChats(db, ownerId, chats, now, whole);
+  if (whole) listedAt = now;
+
   let stored = 0;
   let touched = 0;
   let leftOut = 0;
-  for (const chat of await telegram.chats(MAX_CHATS)) {
+  for (const chat of chats.slice(0, MAX_CHATS)) {
     if (chat.kind === "service") {
       // Login codes must not sit in the inbox. This also clears a copy an earlier version read.
       await db.run("delete from conversations where owner_id = $1 and id = $2", [ownerId, `telegram:${chat.id}`]);
@@ -144,7 +175,7 @@ export async function telegramPull({ db, ownerId, now, cursor }: JobContext, tel
 
   return {
     items: stored,
-    cursor: { seen },
+    cursor: { seen, listedAt },
     message: `${stored} new ${stored === 1 ? "message" : "messages"} in ${touched} ${touched === 1 ? "chat" : "chats"}${leftOut ? `. ${leftOut} ${leftOut === 1 ? "group" : "groups"} with nothing addressed to you ${leftOut === 1 ? "was" : "were"} left out` : ""}`,
   };
 }

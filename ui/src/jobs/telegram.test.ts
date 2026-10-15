@@ -403,6 +403,41 @@ describe("Telegram job", () => {
     await telegramPull(ctx(first.cursor), telegram);
     expect((await loadState(db, OWNER_ID, new Date(NOW))).inbox.find((c) => c.id === "telegram:-702")).toMatchObject({ from: "Ines Marsh", ctx: "Book club", tagged: true, text: "Are you coming on Friday?" });
   });
+
+  it("keeps the names of the groups and channels, reads the whole list once a day, and forgets one that is gone", async () => {
+    const telegram = account();
+    telegram.chatList[1].at = NOW - MINUTE;
+    const asked: number[] = [];
+    const chats = telegram.chats;
+    telegram.chats = (limit) => {
+      asked.push(limit);
+      return chats(limit);
+    };
+    const names = () => db.query<{ id: string; name: string; kind: string; last_at: number | null }>("select id, name, kind, last_at from telegram_chats order by id");
+
+    const first = await telegramPull(ctx(), telegram);
+    expect(first.cursor).toMatchObject({ listedAt: NOW });
+    expect(await names()).toEqual([
+      { id: "-1009", name: "Daily news", kind: "channel", last_at: null },
+      { id: "-701", name: "Launch crew", kind: "group", last_at: NOW - MINUTE },
+      { id: "-702", name: "Book club", kind: "group", last_at: null },
+    ]);
+    // Only the names: the channel is still never opened.
+    expect(telegram.read).not.toContain("-1009");
+
+    // Between the daily reads, only the recent chats are read, and a group missing from them stays.
+    telegram.chatList.splice(2, 1);
+    telegram.chatList[1].name = "Launch crew (Q4)";
+    const later = await telegramPull({ ...ctx(first.cursor), now: NOW + 3_600_000 }, telegram);
+    expect(later.cursor).toMatchObject({ listedAt: NOW });
+    expect((await names()).map((c) => c.name)).toEqual(["Daily news", "Launch crew (Q4)", "Book club"]);
+
+    // A day on, the whole list again: the group that was left is forgotten.
+    const nextDay = await telegramPull({ ...ctx(later.cursor), now: NOW + DAY }, telegram);
+    expect(nextDay.cursor).toMatchObject({ listedAt: NOW + DAY });
+    expect((await names()).map((c) => c.id)).toEqual(["-1009", "-701"]);
+    expect(asked).toEqual([200, 30, 200]);
+  });
 });
 
 describe("sending to Telegram", () => {

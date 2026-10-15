@@ -7,7 +7,7 @@ import { ensureOwner, OWNER_ID } from "./repo";
 import type { SlackClient } from "./slack";
 import type { TelegramApi, TelegramChat, TelegramMessage } from "./telegram";
 
-const TABLES = ["media", "outbox", "quick_links", "focus_items", "metric_logs", "metrics", "rules", "suggestions", "tasks", "team_members", "meetings", "messages", "conversations", "slack_channels", "slack_users", "job_runs", "jobs", "connections", "users"];
+const TABLES = ["telegram_chats", "media","outbox", "quick_links", "focus_items", "metric_logs", "metrics", "rules", "suggestions", "tasks", "team_members", "meetings", "messages", "conversations", "slack_channels", "slack_users", "job_runs", "jobs", "connections", "users"];
 
 const freePort = () =>
   new Promise<number>((resolve, reject) => {
@@ -125,7 +125,7 @@ export function fakeTelegram(chatList: FakeTelegram["chatList"]): FakeTelegram {
       fake.fetched.push(`face:${id}`);
       return fake.faces[id] ?? null;
     },
-    chats: async (limit) => fake.chatList.slice(0, limit).map(({ id, name, kind, topId }) => ({ id, name, kind, topId })),
+    chats: async (limit) => fake.chatList.slice(0, limit).map(({ id, name, kind, topId, at }) => ({ id, name, kind, topId, at })),
     messages: async (chatId, { afterId, limit }) => {
       fake.read.push(chatId);
       const chat = fake.chatList.find((c) => c.id === chatId);
