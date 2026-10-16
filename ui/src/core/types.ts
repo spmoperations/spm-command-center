@@ -1,6 +1,6 @@
-export type Source = "slack" | "telegram";
+export type Source = "slack" | "telegram" | "gmail";
 /** Services a person connects themselves, from the Connections tab. */
-export type Provider = "slack" | "telegram" | "fathom";
+export type Provider = "slack" | "telegram" | "fathom" | "google";
 export type Priority = "high" | "mid" | "low";
 /** Business line of a conversation: the agency or the consulting offer. */
 export type Line = "agency" | "consulting";
@@ -163,6 +163,44 @@ export interface Meeting {
   ownerSpeaker?: string;
 }
 
+/** An event on one of the owner's Google Calendars, for the Calendar tab and the meetings coming up. */
+export interface CalendarItem {
+  /** Google's id for the event. The same meeting on two connected calendars is one item. */
+  id: string;
+  /** The connected accounts whose calendar it is on. */
+  accounts: string[];
+  title: string;
+  /**
+   * Start and end, in epoch milliseconds, shown in the timezone of whoever is looking. For an
+   * all-day event they are midnight UTC of its first day and of the day after its last.
+   */
+  at: number;
+  end: number;
+  allDay: boolean;
+  /** "meeting", or the kinds Google Calendar shows apart: "focus" time and "away" (out of office). */
+  kind: "meeting" | "focus" | "away";
+  /** Who else is invited, by name. */
+  who: string;
+  /** "Google Meet", "Zoom", a room or an address. Empty when the event says nothing. */
+  where: string;
+  /** Where to join the call. */
+  link?: string;
+  /** The event in Google Calendar. */
+  calendarLink?: string;
+  /** Who sent the invite, when it was not the owner. */
+  organizer?: string;
+  /** The owner's own answer to the invite: "accepted", "tentative" or "needsAction". */
+  response?: string;
+}
+
+/** A connected Google account, and what it allowed. */
+export interface GoogleAccountInfo {
+  email: string;
+  connectedAt: number;
+  gmail: boolean;
+  calendar: boolean;
+}
+
 export interface Person {
   id: string;
   name: string;
@@ -232,6 +270,8 @@ export type JobId =
   | "slack-pull"
   | "telegram-pull"
   | "fathom-pull"
+  | "gmail-pull"
+  | "calendar-pull"
   | "inbox-rules"
   | "request-finder"
   | "task-suggest"
@@ -275,6 +315,8 @@ export interface AppState {
   tasks: Task[];
   suggestions: Suggestion[];
   meetings: Meeting[];
+  /** The connected Google Calendars, from the start of last week to three weeks ahead. */
+  calendar: CalendarItem[];
   team: Person[];
   /** Clients and internal buckets a task can belong to. */
   projects: string[];
@@ -307,6 +349,13 @@ export interface AppState {
   telegramAvailable: boolean;
   /** Why Telegram cannot be connected here, in a sentence for whoever sets the server up. Null when it can. */
   telegramBlocked: string | null;
+  /** The same for Google: its app keys are set, and this server may hold a Google login. */
+  googleAvailable: boolean;
+  googleBlocked: string | null;
+  /** The connected Google accounts. */
+  googleAccounts: GoogleAccountInfo[];
+  /** Whether any connected Google account allowed Gmail, and Calendar. */
+  googleAllows: { gmail: boolean; calendar: boolean };
   /** True when the data is the copy on this machine and not the hosted database. */
   localData: boolean;
   /** False until the AI key is set and has credit to run. */

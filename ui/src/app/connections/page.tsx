@@ -1,18 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Pill } from "@/components/bits";
 import { ago } from "@/core/dates";
 import {
   checkFathomKey, checkPhone, checkSlackToken, checkTelegramCode, FATHOM_API_ACCESS_URL, PROVIDER_ABOUT, PROVIDER_NAME, PROVIDERS, SLACK_CREATE_APP_URL, SLACK_USER_SCOPES,
 } from "@/core/providers";
 import type { JobId, Provider } from "@/core/types";
-import { connectProvider, disconnectProvider, disconnectTelegram, telegramStep, useApp, type App, type TelegramReply } from "@/store/store";
+import { connectProvider, disconnectGoogle, disconnectProvider, disconnectTelegram, refresh, telegramStep, toast, useApp, type App, type TelegramReply } from "@/store/store";
 
-const BADGE: Record<Provider, string> = { slack: "SL", telegram: "TG", fathom: "FA" };
+const BADGE: Record<Provider, string> = { slack: "SL", telegram: "TG", fathom: "FA", google: "GO" };
 // The check that reads each service, shown on its card.
-const READER: Partial<Record<Provider, JobId>> = { slack: "slack-pull", telegram: "telegram-pull", fathom: "fathom-pull" };
+const READER: Partial<Record<Provider, JobId>> = { slack: "slack-pull", telegram: "telegram-pull", fathom: "fathom-pull", google: "gmail-pull" };
 
 function Step({ title, help, children }: { title: string; help?: React.ReactNode; children?: React.ReactNode }) {
   return (
@@ -263,12 +263,128 @@ function TelegramSteps({ local }: { local?: boolean }) {
   );
 }
 
-const STEPS: Record<Provider, (props: { local?: boolean }) => React.ReactNode> = { slack: SlackSteps, telegram: TelegramSteps, fathom: FathomSteps };
+/**
+ * Google is one button. The person picks their account on Google's own page and clicks Allow,
+ * and Google sends them back here. How it went comes back in the address (see `GoogleOutcome`).
+ */
+function GoogleSteps() {
+  return (
+    <ol className="steps">
+      <Step
+        title="Connect your Google account"
+        help="Google opens its own page: pick your account and click Allow. The Command Center reads your inbox and your calendar. It cannot send, delete or change anything."
+      >
+        <a className="btn primary extlink" href="/api/google/start">
+          Connect Google
+        </a>
+      </Step>
+    </ol>
+  );
+}
+
+/**
+ * The Google accounts that are connected, each with what it allowed and its own Disconnect,
+ * and a button to add another. A second account goes through the same page at Google.
+ */
+function GoogleConnected({ app, lastChecked }: { app: App; lastChecked: string }) {
+  const accounts = app.state.googleAccounts;
+  const date = (ms: number) => new Date(ms).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  return (
+    <>
+      <div className="st-help">
+        {lastChecked} Emails come in from the moment an account is connected. Change how often in <Link href="/settings#timers">Settings, Timers</Link>.
+      </div>
+      <ul className="g-accounts">
+        {accounts.map((a) => (
+          <li key={a.email} className="connected-row">
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontWeight: 600, overflowWrap: "anywhere" }}>{a.email}</div>
+              <div className="st-help">
+                Since {date(a.connectedAt)} · {a.gmail ? "Gmail" : "Gmail not allowed"} · {a.calendar ? "Calendar" : "Calendar not allowed"}
+                {!(a.gmail && a.calendar) && (
+                  <>
+                    {" "}
+                    · <a href="/api/google/start">Connect it again</a> and tick both
+                  </>
+                )}
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button className="btn" onClick={() => void disconnectGoogle(a.email, false)}>
+                Disconnect
+              </button>
+              <button className="btn" onClick={() => void disconnectGoogle(a.email, true)}>
+                Disconnect and remove its emails
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
+      <div>
+        <a className="btn extlink" href="/api/google/start">
+          Add another Google account
+        </a>
+      </div>
+      <div className="st-help">{TURN_OFF.google}</div>
+    </>
+  );
+}
+
+/** Google before it is switched on for this site, said the way Telegram says it. */
+function GoogleNotReady({ why }: { why: string | null }) {
+  return (
+    <>
+      <div className="st-help">
+        <strong>Google is not switched on for this site yet.</strong> It needs its app keys in place first. As soon as they are, a Connect Google button appears here.
+      </div>
+      {why && (
+        <details className="fallback">
+          <summary>What is missing, for whoever sets it up</summary>
+          <div className="st-help">{why}</div>
+        </details>
+      )}
+    </>
+  );
+}
+
+/**
+ * After Google sends the person back: says how it went, once, then takes it out of the address
+ * so a reload does not say it again.
+ */
+function GoogleOutcome() {
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    if (!query.has("google") && !query.has("google_error")) return;
+    const failed = query.get("google_error");
+    window.history.replaceState(null, "", window.location.pathname + window.location.hash);
+    if (failed) {
+      // Shown once the page has drawn, not while it is drawing.
+      queueMicrotask(() => setError(failed));
+      return;
+    }
+    const account = query.get("account");
+    toast(`Google connected${account ? `: ${account}` : ""}. Reading the inbox and calendar now.`);
+    void refresh();
+    // The first read runs on the server after the way back; look again once it has had time.
+    const later = setTimeout(() => void refresh(), 15_000);
+    return () => clearTimeout(later);
+  }, []);
+  if (!error) return null;
+  return (
+    <div className="panel" role="alert" style={{ borderColor: "var(--bad)", background: "var(--bad-soft)", padding: "12px 16px", marginBottom: 14 }}>
+      <strong>Google was not connected.</strong> {error}
+    </div>
+  );
+}
+
+const STEPS: Record<Provider, (props: { local?: boolean }) => React.ReactNode> = { slack: SlackSteps, telegram: TelegramSteps, fathom: FathomSteps, google: GoogleSteps };
 
 const TURN_OFF: Record<Provider, string> = {
   slack: "Disconnecting removes the stored token and stops the Command Center reading Slack. To remove the access for good, also delete the app in Slack.",
   telegram: "Disconnecting signs this connection out of Telegram and deletes the saved login. The chats already read stay in the dashboard unless you also remove them. You can check it is gone in Telegram under Settings, Devices.",
   fathom: "Disconnecting removes the stored key and stops new calls coming in. To remove the access for good, also delete the key in Fathom.",
+  google: "Disconnecting ends the login on Google's side too and deletes it here. The emails already read stay in the dashboard unless you also remove them. You can check it is gone in your Google Account under Security, Your connections to third-party apps.",
 };
 
 /**
@@ -294,7 +410,7 @@ function TelegramNotReady({ why }: { why: string | null }) {
 function ProviderCard({ provider, app }: { provider: Provider; app: App }) {
   const connection = app.state.connections[provider];
   const Steps = STEPS[provider];
-  const notReady = provider === "telegram" && !app.state.telegramAvailable;
+  const notReady = (provider === "telegram" && !app.state.telegramAvailable) || (provider === "google" && !app.state.googleAvailable);
   const reader = READER[provider];
   const status = reader ? app.state.jobStatus[reader] : undefined;
   const since = connection.connectedAt
@@ -313,7 +429,9 @@ function ProviderCard({ provider, app }: { provider: Provider; app: App }) {
         {connection.connected ? <Pill tone="s-ok">Connected</Pill> : <Pill tone="p-low">{notReady ? "Not switched on yet" : "Not connected"}</Pill>}
       </div>
       <div className="prov-body">
-        {connection.connected ? (
+        {provider === "google" && connection.connected ? (
+          <GoogleConnected app={app} lastChecked={status?.lastRunAt ? `Last checked ${ago(status.lastRunAt, app.now.getTime())} ago: ${status.message ?? (status.ok ? "done" : "failed")}.` : "Not checked yet."} />
+        ) : connection.connected ? (
           <>
             <div className="connected-row">
               <div>
@@ -343,6 +461,7 @@ function ProviderCard({ provider, app }: { provider: Provider; app: App }) {
                 </button>
               )}
             </div>
+
             {provider === "slack" && app.state.slackFilesAllowed === false && (
               <div className="st-help">
                 <strong>Pictures from Slack are not shown yet.</strong> The Slack app is missing one permission. In Slack, open the app&apos;s page, go to OAuth &amp; Permissions, add <code>files:read</code> under <strong>User Token Scopes</strong>, then click Reinstall. If the User OAuth Token changed, disconnect here and paste the new one. Reactions already show.
@@ -351,7 +470,11 @@ function ProviderCard({ provider, app }: { provider: Provider; app: App }) {
             <div className="st-help">{TURN_OFF[provider]}</div>
           </>
         ) : (
-          notReady ? <TelegramNotReady why={app.state.telegramBlocked} /> : <Steps local={app.state.localData} />
+          notReady ? (
+            provider === "google" ? <GoogleNotReady why={app.state.googleBlocked} /> : <TelegramNotReady why={app.state.telegramBlocked} />
+          ) : (
+            <Steps local={app.state.localData} />
+          )
         )}
       </div>
     </div>
@@ -373,13 +496,14 @@ export default function ConnectionsPage() {
           </div>
         </div>
       </div>
+      <GoogleOutcome />
       <div className="prov-list">
         {PROVIDERS.map((p) => (
           <ProviderCard key={p} provider={p} app={app} />
         ))}
       </div>
       <p className="muted" style={{ fontSize: 13.5, marginTop: 16 }}>
-        Coming later: Email, Calendar and WhatsApp.
+        Coming later: WhatsApp.
       </p>
     </section>
   );

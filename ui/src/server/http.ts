@@ -36,4 +36,19 @@ export function fromScheduler(request: Request): boolean {
   return crypto.timingSafeEqual(digest(request.headers.get("authorization") ?? ""), digest(`Bearer ${secret}`));
 }
 
+/** One cookie from the request, or null. */
+export function cookieValue(request: Request, name: string): string | null {
+  for (const part of (request.headers.get("cookie") ?? "").split(";")) {
+    const at = part.indexOf("=");
+    if (at > 0 && part.slice(0, at).trim() === name) return part.slice(at + 1).trim() || null;
+  }
+  return null;
+}
+
+/** The address the dashboard was opened at, such as "http://127.0.0.1:3000", as the person typed it. */
+export function siteOf(request: Request): string {
+  const url = new URL(request.url);
+  return `${url.protocol}//${request.headers.get("host") ?? url.host}`;
+}
+
 export const failed = (error: unknown, status = 400) => Response.json({ error: error instanceof Error ? error.message : String(error) }, { status });

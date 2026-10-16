@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { DelegateForm } from "@/components/DelegateForm";
 import { Avatar, MessageText, Pictures, Reactions } from "@/components/MessageText";
 import { PriPill, PrioritySelect, Seg } from "@/components/bits";
-import { INBOX_DAYS, LINE_NAME, liveSources, MODE_NAME, MODES, PERSONAL_SIDE, PRIORITIES, PRIORITY_NAME, SOURCE_NAME } from "@/core/config";
+import { INBOX_DAYS, LINE_NAME, liveSources, MODE_NAME, MODES, PERSONAL_SIDE, PRIORITIES, PRIORITY_NAME, SOURCE_NAME, SOURCE_PROVIDER } from "@/core/config";
 import { ago, stamp } from "@/core/dates";
 import { plainPreview } from "@/core/message-format";
 import { requestSummary } from "@/core/requests";
@@ -122,51 +122,87 @@ function Thread({ c, app, draft, onDraft }: { c: Conversation; app: App; draft: 
           </div>
         ))}
       </div>
-      <div className="composer">
-        <label className="label" htmlFor={`reply-${c.id}`}>
-          Reply on {where}
-        </label>
-        <div className="reply-to">
-          {into ? (
-            <>
-              <span>
-                In the thread{into.first ? ` ${into.first.me ? "you" : (into.first.from ?? c.from)} started: “${plainPreview(into.first.text, 60)}”` : ""}
-              </span>
-              {!c.root && (
-                <button className="linkbtn inline" onClick={() => setPicked("")}>
-                  Post in {chat} instead
-                </button>
-              )}
-            </>
-          ) : (
-            <span>As a new message in {chat}</span>
-          )}
-        </div>
-        <textarea
-          id={`reply-${c.id}`}
-          ref={field}
-          value={draft}
-          placeholder="Write a reply…"
-          onChange={(e) => onDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault();
-              send(false);
-            }
-          }}
-        />
-        <div className="composer-row">
-          <span className="hint">
-            {app.state.sendingEnabled ? `⌘ + Enter to send. It goes out from your own ${SOURCE_NAME[c.source]} account.` : "⌘ + Enter to save. Sending is switched off, so replies wait in the outbox."}
-          </span>
-          <div className="btns">
-            <button className="btn" onClick={() => send(true)}>
-              Send and mark done
-            </button>
-            <button className="btn primary" onClick={() => send(false)}>
-              Send
-            </button>
+      {c.source === "gmail" ? (
+        <EmailNote c={c} />
+      ) : (
+        <div className="composer">
+          <label className="label" htmlFor={`reply-${c.id}`}>
+            Reply on {where}
+          </label>
+          <div className="reply-to">
+            {into ? (
+              <>
+                <span>
+                  In the thread{into.first ? ` ${into.first.me ? "you" : (into.first.from ?? c.from)} started: “${plainPreview(into.first.text, 60)}”` : ""}
+                </span>
+                {!c.root && (
+                  <button className="linkbtn inline" onClick={() => setPicked("")}>
+                    Post in {chat} instead
+                  </button>
+                )}
+              </>
+            ) : (
+              <span>As a new message in {chat}</span>
+            )}
           </div>
+          <textarea
+            id={`reply-${c.id}`}
+            ref={field}
+            value={draft}
+            placeholder="Write a reply…"
+            onChange={(e) => onDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                send(false);
+              }
+            }}
+          />
+          <div className="composer-row">
+            <span className="hint">
+              {app.state.sendingEnabled ? `⌘ + Enter to send. It goes out from your own ${SOURCE_NAME[c.source]} account.` : "⌘ + Enter to save. Sending is switched off, so replies wait in the outbox."}
+            </span>
+            <div className="btns">
+              <button className="btn" onClick={() => send(true)}>
+                Send and mark done
+              </button>
+              <button className="btn primary" onClick={() => send(false)}>
+                Send
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The account and the Gmail thread of an email row, whose id is "gmail:<account>:<thread>". */
+export function gmailOf(c: Conversation): { account: string; thread: string } {
+  const rest = c.id.replace(/^gmail:/, "");
+  const cut = rest.lastIndexOf(":");
+  return { account: rest.slice(0, Math.max(0, cut)), thread: rest.slice(cut + 1) };
+}
+
+/** The thread in Gmail itself, opened in the account it came to. */
+export const gmailLink = (c: Conversation) => {
+  const { account, thread } = gmailOf(c);
+  return `https://mail.google.com/mail/u/${encodeURIComponent(account || "0")}/#all/${encodeURIComponent(thread)}`;
+};
+
+/** In place of the reply box on an email: Google is connected for reading only, for now. */
+function EmailNote({ c }: { c: Conversation }) {
+  return (
+    <div className="composer">
+      <div className="composer-row">
+        <span className="hint">Answering emails from here comes later. For now, reply in Gmail.</span>
+        <div className="btns">
+          <a className="btn" href={gmailLink(c)} target="_blank" rel="noopener noreferrer">
+            Open in Gmail ↗
+          </a>
+          <button className="btn" onClick={() => markConversationDone(c.id)}>
+            Mark done
+          </button>
         </div>
       </div>
     </div>
@@ -194,7 +230,8 @@ function MessageRow({ c, app, open, draft, onDraft, cleared }: { c: Conversation
         <div className="line1">
           <span className="who">{c.from}</span>
           <span className="ctx">
-            {SOURCE_NAME[c.source]} · {c.ctx}
+            {SOURCE_NAME[c.source]}
+            {c.source === "gmail" && app.state.googleAccounts.length > 1 ? ` to ${gmailOf(c).account}` : ""} · {c.ctx}
             {c.root && c.thread.length > 1 ? " · thread" : ""}
           </span>
           {c.tagged && <span className="chip me">Tagged you</span>}
@@ -300,7 +337,7 @@ export default function InboxPage() {
   const cleared = clearedList.length;
   const viewingCleared = showCleared && cleared > 0;
   const queued = state.outbox.filter((o) => o.status === "queued").length;
-  const connected = liveSources(state.telegramAvailable).filter((s) => state.connections[s].connected);
+  const connected = liveSources(state.telegramAvailable, state.googleAvailable).filter((s) => state.connections[SOURCE_PROVIDER[s]].connected);
   const other = MODES.find((m) => m !== mode)!;
   const elsewhere = state.inbox.filter((c) => c.mode === other && !c.done).length;
 

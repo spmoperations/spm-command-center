@@ -22,6 +22,8 @@ export async function POST(request: Request) {
     const { id } = (await request.json()) as { id?: unknown };
     if (typeof id !== "string") return failed(new Error("Which conversation?"));
     const db = await ready();
+    // An email is read whole by the Gmail check: there is nothing more to fetch when it is opened.
+    if (id.startsWith("gmail:")) return Response.json({ added: 0 });
     if (id.startsWith("telegram:")) {
       if (!(await telegramConnected(db, OWNER_ID))) return Response.json({ added: 0 });
       const telegram = await telegramApi(db, OWNER_ID);

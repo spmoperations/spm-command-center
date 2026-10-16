@@ -65,3 +65,15 @@ export function stamp(ts: number, now: Date): string {
   if (days === 1) return `Yesterday ${t}`;
   return `${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })} ${t}`;
 }
+
+/** "Now", "Today" or "Tomorrow" for a meeting coming up, in the timezone of whoever is looking. Null for later ones. */
+export function upcomingDay(m: { at: number; end: number }, now: Date): "Now" | "Today" | "Tomorrow" | null {
+  if (m.at <= now.getTime() && m.end > now.getTime()) return "Now";
+  const day = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  const tomorrow = new Date(now);
+  tomorrow.setDate(now.getDate() + 1);
+  const start = new Date(m.at);
+  if (day(start) === day(now)) return "Today";
+  if (day(start) === day(tomorrow)) return "Tomorrow";
+  return null;
+}

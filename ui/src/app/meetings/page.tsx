@@ -5,8 +5,8 @@ import { useState } from "react";
 import { Markdown } from "@/components/Markdown";
 import { SuggestionRow } from "@/components/SuggestionRow";
 import { DueText, PriPill } from "@/components/bits";
-import { clockWithZone, daysBetween, parseDay } from "@/core/dates";
-import type { Meeting } from "@/core/types";
+import { clockWithZone, daysBetween, parseDay, upcomingDay } from "@/core/dates";
+import type { CalendarItem, Meeting } from "@/core/types";
 import { actionItemToTask, loadTranscript, openTask, toast, toggleMeeting, toggleTask, useApp, type App } from "@/store/store";
 
 function dayText(m: Meeting, today: string) {
@@ -14,6 +14,42 @@ function dayText(m: Meeting, today: string) {
   if (diff === 0) return "Today";
   if (diff === -1) return "Yesterday";
   return parseDay(m.date).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+}
+
+const ANSWER: Record<string, string> = { tentative: "Maybe", needsAction: "Not answered yet" };
+
+/** A meeting on the calendar that has not ended yet: when, with whom, and the link to join. */
+function UpcomingRow({ m, day }: { m: CalendarItem; day: string }) {
+  const until = new Date(m.end).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  return (
+    <div className="mt">
+      <div className="mt-head up-head">
+        <div className="mt-when">
+          {clockWithZone(m.at)}
+          <small>
+            {day} · until {until}
+          </small>
+        </div>
+        <div style={{ minWidth: 0 }}>
+          <div className="mt-title">{m.title}</div>
+          <div className="mt-who">{[m.who, m.where].filter(Boolean).join(" · ") || "Just you"}</div>
+        </div>
+        <div className="mt-chips">
+          {m.response && ANSWER[m.response] && <span className="chip">{ANSWER[m.response]}</span>}
+          {m.calendarLink && (
+            <a className="srclink" href={m.calendarLink} target="_blank" rel="noopener noreferrer">
+              In Calendar ↗
+            </a>
+          )}
+          {m.link && (
+            <a className={`btn ${day === "Now" ? "primary" : ""}`} href={m.link} target="_blank" rel="noopener noreferrer">
+              Join ↗
+            </a>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /** The transcript is fetched the first time it is opened: it runs to hundreds of lines. */
@@ -175,6 +211,13 @@ export default function MeetingsPage() {
   if (!app) return null;
   const { state } = app;
   const list = [...state.meetings].sort((a, b) => b.at - a.at);
+  // Meetings with a time, not all-day events, focus time or days away.
+  const coming = state.calendar
+    .filter((m) => !m.allDay && m.kind === "meeting" && m.end > app.now.getTime())
+    .map((m) => ({ m, day: upcomingDay(m, app.now) }))
+    .filter((u): u is { m: CalendarItem; day: "Now" | "Today" | "Tomorrow" } => u.day !== null)
+    .sort((a, b) => a.m.at - b.m.at);
+  const google = state.connections.google;
 
   return (
     <section className="view">
@@ -182,10 +225,36 @@ export default function MeetingsPage() {
         <div>
           <h2>Meetings</h2>
           <div className="muted" style={{ fontSize: 14 }}>
-            Every recorded call with its notes, transcript and the tasks that came out of it. Click a call to open it.
+            {google.connected ? "What is on your calendar today and tomorrow, then every" : "Every"} recorded call with its notes, transcript and the tasks that came out of it. Click a call to open it.
           </div>
         </div>
       </div>
+
+      {(google.connected || coming.length > 0) && (
+        <div className="mt-group">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, marginBottom: 8 }}>
+            <span className="label">Coming up: today and tomorrow</span>
+            <Link className="srclink" href="/calendar">
+              Open the calendar
+            </Link>
+          </div>
+          <div className="panel">
+            {coming.map(({ m, day }) => (
+              <UpcomingRow key={m.id} m={m} day={day} />
+            ))}
+            {coming.length === 0 && (
+              <p className="empty" style={{ padding: 18 }}>
+                {state.googleAllows.calendar ? "Nothing on your calendar for the rest of today or tomorrow." : "Calendar was not allowed when Google was connected. Connect Google again and tick Calendar to see your meetings here."}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+      {!google.connected && state.googleAvailable && (
+        <p className="muted" style={{ fontSize: 13.5, marginTop: 0 }}>
+          To see the meetings coming up on your calendar, <Link href="/connections#google">connect Google</Link>.
+        </p>
+      )}
 
       <div className="mt-group">
         <span className="label">Recorded calls</span>

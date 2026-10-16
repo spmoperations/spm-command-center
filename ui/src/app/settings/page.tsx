@@ -40,7 +40,7 @@ function Timers({ app }: { app: App }) {
     return app.state.connections[needs].connected ? null : `Waiting for ${PROVIDER_NAME[needs]}`;
   };
   // Only the checks that work today. The one that sends has nothing to do while sending is off.
-  const jobs = liveJobs(app.state.telegramAvailable).filter((job) => job.id !== "outbox-retry" || app.state.sendingEnabled);
+  const jobs = liveJobs(app.state.telegramAvailable, app.state.googleAvailable).filter((job) => job.id !== "outbox-retry" || app.state.sendingEnabled);
   const anyAI = jobs.some((job) => job.usesAI);
   return (
     <div className="panel set-sec" id="timers">
@@ -51,7 +51,7 @@ function Timers({ app }: { app: App }) {
         </button>
       </div>
       <p className="set-intro">
-        New messages and calls come in by themselves, each check on its own timer. <strong>Sync now</strong> runs all of them straight away; <strong>Run now</strong> runs just one. Change how often a check runs, or switch it off. Every timer has a fastest allowed value, so a check can never run often enough to get blocked by Slack or Fathom. A check waits until its source is connected on the <Link href="/connections">Connections</Link> page.
+        New messages and calls come in by themselves, each check on its own timer. <strong>Sync now</strong> runs all of them straight away; <strong>Run now</strong> runs just one. Change how often a check runs, or switch it off. Every timer has a fastest allowed value, so a check can never run often enough to get blocked by Slack, Fathom or Google. A check waits until its source is connected on the <Link href="/connections">Connections</Link> page.
       </p>
       <div className="table-scroll">
         <table className="set">
@@ -311,7 +311,7 @@ function RuleList<T extends string>({ app, kind, id, title, intro, outcomes, out
 }) {
   const rules = app.state[kind];
   const hits = ruleHits(rules, app.state.inbox);
-  const sources = liveSources(app.state.telegramAvailable);
+  const sources = liveSources(app.state.telegramAvailable, app.state.googleAvailable);
   const [source, setSource] = useState<Source | "any">("slack");
   const [when, setWhen] = useState<Rule["when"]>("ctx");
   const [op, setOp] = useState<Rule["op"]>("starts");

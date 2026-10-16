@@ -8,11 +8,12 @@ import { clampInterval, defaultJobSettings, JOBS } from "@/core/jobs";
 import { requestSummary } from "@/core/requests";
 import { applyRules } from "@/core/rules";
 import type {
-  AppState, Conversation, FocusBoard, JobId, JobStatus, Meeting, MessagePicture, Metric, Mode, Person, Priority, Provider, Reaction, Rule, Suggestion, Task,
+  AppState, Conversation, FocusBoard, JobId, JobStatus, Meeting, MessagePicture, Metric, Mode, Person, Priority, Provider, Reaction, Rule, Suggestion, Task, CalendarItem,
 } from "@/core/types";
 import { aiConfigured } from "./ai";
+import { CALENDAR_SCOPE, disconnectGoogle, GMAIL_SCOPE, googleAccounts, googleAvailable, googleBlocked } from "./google";
 import { telegramAvatarIds, type StoredPicture } from "./media";
-import { SLACK_FILES_SCOPE } from "./slack";
+import { SLACK_FILES_SCOPE, type Fetch } from "./slack";
 import { telegramAvailable, telegramBlocked } from "./telegram";
 import type { Db } from "./db";
 
@@ -181,6 +182,54 @@ async function loadMeetings(db: Db, ownerId: string): Promise<Meeting[]> {
   });
 }
 
+/**
+ * Disconnects one Google account, or every one when `email` is null. Its login is ended on
+ * Google's side and removed here, its calendar is no longer shown, and its place in the
+ * mailbox is forgotten, so connecting it again starts from that moment. With `everything`, the
+ * emails that were read from it are removed too.
+ */
+export async function forgetGoogle(db: Db, ownerId: string, email: string | null, everything: boolean, fetchImpl: Fetch = fetch): Promise<void> {
+  const emails = email ? [email] : (await db.query<{ email: string }>("select email from google_accounts where owner_id = $1", [ownerId])).map((r) => r.email);
+  for (const account of emails) {
+    await disconnectGoogle(db, ownerId, account, fetchImpl);
+    await db.run("update jobs set cursor = cursor #- array['accounts', $2]::text[] where owner_id = $1 and job_id = 'gmail-pull'", [ownerId, account]);
+    await db.run("delete from calendar_events where owner_id = $1 and account = $2", [ownerId, account]);
+    // An email row's external id is "<account>:<thread>".
+    if (everything) await db.run("delete from conversations where owner_id = $1 and source = 'gmail' and left(external_id, length($2) + 1) = $2 || ':'", [ownerId, account]);
+  }
+}
+
+const KIND: Record<string, CalendarItem["kind"]> = { focusTime: "focus", outOfOffice: "away" };
+
+/**
+ * The events on the connected Google Calendars, in start order. A meeting on two connected
+ * calendars, with the same id and start, is one item that names both.
+ */
+async function loadCalendar(db: Db, ownerId: string): Promise<CalendarItem[]> {
+  if (!googleAvailable()) return [];
+  const rows = await db.query<{
+    account: string; id: string; title: string; start_at: number; end_at: number; all_day: boolean; kind: string; location: string | null; link: string | null;
+    html_link: string | null; organizer: string | null; attendees: { name: string; email: string }[]; response: string | null;
+  }>("select account, id, title, start_at, end_at, all_day, kind, location, link, html_link, organizer, attendees, response from calendar_events where owner_id = $1 order by start_at, account", [ownerId]);
+  const items = new Map<string, CalendarItem>();
+  const mine = new Set(rows.map((e) => e.account));
+  for (const e of rows) {
+    const key = `${e.id}@${e.start_at}`;
+    const seen = items.get(key);
+    if (seen) {
+      seen.accounts.push(e.account);
+      continue;
+    }
+    items.set(key, {
+      id: key, accounts: [e.account], title: e.title, at: Number(e.start_at), end: Number(e.end_at), allDay: e.all_day, kind: KIND[e.kind] ?? "meeting",
+      // The owner's other connected accounts are not "someone else" in the meeting.
+      who: (e.attendees ?? []).filter((a) => !mine.has(a.email.toLowerCase())).map((a) => a.name).join(", "),
+      where: e.location ?? "", link: e.link ?? undefined, calendarLink: e.html_link ?? undefined, organizer: e.organizer ?? undefined, response: e.response ?? undefined,
+    });
+  }
+  return [...items.values()];
+}
+
 export async function loadTranscript(db: Db, ownerId: string, meetingId: string): Promise<[string, string][]> {
   const [row] = await db.query<{ transcript: [string, string][] }>("select transcript from meetings where owner_id = $1 and id = $2", [ownerId, meetingId]);
   return row?.transcript ?? [];
@@ -225,6 +274,8 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     projects,
     inbox,
     meetings,
+    calendar,
+    google,
     jobStatus,
   ] = await Promise.all([
     db.query<{ name: string }>("select name from users where id = $1", [ownerId]),
@@ -255,6 +306,8 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     ),
     loadConversations(db, ownerId),
     loadMeetings(db, ownerId),
+    loadCalendar(db, ownerId),
+    googleAccounts(db, ownerId),
     loadJobStatus(db, ownerId),
   ]);
 
@@ -264,6 +317,7 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
   const focus: AppState["focus"] = { professional: board(), personal: board() };
   for (const f of focusRows) (focus[f.mode][f.scope][f.period] ??= []).push({ id: f.id, text: f.body, done: f.done });
   const slackScopes = connections.find((c) => c.provider === "slack")?.scopes;
+  const allows = (scope: string) => google.some((a) => a.scopes.includes(scope));
   const connection = (p: Provider) => {
     const row = connections.find((c) => c.provider === p);
     return row ? { connected: true, connectedAt: Number(row.connected_at), label: row.label ?? undefined } : { connected: false };
@@ -279,6 +333,7 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
       src: g.src_type && g.src_id ? { type: g.src_type, id: g.src_id } : null, status: g.status, delegable: g.delegable,
     })),
     meetings,
+    calendar,
     team: team.map((p): Person => ({ id: p.id, name: p.name, role: p.role, depts: p.depts ?? [], handles: p.handles ?? [], slackUserId: p.slack_user_id })),
     projects: projects.map((p) => p.project),
     labelRules,
@@ -292,8 +347,14 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
       const row = jobs.find((j) => j.job_id === def.id);
       return { id: def.id, intervalMin: row?.interval_min ?? def.defaultMin, enabled: row?.enabled ?? true };
     }),
-    // A Telegram login counts only on a server that may use Telegram (see `telegramAvailable`).
-    connections: { slack: connection("slack"), telegram: telegramAvailable() ? connection("telegram") : { connected: false }, fathom: connection("fathom") },
+    // A Telegram or Google login counts only on a server that may use it (see `telegramAvailable`).
+    connections: {
+      slack: connection("slack"),
+      telegram: telegramAvailable() ? connection("telegram") : { connected: false },
+      fathom: connection("fathom"),
+      // Google's accounts are kept apart (see `google_accounts`): connected when there is at least one.
+      google: google.length ? { connected: true, connectedAt: google[0].connectedAt, label: google.length === 1 ? google[0].email : `${google.length} accounts` } : { connected: false },
+    },
     jobStatus,
     channels,
     slackPeople,
@@ -303,6 +364,10 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     slackFilesAllowed: slackScopes ? slackScopes.split(",").includes(SLACK_FILES_SCOPE) : null,
     telegramAvailable: telegramAvailable(),
     telegramBlocked: telegramBlocked(),
+    googleAvailable: googleAvailable(),
+    googleBlocked: googleBlocked(),
+    googleAccounts: google.map((a) => ({ email: a.email, connectedAt: a.connectedAt, gmail: a.scopes.includes(GMAIL_SCOPE), calendar: a.scopes.includes(CALENDAR_SCOPE) })),
+    googleAllows: { gmail: allows(GMAIL_SCOPE), calendar: allows(CALENDAR_SCOPE) },
     localData: !process.env.DATABASE_URL,
     aiConfigured: aiConfigured(),
   };
@@ -497,6 +562,8 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
   /** `thread` is the id of the message that started a thread: the reply then goes into that thread, as it would in Slack. */
   async sendReply(c, id: string, text: string, markDone: boolean, thread?: string | null) {
     const conv = await conversation(c, id);
+    // Google is connected for reading only.
+    if (conv.source === "gmail") throw new Error("Replying to an email from here is not built yet. Open it in Gmail to answer.");
     const [owner] = await c.db.query<{ name: string }>("select name from users where id = $1", [c.ownerId]);
     let threadTs: string | null = null;
     // A row that is one thread in a channel is answered in that thread, never beside it.
@@ -699,6 +766,8 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
 
   // Connections
   async disconnectProvider(c, provider: Provider) {
+    // Google's login is ended on Google's side too, and its checks start over next time.
+    if (provider === "google") return forgetGoogle(c.db, c.ownerId, null, false);
     await c.db.run("delete from connections where owner_id = $1 and provider = $2", [c.ownerId, provider]);
   },
 };

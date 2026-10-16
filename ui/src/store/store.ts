@@ -398,6 +398,17 @@ export async function telegramStep(body: { step: "start"; phone: string } | { st
   }
 }
 
+/** Ends one Google account's login, on Google's side too. `forget` also deletes the emails that were read from it. */
+export async function disconnectGoogle(email: string, forget: boolean) {
+  try {
+    const { state } = await request<{ state: AppState }>("/api/google", { step: "disconnect", email, forget });
+    setState(state);
+    toast(forget ? `${email} disconnected, and its emails removed` : `${email} disconnected`);
+  } catch (error) {
+    toast((error as Error).message);
+  }
+}
+
 /** Signs out of Telegram and removes the saved login. `forget` also deletes the chats that were read, and their pictures. */
 export async function disconnectTelegram(forget: boolean) {
   try {

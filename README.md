@@ -60,7 +60,7 @@ Off for now (see above). When it is on, the switch next to the title shows one s
 
 ## How it works
 
-1. **Connect** Slack and Fathom on the Connections tab. Each key is checked with its service and stored encrypted.
+1. **Connect** Slack and Fathom on the Connections tab. Each key is checked with its service and stored encrypted. Telegram is a phone number and a code; Google is one button (see `docs/google-connection.md`).
 2. **Checks** read what is new. Each one is its own file in `ui/src/jobs/` with its own timer and bookmark.
 3. **Rules** mark what is urgent, label each chat and find requests waiting for a reply. No AI is involved.
    Slack threads are kept whole: when the owner is tagged in a reply, the message that started the thread and the other replies come in with it, and later replies to that thread keep coming in. A reply written in the dashboard goes into the thread it answers.
@@ -69,6 +69,8 @@ Off for now (see above). When it is on, the switch next to the title shows one s
    Each person's Slack profile picture shows beside their messages. Only the picture's address is stored; the picture itself stays with Slack.
    Reactions show under each message, with the owner's own picked out, and are brought up to date when a conversation is opened. Pictures sent in Slack show too once the Slack app has the `files:read` permission: the dashboard fetches each one with the owner's token and hands it only to a signed-in person. Until then a picture is named, with a link that opens it in Slack. Videos are never fetched.
    Telegram works the same way: one-to-one chats, and a group when the owner is tagged or replied to. Telegram hands a picture over only to the logged-in account, so its pictures, stickers and profile pictures are kept in the `media` table at a size for the screen. Telegram's own account, which sends login codes, is never read.
+   More than one Google account can be connected. Every email that arrives in a connected inbox after the account was connected comes in as one row per thread: each run carries on from where the last stopped in Gmail's history, so nothing is missed. The row shows the subject; quoted history under a reply is left out. An email written to the account by a person counts as a direct message for the sorting rules; newsletters, no-reply mail, Gmail's other tabs and emails the account is only copied on sort low. Google is connected for reading only: an email row has an Open in Gmail link in place of the reply box.
+   The Calendar tab shows the connected Google Calendars week by week, from last week to three weeks ahead, as Google Calendar does: overlapping meetings side by side, all-day events on top, focus time and out of office marked, a line at the current time, and each event's people and Join link a click away. The Meetings tab starts with today's and tomorrow's meetings.
    The Telegram login is three requests (phone number, code, password if the account has one). Nothing about a login in progress is kept on the server: what the next step needs goes back to the browser sealed in a cookie, so the steps work when a host answers them from different servers. The finished login is stored encrypted, like the Slack token.
 4. **Suggested tasks** appear on the Tasks tab: the owner's action items from calls, and messages that ask for something. Nothing becomes a task until Add task is clicked.
 5. **You act** on the screens. Any work task or conversation can be assigned to someone on the team list or to anyone in Slack; a person picked from Slack is added to the team list the first time. The person is told in a direct message, or, when the task came from a channel or a group message, in that chat with a tag. A reply or a delegation goes into the outbox and is sent from the owner's own Slack account, once sending is switched on. A task is made first, with an optional description, and assigned afterwards from its row. The Slack message says what the task is, when it is due, its priority and project, then the note; the task's description follows as a reply in that message's thread. The assign form shows both before anything is sent. The Tasks tab is one table, highest priority first, with the priority as a coloured tag in front of each task. A task that is done leaves the table and is found under Status: Done. The description shows when a task is opened.
@@ -83,6 +85,8 @@ Off for now (see above). When it is on, the switch next to the title shows one s
 | `task-suggest` | Finds other tasks in new messages from conversations the rules rated worth reading | Yes |
 | `outbox-retry` | Sends what is waiting in the outbox | No |
 | `telegram-pull` | Reads new Telegram messages with their pictures, stickers and reactions. Runs only on a server that may use Telegram (see What is switched off) | No |
+| `gmail-pull` | Reads the emails that arrived in each connected Gmail inbox since the last run. Runs only on a server that may use Google, like Telegram | No |
+| `calendar-pull` | Keeps a copy of each connected account's main Google Calendar, from the start of last week to three weeks ahead. Declined and cancelled events and birthdays are left out | No |
 
 Run one by hand with `npm run job -- slack-pull` (with the local database, stop the app first: it allows one process at a time), or press Run now beside it in Settings. **Sync now** in Settings runs every working check at once.
 
@@ -161,6 +165,8 @@ To move to the hosted database: put the string in `ui/.env.local`, run `npm run 
 | Sending, fully proven | Switched on with `SENDING_ENABLED=true`. A reply into a thread has been sent and read back from Slack. An assignment by direct message and a post to a channel have only run against a fake Slack so far. |
 | Telegram on the live site, proven | Built and tested against a pretend Telegram. It needs the two app keys and `TELEGRAM_HOSTED=true` on the host, and has not yet been through a real login there. Pictures are kept in the database with no clean-up yet: about 100 KB each. |
 | Pictures from Slack | The `files:read` permission on the Slack app (User Token Scopes), then a reinstall. A workspace's own custom emoji show by name; their pictures would need `emoji:read`. |
+| Google, proven | Built and tested against a pretend Google, on branch `google-connection` only. It needs an OAuth client in Google Cloud (see `docs/google-connection.md`), a real login on a developer's machine, then `GOOGLE_HOSTED=true` and the client's keys on the host. |
+| Replying to emails | The `gmail.send` permission, and a sender in the outbox. Until then an email opens in Gmail to be answered. |
 | A login per person | Supabase sign-in, in place of the one fixed login. The hosted database is in use already (see Database). |
 | Personal: Payments, Goals, Health | The tabs from the prototype's Personal side that are not built. |
 | Hosting | Deploying it. The route for the host's scheduler and `vercel.json` are in place (see Automatic sync); it has been tested on this machine, not on Vercel. |

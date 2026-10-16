@@ -18,6 +18,7 @@ const TABS = [
   { href: "/departments", key: "departments", label: "Departments" },
   { href: "/inbox", key: "inbox", label: "Inbox" },
   { href: "/meetings", key: "meetings", label: "Meetings" },
+  { href: "/calendar", key: "calendar", label: "Calendar" },
   { href: "/tasks", key: "tasks", label: "Tasks" },
   { href: "/targets", key: "targets", label: "Targets" },
   { href: "/connections", key: "connections", label: "Connections" },

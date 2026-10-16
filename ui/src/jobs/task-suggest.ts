@@ -1,10 +1,12 @@
 // The only job that uses an AI model. It reads new messages from other people, in the
 // conversations the sorting rules already marked as worth attention, and suggests tasks.
 // Plain code decides what is sent; the model only reads that and proposes.
+import { SOURCE_NAME } from "@/core/config";
 import { addDays, isoDay } from "@/core/dates";
 import { redactSecrets } from "@/core/slack-text";
 import { describeAiError, findTasks, type FoundTask, type TaskSearch } from "@/server/ai";
 import { uid } from "@/server/repo";
+import type { Source } from "@/core/types";
 import type { JobContext, JobResult } from "./runner";
 
 /** Conversations per run. Keeps one request small and its cost predictable. Set AI_MAX_CONVERSATIONS to lower it. */
@@ -54,7 +56,7 @@ export async function taskSuggest({ db, ownerId, now }: JobContext, finder: Find
       known,
       sources: conversations.map((c) => ({
         id: c.id,
-        where: `${c.source === "slack" ? "Slack" : "Telegram"} conversation with ${c.from_name} (${c.ctx})`,
+        where: c.source === "gmail" ? `Email from ${c.from_name}, subject "${c.ctx}"` : `${SOURCE_NAME[c.source as Source] ?? "Slack"} conversation with ${c.from_name} (${c.ctx})`,
         lines: lines.filter((l) => l.conversation_id === c.id).slice(-LINES_PER_CONVERSATION).map((l) => ({ who: l.me ? (owner?.name ?? "Owner") : l.sender_name, text: redactSecrets(l.body).slice(0, MAX_LINE_LENGTH) })),
       })),
     });

@@ -2,16 +2,18 @@
 // type before anything is sent. Plain logic, no network.
 import type { Provider } from "./types";
 
-export const PROVIDERS: Provider[] = ["slack", "telegram", "fathom"];
-/** The ones that can be connected on this server. Telegram only where the server says it can be used. */
-export const liveProviders = (telegram: boolean): Provider[] => (telegram ? ["slack", "telegram", "fathom"] : ["slack", "fathom"]);
+export const PROVIDERS: Provider[] = ["slack", "telegram", "fathom", "google"];
+/** The ones that can be connected on this server. Telegram and Google only where the server says they can be used. */
+export const liveProviders = (telegram: boolean, google = false): Provider[] =>
+  PROVIDERS.filter((p) => (p !== "telegram" || telegram) && (p !== "google" || google));
 
-export const PROVIDER_NAME: Record<Provider, string> = { slack: "Slack", telegram: "Telegram", fathom: "Fathom" };
+export const PROVIDER_NAME: Record<Provider, string> = { slack: "Slack", telegram: "Telegram", fathom: "Fathom", google: "Google" };
 
 export const PROVIDER_ABOUT: Record<Provider, string> = {
   slack: "Reads your messages and sends your replies from your own account.",
   telegram: "Reads your one-to-one chats and the group messages addressed to you, and sends your replies from your own account.",
   fathom: "Brings in your recorded calls with notes, transcript and action items.",
+  google: "Brings in your emails and the meetings coming up on your calendar. It only reads: nothing is sent or changed.",
 };
 
 /**

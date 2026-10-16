@@ -6,10 +6,13 @@ import type { JobId, JobSetting } from "@/core/types";
 import { aiConfigured } from "@/server/ai";
 import { secretFor } from "@/server/connections";
 import type { Db } from "@/server/db";
+import { CALENDAR_SCOPE, GMAIL_SCOPE, googleAccounts, googleApi, googleAvailable, googleBlocked, googleConnected } from "@/server/google";
 import { ageOutInbox, OWNER_ID, resortInbox, sendingEnabled } from "@/server/repo";
 import { RateLimited, slackClient } from "@/server/slack";
 import { telegramApi, telegramAvailable, telegramBlocked, telegramConnected } from "@/server/telegram";
+import { calendarPull } from "./calendar";
 import { fathomPull } from "./fathom";
+import { gmailPull } from "./gmail";
 import { outboxSend } from "./outbox";
 import { requestFinder } from "./request-finder";
 import { slackDirectorySync, slackPull } from "./slack";
@@ -84,13 +87,27 @@ async function execute(jobId: JobId, ctx: JobContext): Promise<JobResult> {
         await telegram.close();
       }
     }
+    case "gmail-pull":
+    case "calendar-pull": {
+      const blocked = googleBlocked();
+      if (blocked) throw new NotReady(blocked);
+      const accounts = await googleAccounts(ctx.db, ctx.ownerId);
+      if (!accounts.length) throw new NotReady("Google is not connected");
+      // The person may have allowed only one of the two on Google's page.
+      const [scope, name] = jobId === "gmail-pull" ? [GMAIL_SCOPE, "Gmail"] : [CALENDAR_SCOPE, "Calendar"];
+      if (!accounts.some((a) => a.scopes.includes(scope))) throw new NotReady(`${name} was not allowed for any connected Google account. Connect the account again and tick ${name}.`);
+      const open = (email: string) => googleApi(ctx.db, ctx.ownerId, email);
+      return jobId === "gmail-pull" ? gmailPull(ctx, accounts, open) : calendarPull(ctx, accounts, open);
+    }
   }
 }
 
-/** The services that are connected. A Telegram login counts only on a server that may use Telegram. */
+/** The services that are connected. A Telegram or Google login counts only on a server that may use it. */
 async function connectedTo(db: Db, ownerId: string): Promise<Set<string>> {
   const connected = new Set((await db.query<{ provider: string }>("select provider from connections where owner_id = $1", [ownerId])).map((r) => r.provider));
   if (!telegramAvailable()) connected.delete("telegram");
+  // Google's accounts are kept in a table of their own (see `google_accounts`).
+  if (await googleConnected(db, ownerId)) connected.add("google");
   return connected;
 }
 
@@ -142,7 +159,7 @@ export async function runJob(db: Db, jobId: JobId, ownerId = OWNER_ID, now = Dat
 export async function tick(db: Db, ownerId = OWNER_ID, now = Date.now()): Promise<JobRun[]> {
   const rows = await db.query<{ job_id: JobId; interval_min: number; enabled: boolean; last_run_at: number | null; not_before: number | null }>("select job_id, interval_min, enabled, last_run_at, not_before from jobs where owner_id = $1", [ownerId]);
   const connected = await connectedTo(db, ownerId);
-  const live = new Set(liveJobs(telegramAvailable()).map((j) => j.id));
+  const live = new Set(liveJobs(telegramAvailable(), googleAvailable()).map((j) => j.id));
   const runs: JobRun[] = [];
   // In the order they are defined: the people and channel list before messages, messages before tasks.
   for (const def of [...JOBS].sort((a, b) => Number(b.id === "slack-directory-sync") - Number(a.id === "slack-directory-sync"))) {
@@ -167,7 +184,7 @@ export async function tick(db: Db, ownerId = OWNER_ID, now = Date.now()): Promis
  */
 export async function syncAll(db: Db, ownerId = OWNER_ID): Promise<JobRun[]> {
   const connected = await connectedTo(db, ownerId);
-  const live = new Set(liveJobs(telegramAvailable()).map((j) => j.id));
+  const live = new Set(liveJobs(telegramAvailable(), googleAvailable()).map((j) => j.id));
   const runs: JobRun[] = [];
   for (const def of [...JOBS].sort((a, b) => Number(b.id === "slack-directory-sync") - Number(a.id === "slack-directory-sync"))) {
     if (!live.has(def.id) || def.follows) continue;

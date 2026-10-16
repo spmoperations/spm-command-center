@@ -14,7 +14,8 @@ const MAX_PAGES = Number(process.env.FATHOM_MAX_PAGES ?? 5);
 // Fathom action items carry no due date, so they start two days out and the owner adjusts.
 const DEFAULT_DUE_DAYS = 2;
 
-const PLACES: [RegExp, string][] = [[/zoom\./, "Zoom"], [/meet\.google\./, "Google Meet"], [/teams\.(microsoft|live)\./, "Teams"]];
+/** Where a call happens, by its link. */
+export const PLACES: [RegExp, string][] = [[/zoom\./, "Zoom"], [/meet\.google\./, "Google Meet"], [/teams\.(microsoft|live)\./, "Teams"]];
 
 const sameEmail = (a?: string | null, b?: string | null) => Boolean(a && b && a.toLowerCase() === b.toLowerCase());
 

@@ -24,6 +24,8 @@ export async function connect(db: Db, ownerId: string, provider: Provider, secre
     });
     label = who.label;
     if (who.email) await db.run("update users set email = coalesce(email, $1) where id = $2", [who.email, ownerId]);
+  } else if (provider === "google") {
+    throw new ConnectionError("Google is connected with the Connect Google button, not with a key.");
   } else {
     throw new ConnectionError("Telegram cannot be connected yet. It needs its app keys set up first.");
   }
