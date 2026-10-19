@@ -11,6 +11,7 @@ const SCOPES = ["https://www.googleapis.com/auth/gmail.readonly", "https://www.g
 
 /** One part of a screen sketch. `hi` outlines it as the thing to fill in or click. */
 type Part =
+  | { t: "topbar"; project: string; hi?: boolean }
   | { t: "title"; text: string }
   | { t: "text"; text: string }
   | { t: "field"; label: string; value: string; hi?: boolean }
@@ -34,6 +35,14 @@ function Sketch({ url, parts, caption }: { url: string; parts: Part[]; caption: 
         </div>
         <div className="sk-body">
           {parts.map((p, k) => {
+            if (p.t === "topbar")
+              return (
+                <div key={k} className="sk-top">
+                  <b>Google Cloud</b>
+                  <span className={`sk-project ${p.hi ? "hi" : ""}`}>● {p.project} ▾</span>
+                  <span className="sk-search">Search</span>
+                </div>
+              );
             if (p.t === "title") return <div key={k} className="sk-title">{p.text}</div>;
             if (p.t === "text") return <div key={k} className="sk-text">{p.text}</div>;
             if (p.t === "field")
@@ -106,6 +115,24 @@ const Open = ({ href, children }: { href: string; children: React.ReactNode }) =
   </a>
 );
 
+const PROJECT = "SPM Command Center";
+
+/**
+ * Every page in Google Cloud works on the project picked at the top. If another one is picked,
+ * everything done on the page goes to that project instead, so each part checks it first.
+ */
+function ProjectCheck({ big }: { big?: boolean }) {
+  return (
+    <div className={`gs-check ${big ? "big" : ""}`}>
+      <p>
+        <strong>First, look at the top of the page:</strong> the project must say <strong>{PROJECT}</strong>. If it shows another name, or &quot;Select a project&quot;, click it and pick <strong>{PROJECT}</strong> in the list.
+        {big && " Check it again on every page: each link below opens in whichever project is picked there, and anything done in another project will not work."}
+      </p>
+      {big && <Sketch url="console.cloud.google.com" caption={`The project name, at the top left beside "Google Cloud", must say ${PROJECT}.`} parts={[{ t: "topbar", project: PROJECT, hi: true }]} />}
+    </div>
+  );
+}
+
 /** One numbered part of Step 1. */
 function Part({ n, title, children }: { n: string; title: string; children: React.ReactNode }) {
   return (
@@ -154,20 +181,32 @@ export default function GoogleSetupPage() {
           ) : (
             <>
               <p className="st-help">
-                Do this on a computer, signed in to Google with your <strong>SPM Google account</strong>: the one your socialprofitmedia.co email uses. Each button opens the right page. At the top left of every page, check the project name says <strong>SPM Command Center</strong>.
+                Do this on a computer, signed in to Google with your <strong>SPM Google account</strong>: the one your socialprofitmedia.co email uses. If you use more than one Google account in this browser, check the picture at the top right of Google Cloud is the SPM one. Each button below opens the right page.
               </p>
+              <ProjectCheck big />
               <ol className="gs-parts">
                 <Part n="1" title="Make a project">
-                  <p>Open the page, type the name, and click Create. Google takes a few seconds, then shows the new project.</p>
+                  <p>
+                    Open the page, type the name, and click <strong>Create</strong>. If it is your first time in Google Cloud, it first asks for your country and to agree to its terms: do that, then carry on.
+                  </p>
+                  <p>
+                    Google takes a few seconds. A notice then appears at the top right: click <strong>Select project</strong> in it. Now the top of the page should say <strong>{PROJECT}</strong>. If it doesn&apos;t, click the project name there and pick it.
+                  </p>
                   <Open href="https://console.cloud.google.com/projectcreate">Open New project</Open>
                   <Sketch
                     url="console.cloud.google.com/projectcreate"
                     caption="Project name: SPM Command Center. Leave the rest as it is, then click Create."
                     parts={[{ t: "title", text: "New Project" }, { t: "field", label: "Project name", value: "SPM Command Center", hi: true }, { t: "field", label: "Organization", value: "socialprofitmedia.co" }, { t: "buttons", items: [{ label: "Create", primary: true, hi: true }, { label: "Cancel" }] }]}
                   />
+                  <Sketch
+                    url="console.cloud.google.com"
+                    caption="When the project is made: Select project in the notice, then check the name at the top."
+                    parts={[{ t: "topbar", project: PROJECT, hi: true }, { t: "text", text: "Create Project: SPM Command Center" }, { t: "buttons", items: [{ label: "Select project", hi: true }] }]}
+                  />
                 </Part>
                 <Part n="2" title="Turn on Gmail and Calendar">
-                  <p>Open each page and click Enable. Do both.</p>
+                  <ProjectCheck />
+                  <p>Open each page and click Enable. Do both. If a page says &quot;API Enabled&quot; or shows Manage instead of Enable, it is on already.</p>
                   <div className="gs-row">
                     <Open href="https://console.cloud.google.com/apis/library/gmail.googleapis.com">Open Gmail API</Open>
                     <Open href="https://console.cloud.google.com/apis/library/calendar-json.googleapis.com">Open Google Calendar API</Open>
@@ -175,12 +214,13 @@ export default function GoogleSetupPage() {
                   <Sketch
                     url="console.cloud.google.com/apis/library/gmail.googleapis.com"
                     caption="Click Enable. Then the same on the Google Calendar API page."
-                    parts={[{ t: "title", text: "Gmail API" }, { t: "text", text: "Google Enterprise API · View and manage Gmail data" }, { t: "buttons", items: [{ label: "Enable", primary: true, hi: true }, { label: "Try this API" }] }]}
+                    parts={[{ t: "topbar", project: PROJECT, hi: true }, { t: "title", text: "Gmail API" }, { t: "text", text: "Google Enterprise API · View and manage Gmail data" }, { t: "buttons", items: [{ label: "Enable", primary: true, hi: true }, { label: "Try this API" }] }]}
                   />
                 </Part>
                 <Part n="3" title="Set up the sign-in screen">
+                  <ProjectCheck />
                   <p>
-                    Open the page and click <strong>Get started</strong>. It has four parts:
+                    Open the page and click <strong>Get started</strong>. It has four parts, one after the other:
                   </p>
                   <ol className="gs-list">
                     <li>
@@ -201,6 +241,7 @@ export default function GoogleSetupPage() {
                     url="console.cloud.google.com/auth/overview/create"
                     caption="App name and support email, Internal, your email again, tick the box, Create."
                     parts={[
+                      { t: "topbar", project: PROJECT, hi: true },
                       { t: "title", text: "Project configuration" },
                       { t: "field", label: "1  App name", value: "SPM Command Center", hi: true },
                       { t: "field", label: "User support email", value: "you@socialprofitmedia.co", hi: true },
@@ -210,11 +251,14 @@ export default function GoogleSetupPage() {
                       { t: "buttons", items: [{ label: "Create", primary: true, hi: true }, { label: "Cancel" }] },
                     ]}
                   />
-                  <p className="st-help">If Internal can&apos;t be picked, the account isn&apos;t part of SPM&apos;s Google Workspace. Ask Shruti before going on.</p>
+                  <p className="st-help">
+                    If the page shows <strong>OAuth Overview</strong> with a <strong>Create OAuth client</strong> button instead of Get started, this part is done already: go on to part 4. If Internal can&apos;t be picked, the account isn&apos;t part of SPM&apos;s Google Workspace: ask Shruti before going on.
+                  </p>
                 </Part>
                 <Part n="4" title="Say what it may do">
+                  <ProjectCheck />
                   <p>
-                    Open the page, click <strong>Add or remove scopes</strong>. At the bottom, under <strong>Manually add scopes</strong>, paste these three lines, then click <strong>Add to table</strong>, <strong>Update</strong> and <strong>Save</strong>.
+                    Open the page (it is <strong>Data Access</strong> in the menu on the left), and click <strong>Add or remove scopes</strong>. A panel opens on the right. At its bottom, under <strong>Manually add scopes</strong>, paste these three lines and click <strong>Add to table</strong>, then <strong>Update</strong>. Back on the page, click <strong>Save</strong> at the bottom.
                   </p>
                   <div className="gs-copy">
                     <pre>{SCOPES.join("\n")}</pre>
@@ -224,23 +268,26 @@ export default function GoogleSetupPage() {
                   <Open href="https://console.cloud.google.com/auth/scopes">Open Data access</Open>
                   <Sketch
                     url="console.cloud.google.com/auth/scopes"
-                    caption="Paste the three lines under Manually add scopes, then Add to table, Update, and Save on the page."
-                    parts={[{ t: "title", text: "Update selected scopes" }, { t: "text", text: "Manually add scopes" }, { t: "code", lines: SCOPES, hi: true }, { t: "buttons", items: [{ label: "Add to table", hi: true }, { label: "Update", primary: true, hi: true }] }]}
+                    caption="Paste the three lines under Manually add scopes, click Add to table and Update. Then Save at the bottom of the page."
+                    parts={[{ t: "topbar", project: PROJECT, hi: true }, { t: "title", text: "Update selected scopes" }, { t: "text", text: "Manually add scopes" }, { t: "code", lines: SCOPES, hi: true }, { t: "buttons", items: [{ label: "Add to table", hi: true }, { label: "Update", primary: true, hi: true }] }]}
                   />
                 </Part>
                 <Part n="5" title="Make the client, with the return address">
+                  <ProjectCheck />
                   <p>
-                    Open the page. For <strong>Application type</strong> pick <strong>Web application</strong>; more boxes appear. Name it <code>Command Center</code>. Leave Authorized JavaScript origins empty. Under <strong>Authorized redirect URIs</strong>, click <strong>+ Add URI</strong> and paste this address, exactly. Then click <strong>Create</strong>.
+                    Open the page. (The <strong>Create OAuth client</strong> button on the OAuth Overview page opens the same form.) For <strong>Application type</strong> pick <strong>Web application</strong>: only then do the other boxes appear, including the one for the address. Name it <code>Command Center</code>. Leave <strong>Authorized JavaScript origins</strong> empty. Under <strong>Authorized redirect URIs</strong>, click <strong>+ Add URI</strong> and paste this address, exactly. Then click <strong>Create</strong>.
                   </p>
                   <div className="gs-copy">
                     <pre>{callback}</pre>
                     <Copy text={callback} label="Copy the address" />
                   </div>
                   <Open href="https://console.cloud.google.com/auth/clients/create">Open Create client</Open>
+                  <p className="st-help">No box for Authorized redirect URIs? Application type is not set to Web application yet: pick it, and the box appears.</p>
                   <Sketch
                     url="console.cloud.google.com/auth/clients/create"
                     caption="Web application, a name, the address under Authorized redirect URIs, then Create."
                     parts={[
+                      { t: "topbar", project: PROJECT, hi: true },
                       { t: "title", text: "Create OAuth client ID" },
                       { t: "field", label: "Application type", value: "Web application", hi: true },
                       { t: "field", label: "Name", value: "Command Center" },
