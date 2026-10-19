@@ -7,7 +7,7 @@ import { ensureOwner, OWNER_ID } from "./repo";
 import type { SlackClient } from "./slack";
 import type { TelegramApi, TelegramChat, TelegramMessage } from "./telegram";
 
-const TABLES = ["telegram_chats", "media","outbox", "quick_links", "focus_items", "metric_logs", "metrics", "rules", "suggestions", "tasks", "team_members", "meetings", "messages", "conversations", "slack_channels", "slack_users", "job_runs", "jobs", "connections", "users"];
+const TABLES = ["important", "telegram_chats", "media","outbox", "quick_links", "focus_items", "metric_logs", "metrics", "rules", "suggestions", "tasks", "team_members", "meetings", "messages", "conversations", "slack_channels", "slack_users", "job_runs", "jobs", "connections", "users"];
 
 const freePort = () =>
   new Promise<number>((resolve, reject) => {

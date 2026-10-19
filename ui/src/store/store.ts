@@ -347,6 +347,9 @@ export const clearManualPriorities = () => void act("clearManualPriorities", [],
 export const setJobInterval = (id: JobId, minutes: number) => void act("setJobInterval", [id, minutes]);
 export const setJobEnabled = (id: JobId, enabled: boolean) => void act("setJobEnabled", [id, enabled]);
 export const setChannelSelected = (id: string, selected: boolean) => void act("setChannelSelected", [id, selected]);
+/** Ticks something as important: its messages go to the top of the inbox. */
+export const setImportant = (source: "slack" | "telegram", kind: "chat" | "person", id: string, name: string, on: boolean) =>
+  void act("setImportant", [source, kind, id, name, on], on ? `${name} is important: its messages go to the top of the inbox` : `${name} is no longer important`);
 
 /** "Run now": runs one check straight away and says what it found. */
 export async function runJobNow(id: JobId) {

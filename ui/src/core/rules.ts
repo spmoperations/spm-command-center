@@ -14,7 +14,7 @@ export const norm = (x: unknown) =>
     .replace(/[^a-z0-9#]+/g, " ")
     .trim();
 
-type Sortable = Pick<Conversation, "source" | "from" | "ctx" | "direct" | "tagged">;
+type Sortable = Pick<Conversation, "source" | "from" | "ctx" | "direct" | "tagged"> & { important?: boolean };
 
 export function ruleMatches(rule: Rule, c: Sortable): boolean {
   if (rule.source !== "any" && rule.source !== c.source) return false;
@@ -41,11 +41,15 @@ export function sortConversation(c: Sortable, labelRules: Rule[], priorityRules:
   };
 }
 
-/** Re-sorts every conversation. A priority or a side set by hand in the inbox is kept. */
+/**
+ * Re-sorts every conversation. One from a channel, chat or person ticked as important in
+ * Settings is High, whatever the rules say. A priority or a side set by hand in the inbox is kept.
+ */
 export function applyRules(inbox: Conversation[], labelRules: Rule[], priorityRules: Rule[]): Conversation[] {
   return inbox.map((c) => {
     const sorted = sortConversation(c, labelRules, priorityRules);
-    return { ...c, line: sorted.line, mode: c.manualMode ? c.mode : sorted.mode, pri: c.manualPri ? c.pri : sorted.pri };
+    const pri = c.manualPri ? c.pri : c.important ? "high" : sorted.pri;
+    return { ...c, line: sorted.line, mode: c.manualMode ? c.mode : sorted.mode, pri };
   });
 }
 

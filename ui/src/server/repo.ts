@@ -110,11 +110,31 @@ const SHOWN = `select id from (
                  select id, done, row_number() over (partition by source, done order by last_at desc) as n from conversations where owner_id = $1
                ) shown where shown.n <= case when shown.done then 100 else 300 end`;
 
+/**
+ * The conversations that are important: in a Slack channel or Telegram group ticked in
+ * Settings, a direct chat with someone ticked, or one where someone ticked wrote last.
+ */
+export async function importantConversations(db: Db, ownerId: string): Promise<Set<string>> {
+  const rows = await db.query<{ id: string }>(
+    `select c.id from conversations c
+     where c.owner_id = $1 and c.source in ('slack', 'telegram') and (
+       exists (select 1 from important i where i.owner_id = $1 and i.source = c.source and i.kind = 'chat' and i.external_id = c.external_id)
+       or exists (select 1 from important i where i.owner_id = $1 and i.source = c.source and i.kind = 'person' and (
+         (c.direct and i.external_id = c.external_id)
+         or i.external_id = (select s.user_id from slack_channels s where s.owner_id = $1 and s.id = c.external_id and s.kind = 'im')
+         or i.external_id = (select m.sender_id from messages m where m.conversation_id = c.id and not m.me and m.sender_id is not null order by m.at desc limit 1)
+       ))
+     )`,
+    [ownerId],
+  );
+  return new Set(rows.map((r) => r.id));
+}
+
 async function loadConversations(db: Db, ownerId: string): Promise<Conversation[]> {
   // Both reads go out together. Only the newest part of each conversation is fetched: a busy
   // channel can hold thousands of messages. A thread counts as one group and is kept whole
   // (its first message and its newest replies), so a reply never shows without what it answers.
-  const [rows, messages] = await Promise.all([
+  const [rows, messages, important] = await Promise.all([
     db.query<ConversationRow>(`select * from conversations where id in (${SHOWN})`, [ownerId]),
     db.query<MessageRow>(
       `with grouped as (
@@ -133,6 +153,7 @@ async function loadConversations(db: Db, ownerId: string): Promise<Conversation[
        order by at, id`,
       [ownerId, GROUPS_SHOWN, REPLIES_SHOWN, MESSAGES_SHOWN],
     ),
+    importantConversations(db, ownerId),
   ]);
   // Telegram's profile pictures are kept by the dashboard. Slack's are addresses, in `avatars`.
   const telegram = new Set(rows.filter((r) => r.source === "telegram").map((r) => r.id));
@@ -166,6 +187,7 @@ async function loadConversations(db: Db, ownerId: string): Promise<Conversation[
       id: r.id, source: r.source, from: r.from_name, ctx: r.ctx, direct: r.direct, tagged: r.tagged, text: r.last_text, at: r.last_at,
       pri: r.pri, line: r.line, mode: r.mode, project: r.project, done: r.done, replied: r.replied, manualPri: r.manual_pri || undefined, manualMode: r.manual_mode || undefined,
       root: r.thread_ts ?? undefined,
+      important: important.has(r.id) || undefined,
       tags: r.source === "gmail" ? emailTags({ ...(mail.get(r.id) ?? { texts: [r.last_text], senders: [], bulk: false }), subject: r.ctx }) : undefined,
       autoCleared: (r.done && r.auto_done) || undefined,
       // A one-to-one chat shows the other person. A group shows whoever wrote last.
@@ -292,6 +314,9 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     meetings,
     calendar,
     google,
+    importantRows,
+    telegramChats,
+    telegramPeople,
     jobStatus,
   ] = await Promise.all([
     db.query<{ name: string }>("select name from users where id = $1", [ownerId]),
@@ -324,6 +349,20 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     loadMeetings(db, ownerId),
     loadCalendar(db, ownerId),
     googleAccounts(db, ownerId),
+    db.query<{ source: "slack" | "telegram"; kind: "chat" | "person"; external_id: string; name: string }>("select source, kind, external_id, name from important where owner_id = $1 order by lower(name)", [ownerId]),
+    telegramAvailable() ? db.query<{ id: string; name: string; kind: "group" | "channel" }>("select id, name, kind from telegram_chats where owner_id = $1 order by lower(name)", [ownerId]) : Promise.resolve([]),
+    telegramAvailable()
+      ? db.query<{ id: string; name: string }>(
+          // The people of the one-to-one chats, and whoever wrote in a group, each once under their latest name.
+          `select distinct on (id) id, name from (
+             select c.external_id as id, c.from_name as name, c.last_at as at from conversations c where c.owner_id = $1 and c.source = 'telegram' and c.direct
+             union all
+             select m.sender_id, m.sender_name, m.at from messages m join conversations c on c.id = m.conversation_id
+             where c.owner_id = $1 and c.source = 'telegram' and not m.me and m.sender_id is not null
+           ) p order by id, at desc`,
+          [ownerId],
+        )
+      : Promise.resolve([]),
     loadJobStatus(db, ownerId),
   ]);
 
@@ -374,6 +413,9 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     jobStatus,
     channels,
     slackPeople,
+    important: importantRows.map((r) => ({ source: r.source, kind: r.kind, id: r.external_id, name: r.name })),
+    telegramChats,
+    telegramPeople: telegramPeople.sort((a, b) => a.name.localeCompare(b.name)),
     avatars: Object.fromEntries(pictures.map((p) => [p.name, p.image])),
     owner: { name: owner?.name ?? "You" },
     sendingEnabled: sendingEnabled(),
@@ -395,7 +437,8 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
 export async function resortInbox(db: Db, ownerId: string): Promise<number> {
   const { labelRules, priorityRules } = await loadRules(db, ownerId);
   const rows = await db.query<ConversationRow>("select * from conversations where owner_id = $1 and not done", [ownerId]);
-  const before = rows.map((r) => ({ id: r.id, source: r.source, from: r.from_name, ctx: r.ctx, direct: r.direct, tagged: r.tagged, pri: r.pri, line: r.line, mode: r.mode, manualPri: r.manual_pri, manualMode: r.manual_mode }) as Conversation);
+  const important = await importantConversations(db, ownerId);
+  const before = rows.map((r) => ({ id: r.id, source: r.source, from: r.from_name, ctx: r.ctx, direct: r.direct, tagged: r.tagged, important: important.has(r.id), pri: r.pri, line: r.line, mode: r.mode, manualPri: r.manual_pri, manualMode: r.manual_mode }) as Conversation);
   const after = applyRules(before, labelRules, priorityRules);
   let changed = 0;
   for (const [k, c] of after.entries()) {
@@ -871,6 +914,16 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
   },
   async setJobEnabled(c, id: JobId, enabled: boolean) {
     await c.db.run("update jobs set enabled = $1 where owner_id = $2 and job_id = $3", [enabled, c.ownerId, id]);
+  },
+  /** Ticks or unticks a channel, chat or person as important, and re-sorts the inbox straight away. */
+  async setImportant(c, source: "slack" | "telegram", kind: "chat" | "person", id: string, name: string, on: boolean) {
+    if (!["slack", "telegram"].includes(source) || !["chat", "person"].includes(kind) || !id) throw new Error("That is not something that can be marked important.");
+    if (on) {
+      await c.db.run("insert into important (owner_id, source, kind, external_id, name) values ($1, $2, $3, $4, $5) on conflict (owner_id, source, kind, external_id) do update set name = excluded.name", [c.ownerId, source, kind, id, name || id]);
+    } else {
+      await c.db.run("delete from important where owner_id = $1 and source = $2 and kind = $3 and external_id = $4", [c.ownerId, source, kind, id]);
+    }
+    await resortInbox(c.db, c.ownerId);
   },
   async setChannelSelected(c, id: string, selected: boolean) {
     await c.db.run("update slack_channels set selected = $1 where owner_id = $2 and id = $3", [selected, c.ownerId, id]);

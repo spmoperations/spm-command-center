@@ -270,13 +270,19 @@ function TelegramSteps({ local }: { local?: boolean }) {
 function GoogleSteps() {
   return (
     <ol className="steps">
+      <Step title="Set up Google Cloud, and send Shruti the two keys" help="Done: the keys are in place on this site." />
       <Step
         title="Connect your Google account"
         help="Google opens its own page: pick your account and click Allow, with every box ticked. The Command Center reads your inbox and your calendar, and sends an email or adds an event only when you do it here. It cannot delete anything."
       >
-        <a className="btn primary extlink" href="/api/google/start">
-          Connect Google
-        </a>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <a className="btn primary extlink" href="/api/google/start">
+            Connect Google
+          </a>
+          <Link className="btn" href="/connections/google">
+            The step-by-step guide
+          </Link>
+        </div>
       </Step>
     </ol>
   );
@@ -335,9 +341,17 @@ function GoogleConnected({ app, lastChecked }: { app: App; lastChecked: string }
 function GoogleNotReady({ why }: { why: string | null }) {
   return (
     <>
-      <div className="st-help">
-        <strong>Google is not switched on for this site yet.</strong> It needs its app keys in place first. As soon as they are, a Connect Google button appears here.
-      </div>
+      <ol className="steps">
+        <Step
+          title="Set up Google Cloud, and send Shruti the two keys"
+          help="About 10 minutes in your Google account, once. The guide shows every click, with pictures. It ends with two keys to post in #spm-development."
+        >
+          <Link className="btn primary" href="/connections/google">
+            Open the step-by-step guide
+          </Link>
+        </Step>
+        <Step title="Connect your Google account" help="Turns on here by itself once Shruti has added the keys." />
+      </ol>
       {why && (
         <details className="fallback">
           <summary>What is missing, for whoever sets it up</summary>

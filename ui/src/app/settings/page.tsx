@@ -11,7 +11,7 @@ import { ruleHits } from "@/core/rules";
 import type { JobSetting, Line, Person, Priority, Rule, Source } from "@/core/types";
 import {
   addHandle, addPerson, addRule, clearManualPriorities, deleteRule, moveRule, removeHandle, removePerson, runJobNow,
-  setChannelSelected, setJobEnabled, setJobInterval, syncNow, toast, togglePersonDept, useApp, type App, type RuleKind,
+  setChannelSelected, setImportant, setJobEnabled, setJobInterval, syncNow, toast, togglePersonDept, useApp, type App, type RuleKind,
 } from "@/store/store";
 
 function IntervalInput({ setting }: { setting: JobSetting }) {
@@ -138,6 +138,76 @@ function Channels({ app }: { app: App }) {
                 </label>
               </li>
             ))}
+          </ul>
+        </>
+      )}
+    </div>
+  );
+}
+
+type ImportantTab = "slack-chat" | "slack-person" | "telegram-chat" | "telegram-person";
+
+/**
+ * The channels, chats and people that matter most. Their messages go to the top of the inbox,
+ * marked Important, whether or not they tag the owner.
+ */
+function Important({ app }: { app: App }) {
+  const { state } = app;
+  const telegram = state.telegramAvailable && state.connections.telegram.connected;
+  const [tab, setTab] = useState<ImportantTab>("slack-chat");
+  const [filter, setFilter] = useState("");
+  const [onlyTicked, setOnlyTicked] = useState(false);
+  const lists: Record<ImportantTab, { source: "slack" | "telegram"; kind: "chat" | "person"; label: string; find: string; items: { id: string; name: string; note?: string }[] }> = {
+    "slack-chat": { source: "slack", kind: "chat", label: "Slack channels", find: "Find a channel", items: state.channels.map((c) => ({ id: c.id, name: `#${c.name}`, note: c.kind === "private" ? "Private" : undefined })) },
+    "slack-person": { source: "slack", kind: "person", label: "Slack people", find: "Find a person", items: state.slackPeople },
+    "telegram-chat": { source: "telegram", kind: "chat", label: "Telegram groups", find: "Find a group or channel", items: state.telegramChats.map((c) => ({ id: c.id, name: c.name, note: c.kind === "channel" ? "Channel" : undefined })) },
+    "telegram-person": { source: "telegram", kind: "person", label: "Telegram people", find: "Find a person", items: state.telegramPeople },
+  };
+  const tabs = (Object.keys(lists) as ImportantTab[]).filter((t) => telegram || lists[t].source === "slack");
+  const current = lists[tabs.includes(tab) ? tab : "slack-chat"];
+  const ticked = (source: string, kind: string, id: string) => state.important.some((i) => i.source === source && i.kind === kind && i.id === id);
+  const count = (t: ImportantTab) => state.important.filter((i) => i.source === lists[t].source && i.kind === lists[t].kind).length;
+  const words = filter.trim().toLowerCase();
+  const shown = current.items.filter((i) => (!words || i.name.toLowerCase().includes(words)) && (!onlyTicked || ticked(current.source, current.kind, i.id)));
+  return (
+    <div className="panel set-sec" id="important">
+      <div className="panel-head">
+        <h3>Important</h3>
+        <span className="muted" style={{ fontSize: 13 }}>
+          {state.important.length} ticked
+        </span>
+      </div>
+      <p className="set-intro">
+        Tick the channels, groups and people that matter most. Their messages go to the top of the inbox as High, marked Important, whether or not they tag you. A person counts in your direct chat with them, and wherever they wrote the latest message. A priority you set by hand in the inbox keeps your choice.
+      </p>
+      <div className="imp-tabs" role="tablist" aria-label="What to tick">
+        {tabs.map((t) => (
+          <button key={t} role="tab" aria-selected={current === lists[t]} onClick={() => setTab(t)}>
+            {lists[t].label} <span className="n">{count(t)}</span>
+          </button>
+        ))}
+      </div>
+      {current.items.length === 0 ? (
+        <p className="empty">{current.source === "slack" ? "This list fills in once Slack is connected and its channel and people list has been read." : "This list fills in once Telegram has been read."}</p>
+      ) : (
+        <>
+          <div className="imp-tools">
+            <input className="f" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder={current.find} aria-label={current.find} />
+            <label className="inline-check">
+              <input type="checkbox" checked={onlyTicked} onChange={(e) => setOnlyTicked(e.target.checked)} /> Only ticked
+            </label>
+          </div>
+          <ul className="channel-list">
+            {shown.map((i) => (
+              <li key={i.id}>
+                <label>
+                  <input type="checkbox" checked={ticked(current.source, current.kind, i.id)} onChange={(e) => setImportant(current.source, current.kind, i.id, i.name, e.target.checked)} />
+                  <span>{i.name}</span>
+                  {i.note && <span className="chip">{i.note}</span>}
+                </label>
+              </li>
+            ))}
+            {shown.length === 0 && <li className="muted">{onlyTicked && !words ? "Nothing ticked here yet." : "Nothing matches that."}</li>}
           </ul>
         </>
       )}
@@ -418,6 +488,7 @@ export default function SettingsPage() {
       </div>
       <nav className="set-nav" aria-label="Settings sections">
         <a href="#timers">Sync</a>
+        <a href="#important">Important</a>
         <a href="#channels">Channels</a>
         <a href="#team">Team</a>
         <a href="#urgent">What is urgent</a>
@@ -425,6 +496,7 @@ export default function SettingsPage() {
       </nav>
 
       <Timers app={app} />
+      <Important app={app} />
       <Channels app={app} />
       <Team app={app} />
 

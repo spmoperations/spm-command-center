@@ -362,6 +362,7 @@ export function MessageRow({ c, app, open, draft, onDraft, cleared }: { c: Conve
             {c.source === "gmail" && app.state.googleAccounts.length > 1 ? ` to ${gmailOf(c).account}` : ""} · {c.ctx}
             {c.root && c.thread.length > 1 ? " · thread" : ""}
           </span>
+          {c.important && <span className="chip important">Important</span>}
           {c.tagged && <span className="chip me">Tagged you</span>}
           {EMAIL_TAGS_SHOWN && c.tags?.map((t) => (
             <span key={t} className={`chip etag etag-${t}`}>

@@ -37,8 +37,8 @@ export default function InboxPage() {
 
   const groups = PRIORITIES.map((p) => ({
     p,
-    // Conversations still waiting for a reply come first, newest on top.
-    items: list.filter((c) => c.pri === p).sort((a, b) => Number(a.replied) - Number(b.replied) || b.at - a.at),
+    // Important ones first, then those still waiting for a reply, newest on top.
+    items: list.filter((c) => c.pri === p).sort((a, b) => Number(Boolean(b.important)) - Number(Boolean(a.important)) || Number(a.replied) - Number(b.replied) || b.at - a.at),
   })).filter((g) => g.items.length > 0);
 
   return (

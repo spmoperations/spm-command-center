@@ -76,6 +76,8 @@ export interface Conversation {
   autoCleared?: boolean;
   /** For an email: what it is about (payment, subscription, newsletter). */
   tags?: EmailTag[];
+  /** From a channel, chat or person ticked as important in Settings: High, and first in the inbox. */
+  important?: boolean;
   /**
    * Set when this row is one thread in a Slack channel: the id of the message that started
    * it. A reply written here goes into that thread.
@@ -195,6 +197,15 @@ export interface CalendarItem {
   organizer?: string;
   /** The owner's own answer to the invite: "accepted", "tentative" or "needsAction". */
   response?: string;
+}
+
+/** Something ticked as important in Settings. */
+export interface ImportantPick {
+  source: "slack" | "telegram";
+  /** A Slack channel or Telegram group ("chat"), or someone ("person"). */
+  kind: "chat" | "person";
+  id: string;
+  name: string;
 }
 
 /** A connected Google account, and what it allowed: reading Gmail, sending, reading the calendar, adding events. */
@@ -341,6 +352,11 @@ export interface AppState {
   channels: Channel[];
   /** People in the Slack workspace, for linking team members. */
   slackPeople: { id: string; name: string }[];
+  /** What is ticked as important in Settings. */
+  important: ImportantPick[];
+  /** The Telegram groups and channels, and the people, there are to tick. Empty where Telegram is not used. */
+  telegramChats: { id: string; name: string; kind: "group" | "channel" }[];
+  telegramPeople: { id: string; name: string }[];
   /** Profile picture addresses by the name a person's messages carry. A name with no entry gets initials. */
   avatars: Record<string, string>;
   owner: { name: string };

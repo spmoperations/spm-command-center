@@ -24,7 +24,7 @@ beforeEach(async () => {
 
 describe("database", () => {
   it("applies each migration once and records it", async () => {
-    expect(await db.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }, { name: "0006_pictures_and_reactions.sql" }, { name: "0007_media.sql" }, { name: "0008_thread_items.sql" }, { name: "0009_inbox_age.sql" }, { name: "0010_task_description.sql" }, { name: "0011_outbox_thread_reply.sql" }, { name: "0012_telegram_chats.sql" }, { name: "0013_google.sql" }, { name: "0014_google_accounts.sql" }, { name: "0015_google_send.sql" }]);
+    expect(await db.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }, { name: "0006_pictures_and_reactions.sql" }, { name: "0007_media.sql" }, { name: "0008_thread_items.sql" }, { name: "0009_inbox_age.sql" }, { name: "0010_task_description.sql" }, { name: "0011_outbox_thread_reply.sql" }, { name: "0012_telegram_chats.sql" }, { name: "0013_google.sql" }, { name: "0014_google_accounts.sql" }, { name: "0015_google_send.sql" }, { name: "0016_important.sql" }]);
     expect(await migrate(db)).toEqual([]);
   });
 
@@ -60,8 +60,8 @@ describe("database", () => {
   it("accepts a first schema that was run by hand, then applies what came after", async () => {
     const fresh = await openDb(undefined, { migrate: false });
     for (const statement of splitStatements(fs.readFileSync("db/migrations/0001_init.sql", "utf8"))) await fresh.run(statement);
-    expect(await migrate(fresh)).toEqual(["0002_row_level_security.sql", "0003_personal_and_requests.sql", "0004_threads.sql", "0005_slack_pictures.sql", "0006_pictures_and_reactions.sql", "0007_media.sql", "0008_thread_items.sql", "0009_inbox_age.sql", "0010_task_description.sql", "0011_outbox_thread_reply.sql", "0012_telegram_chats.sql", "0013_google.sql", "0014_google_accounts.sql", "0015_google_send.sql"]);
-    expect(await fresh.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }, { name: "0006_pictures_and_reactions.sql" }, { name: "0007_media.sql" }, { name: "0008_thread_items.sql" }, { name: "0009_inbox_age.sql" }, { name: "0010_task_description.sql" }, { name: "0011_outbox_thread_reply.sql" }, { name: "0012_telegram_chats.sql" }, { name: "0013_google.sql" }, { name: "0014_google_accounts.sql" }, { name: "0015_google_send.sql" }]);
+    expect(await migrate(fresh)).toEqual(["0002_row_level_security.sql", "0003_personal_and_requests.sql", "0004_threads.sql", "0005_slack_pictures.sql", "0006_pictures_and_reactions.sql", "0007_media.sql", "0008_thread_items.sql", "0009_inbox_age.sql", "0010_task_description.sql", "0011_outbox_thread_reply.sql", "0012_telegram_chats.sql", "0013_google.sql", "0014_google_accounts.sql", "0015_google_send.sql", "0016_important.sql"]);
+    expect(await fresh.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }, { name: "0006_pictures_and_reactions.sql" }, { name: "0007_media.sql" }, { name: "0008_thread_items.sql" }, { name: "0009_inbox_age.sql" }, { name: "0010_task_description.sql" }, { name: "0011_outbox_thread_reply.sql" }, { name: "0012_telegram_chats.sql" }, { name: "0013_google.sql" }, { name: "0014_google_accounts.sql" }, { name: "0015_google_send.sql" }, { name: "0016_important.sql" }]);
     expect(await fresh.query("select relrowsecurity from pg_class where relname = 'messages'")).toEqual([{ relrowsecurity: true }]);
     await fresh.close();
   });
@@ -73,7 +73,7 @@ describe("database", () => {
     }
     await migrate(fresh);
     expect(await fresh.query("select relname from pg_class where relnamespace = 'public'::regnamespace and relkind = 'r' and not relrowsecurity")).toEqual([]);
-    expect(await fresh.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }, { name: "0006_pictures_and_reactions.sql" }, { name: "0007_media.sql" }, { name: "0008_thread_items.sql" }, { name: "0009_inbox_age.sql" }, { name: "0010_task_description.sql" }, { name: "0011_outbox_thread_reply.sql" }, { name: "0012_telegram_chats.sql" }, { name: "0013_google.sql" }, { name: "0014_google_accounts.sql" }, { name: "0015_google_send.sql" }]);
+    expect(await fresh.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }, { name: "0006_pictures_and_reactions.sql" }, { name: "0007_media.sql" }, { name: "0008_thread_items.sql" }, { name: "0009_inbox_age.sql" }, { name: "0010_task_description.sql" }, { name: "0011_outbox_thread_reply.sql" }, { name: "0012_telegram_chats.sql" }, { name: "0013_google.sql" }, { name: "0014_google_accounts.sql" }, { name: "0015_google_send.sql" }, { name: "0016_important.sql" }]);
     expect(await fresh.query("select mode, asked from messages m join conversations c on c.id = m.conversation_id")).toEqual([]);
     await fresh.close();
   });
@@ -691,3 +691,44 @@ describe("tasks from calls", () => {
   });
 });
 
+describe("important channels, chats and people", () => {
+  const row = async (id: string) => (await state()).inbox.find((c) => c.id === id)!;
+  const telegramGroup = async () => {
+    await db.run("insert into conversations (id, owner_id, source, external_id, from_name, ctx, direct, last_text, last_at) values ('telegram:-701', $1, 'telegram', '-701', 'Sam Ortiz', 'Launch crew', false, 'Lunch?', $2)", [OWNER_ID, NOW - 30_000]);
+    await db.run("insert into messages (id, conversation_id, owner_id, external_id, sender_name, sender_id, body, at) values ('telegram:-701:9', 'telegram:-701', $1, '9', 'Sam Ortiz', '4242', 'Lunch?', $2)", [OWNER_ID, NOW - 30_000]);
+  };
+
+  it("puts a ticked Slack channel at the top of the inbox as High, marked Important, and back when unticked", async () => {
+    expect([(await row("slack:C1")).pri, (await row("slack:C1")).important]).toEqual(["low", undefined]);
+    await act("setImportant", "slack", "chat", "C1", "#sales", true);
+    expect(await row("slack:C1")).toMatchObject({ pri: "high", important: true });
+    expect((await state()).important).toEqual([{ source: "slack", kind: "chat", id: "C1", name: "#sales" }]);
+    await act("setImportant", "slack", "chat", "C1", "#sales", false);
+    expect([(await row("slack:C1")).pri, (await row("slack:C1")).important]).toEqual(["low", undefined]);
+  });
+
+  it("counts a ticked person in their direct chat, and wherever they wrote last", async () => {
+    await db.run("insert into slack_channels (owner_id, id, name, kind, user_id) values ($1, 'D1', 'Maya Chen', 'im', 'UMAYA')", [OWNER_ID]);
+    await act("setImportant", "slack", "person", "UMAYA", "Maya Chen", true);
+    expect(await row("slack:D1")).toMatchObject({ pri: "high", important: true });
+    await telegramGroup();
+    await act("setImportant", "telegram", "person", "4242", "Sam Ortiz", true);
+    expect(await row("telegram:-701")).toMatchObject({ pri: "high", important: true });
+    // The same id on the other service is someone else.
+    await act("setImportant", "slack", "person", "4242", "Not Sam", true);
+    await act("setImportant", "telegram", "person", "4242", "Sam Ortiz", false);
+    expect((await row("telegram:-701")).important).toBeUndefined();
+  });
+
+  it("ticks a Telegram group, and keeps a priority set by hand", async () => {
+    await telegramGroup();
+    await act("setConversationPriority", "telegram:-701", "low");
+    await act("setImportant", "telegram", "chat", "-701", "Launch crew", true);
+    expect(await row("telegram:-701")).toMatchObject({ pri: "low", important: true });
+  });
+
+  it("only takes what can be marked important", async () => {
+    await expect(act("setImportant", "gmail", "chat", "x", "x", true)).rejects.toThrow("That is not something that can be marked important.");
+    await expect(act("setImportant", "slack", "team", "x", "x", true)).rejects.toThrow("That is not something that can be marked important.");
+  });
+});
