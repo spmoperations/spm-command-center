@@ -1,13 +1,15 @@
 "use client";
 
 import Link from "next/link";
+import { GOOGLE_PERMISSIONS } from "@/core/providers";
 import { toast, useApp } from "@/store/store";
 
 // The guide for setting Google up, for the person whose Google account it is. Step 1 happens
 // in Google Cloud, once, and ends with the two keys posted to Shruti in #spm-development. She
 // adds them to the live site, and Step 2, connecting the account, appears here by itself.
 
-const SCOPES = ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.send", "https://www.googleapis.com/auth/calendar.events"];
+const PERMISSIONS = GOOGLE_PERMISSIONS;
+const SCOPES = PERMISSIONS.map(([scope]) => scope);
 
 /** One part of a screen sketch. `hi` outlines it as the thing to fill in or click. */
 type Part =
@@ -261,7 +263,16 @@ export default function GoogleSetupPage() {
                     <pre>{SCOPES.join("\n")}</pre>
                     <Copy text={SCOPES.join("\n")} label="Copy the three lines" />
                   </div>
-                  <p className="st-help">They let it read your Gmail, send email you write here, and read and add calendar events. It can&apos;t delete anything.</p>
+                  <ul className="gs-perms">
+                    {PERMISSIONS.map(([scope, what]) => (
+                      <li key={scope}>
+                        <code>{scope.replace("https://www.googleapis.com/auth/", "")}</code> {what}
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="st-help">
+                    The dashboard only reads, sends what you write, and adds the events you make. It never deletes anything. After <strong>Update</strong>, Google lists them in two groups on the page, <strong>gmail.readonly</strong> under restricted scopes and the other two under sensitive scopes. That is expected: click <strong>Save</strong>.
+                  </p>
                   <Open href="https://console.cloud.google.com/auth/scopes">Open Data access</Open>
                   <Sketch
                     url="console.cloud.google.com/auth/scopes"
@@ -352,9 +363,9 @@ export default function GoogleSetupPage() {
                 caption="Google's own page: pick the account, keep every box ticked, click Allow."
                 parts={[
                   { t: "title", text: "SPM Command Center wants access to your Google Account" },
-                  { t: "check", label: "Read your email", hi: true },
+                  { t: "check", label: "View your email messages and settings", hi: true },
                   { t: "check", label: "Send email on your behalf", hi: true },
-                  { t: "check", label: "View and edit events on your calendars", hi: true },
+                  { t: "check", label: "View and edit events on all your calendars", hi: true },
                   { t: "buttons", items: [{ label: "Cancel" }, { label: "Allow", primary: true, hi: true }] },
                 ]}
               />

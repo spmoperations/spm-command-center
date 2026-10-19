@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { allDayOn, layDay, weekDays, weekStart, weekTitle } from "@/core/calendar";
 import { emailTags } from "@/core/email-tags";
+import { GOOGLE_PERMISSIONS } from "@/core/providers";
 import { upcomingDay } from "@/core/dates";
 import type { CalendarItem } from "@/core/types";
 import type { Db } from "@/server/db";
@@ -210,6 +211,12 @@ describe("reading an email", () => {
 });
 
 // ---------- The switch ----------
+
+describe("the setup guide", () => {
+  it("tells the person to allow exactly what Connect Google asks for", () => {
+    expect(GOOGLE_PERMISSIONS.map(([scope]) => scope)).toEqual(GOOGLE_SCOPES);
+  });
+});
 
 describe("where Google may be used", () => {
   it("needs its app keys, and with a hosted database also the server's say-so", () => {

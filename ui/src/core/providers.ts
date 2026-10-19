@@ -46,6 +46,16 @@ settings:
 /** Opens Slack's "create an app" screen with the manifest filled in. */
 export const SLACK_CREATE_APP_URL = `https://api.slack.com/apps?new_app=1&manifest_yaml=${encodeURIComponent(SLACK_MANIFEST)}`;
 
+/**
+ * What Connect Google asks for, and what each is for, as the setup guide lists them for the
+ * person to paste into Google Cloud. A test checks it is what server/google.ts asks for.
+ */
+export const GOOGLE_PERMISSIONS: [string, string][] = [
+  ["https://www.googleapis.com/auth/gmail.readonly", "Read your emails, so they show on the Emails tab"],
+  ["https://www.googleapis.com/auth/gmail.send", "Send the emails and replies you write in the dashboard"],
+  ["https://www.googleapis.com/auth/calendar.events", "Read your calendar, and add the events you create in the dashboard"],
+];
+
 export const FATHOM_API_ACCESS_URL = "https://fathom.video/customize#api-access-header";
 
 /** Each check returns a message for the person, or null when the value looks right. */
