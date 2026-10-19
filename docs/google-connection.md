@@ -20,8 +20,8 @@ Not pushed. Not on the live site.
 
 ## 1. Your local test: the Google Cloud setup
 
-Do this signed in to Google with your Hermon account, `shruti@hermon.io`: it is the one you
-will connect, and hermon.io runs on Google Workspace. Each link opens the right page. Check that the project picker at the top shows the
+Do this signed in to Google with your own Hermon Google account: it is the one you will
+connect, and hermon.io runs on Google Workspace. Each link opens the right page. Check that the project picker at the top shows the
 project you made in step 1.
 
 1. **Make a project.** https://console.cloud.google.com/projectcreate
@@ -33,16 +33,16 @@ project you made in step 1.
 4. **Set up the sign-in screen.** https://console.cloud.google.com/auth/overview
    Click **Get started**. The page has four parts:
    1. **App Information:** App name `SPM Command Center (dev)`. User support email: pick
-      `shruti@hermon.io` from the list. **Next**.
+      your email from the list. **Next**.
    2. **Audience:** **Internal**. **Next**.
       If Internal can't be picked, the account or the project is not inside the Hermon Google
       Workspace. Then:
       1. Pick **External**, then **Next**.
       2. Once the setup is done, open https://console.cloud.google.com/auth/audience.
-      3. Under **Test users**, click **Add users**, add `shruti@hermon.io` and save.
+      3. Under **Test users**, click **Add users**, add your email and save.
 
       In this Testing mode a login lasts 7 days, which is fine for a test.
-   3. **Contact Information:** `shruti@hermon.io`. **Next**.
+   3. **Contact Information:** your email. **Next**.
    4. **Finish:** tick **I agree to the Google API Services: User Data Policy**, click
       **Continue**, then **Create**.
 5. **Say what it may read.** https://console.cloud.google.com/auth/scopes
@@ -80,7 +80,7 @@ project you made in step 1.
 
 1. In a terminal:
    ```
-   cd "/Users/shruti/Desktop/work/Jermey's Dashboard/ui"
+   cd ui
    git switch google-connection
    npm run dev:local -- -p 3100
    ```
@@ -171,8 +171,8 @@ socialprofitmedia.co runs its email on Google Workspace, so **Internal** works.
 
 What we need from SPM, in one ask:
 
-1. **A Google Workspace account in SPM's domain for Shruti** (for example
-   `shruti@socialprofitmedia.co`). Or SPM's Google admin creates an empty Google Cloud project
+1. **A Google Workspace account in SPM's domain for Shruti** (an address ending in
+   `@socialprofitmedia.co`). Or SPM's Google admin creates an empty Google Cloud project
    called `SPM Command Center` and adds Shruti as **Owner**. Either way, the project belongs
    to SPM.
 2. **Confirmation that Jeremy's email is that Workspace account**, and that the admin allows
