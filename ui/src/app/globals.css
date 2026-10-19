@@ -657,3 +657,21 @@ img.avatar { object-fit: cover; background: var(--surface-2); }
 .cal-card-body { display: grid; gap: 6px; padding: 4px 16px 12px 36px; font-size: 14px; }
 .cal-card-body .label { margin-right: 6px; }
 .cal-card-foot { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; padding: 12px 16px; border-top: 1px solid var(--line); }
+
+/* ---------- Writing email ---------- */
+.inline-check { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; white-space: nowrap; }
+.new-email { display: grid; gap: 10px; padding: 14px 16px; margin-bottom: 16px; }
+.new-email-head { display: flex; justify-content: space-between; align-items: center; }
+.new-email-head h3 { margin: 0; font-size: 16px; }
+.new-email-grid { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 8px 10px; align-items: center; }
+.new-email-grid label { font-size: 13px; color: var(--muted); }
+.new-email textarea.f { width: 100%; resize: vertical; }
+.form-error { margin: 0; color: var(--bad); font-size: 13.5px; }
+.cal-form { display: grid; gap: 10px; padding: 6px 16px 14px; }
+.cal-form .f { width: 100%; box-sizing: border-box; }
+.cal-form-title { font-size: 16px; font-weight: 600; }
+.cal-form-when { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1.2fr); gap: 8px; }
+@media (max-width: 480px) { .cal-form-when { grid-template-columns: minmax(0, 1fr); } }
+.cal-form textarea.f { resize: vertical; }
+.cal-card-foot { align-items: center; }
+.cal-day { cursor: default; }

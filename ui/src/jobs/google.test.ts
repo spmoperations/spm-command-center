@@ -4,10 +4,10 @@ import { allDayOn, layDay, weekDays, weekStart, weekTitle } from "@/core/calenda
 import { upcomingDay } from "@/core/dates";
 import type { CalendarItem } from "@/core/types";
 import type { Db } from "@/server/db";
-import { htmlToText, parseAddress, parseAddresses, readEmail, withoutQuoted, type GmailMessage, type GmailThread } from "@/server/gmail";
+import { htmlToText, parseAddress, parseAddresses, rawEmail, readEmail, withoutQuoted, type GmailMessage, type GmailThread } from "@/server/gmail";
 import {
-  CALENDAR_SCOPE, finishGoogleLogin, GMAIL_SCOPE, GOOGLE_OFF_HERE, GOOGLE_SCOPES, googleApi, googleBlocked, GoogleSaid, HistoryGone, startGoogleLogin,
-  type CalendarEvent, type GoogleAccount, type GoogleApi, type MailboxChanges,
+  CALENDAR_EDIT_SCOPE, CALENDAR_SCOPE, finishGoogleLogin, GMAIL_SCOPE, GMAIL_SEND_SCOPE, GOOGLE_OFF_HERE, GOOGLE_SCOPES, googleApi, googleBlocked, GoogleSaid, HistoryGone, startGoogleLogin,
+  type CalendarEvent, type GoogleAccount, type GoogleApi, type MailboxChanges, type NewEvent,
 } from "@/server/google";
 import { googleCallback, googleLoginRedirect } from "@/server/google-routes";
 import { applyAction, forgetGoogle, loadState, OWNER_ID, resortInbox } from "@/server/repo";
@@ -15,8 +15,9 @@ import { seal, unseal } from "@/server/secrets";
 import { createSession, SESSION_COOKIE } from "@/server/session";
 import { RateLimited, type Fetch } from "@/server/slack";
 import { NOW, reset, testDb } from "@/server/testing";
-import { calendarPull, isShown, joinLink, placeOf, toRows } from "./calendar";
+import { addCalendarEvent, calendarPull, isShown, joinLink, placeOf, toRows } from "./calendar";
 import { gmailPull } from "./gmail";
+import { outboxSend } from "./outbox";
 import { runJob, type JobContext } from "./runner";
 
 let db: Db;
@@ -50,7 +51,7 @@ beforeAll(async () => {
 afterAll(() => db.close());
 beforeEach(() => reset(db));
 afterEach(() => {
-  for (const name of ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_HOSTED", "DATABASE_URL", "LOGIN_EMAIL", "LOGIN_PASSWORD"]) delete process.env[name];
+  for (const name of ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_HOSTED", "DATABASE_URL", "LOGIN_EMAIL", "LOGIN_PASSWORD", "SENDING_ENABLED"]) delete process.env[name];
 });
 
 // ---------- A pretend Gmail ----------
@@ -59,7 +60,7 @@ const b64 = (text: string) => Buffer.from(text, "utf8").toString("base64url");
 
 /** One Gmail message as the API returns it with format=full. */
 function mail(id: string, threadId: string, o: { from: string; to?: string; cc?: string; subject?: string; text?: string; html?: string; at: number; labels?: string[]; headers?: [string, string][]; files?: string[] }): GmailMessage {
-  const headers = [["From", o.from], ["To", o.to ?? "Jeremy Moser <jeremy@example.com>"], ["Subject", o.subject ?? "Thursday"], ...(o.cc ? [["Cc", o.cc]] : []), ...(o.headers ?? [])].map(([name, value]) => ({ name, value }));
+  const headers = [["From", o.from], ["To", o.to ?? "Jeremy Moser <jeremy@example.com>"], ["Subject", o.subject ?? "Thursday"], ["Message-ID", `<${id}@mail.example.com>`], ...(o.cc ? [["Cc", o.cc]] : []), ...(o.headers ?? [])].map(([name, value]) => ({ name, value }));
   const body = [
     ...(o.text !== undefined ? [{ mimeType: "text/plain", body: { data: b64(o.text), size: o.text.length } }] : []),
     ...(o.html !== undefined ? [{ mimeType: "text/html", body: { data: b64(o.html), size: o.html.length } }] : []),
@@ -126,6 +127,17 @@ function fakeGoogle(email = JEREMY_MAIL, events: CalendarEvent[] = []) {
     async events() {
       return { timeZone: "America/New_York", items: events };
     },
+    /** What was sent, written out, and into which thread. */
+    sent: [] as { raw: string; threadId?: string }[],
+    async send(raw: string, threadId?: string): Promise<{ id: string; threadId: string }> {
+      fake.sent.push({ raw, threadId });
+      return { id: `sent${fake.sent.length}`, threadId: threadId ?? `new${fake.sent.length}` };
+    },
+    added: [] as NewEvent[],
+    async addEvent(e: NewEvent): Promise<CalendarEvent> {
+      fake.added.push(e);
+      return { id: `ev${fake.added.length}`, status: "confirmed", summary: e.title, start: { dateTime: new Date(e.start).toISOString() }, end: { dateTime: new Date(e.end).toISOString() }, htmlLink: "https://calendar.google.com/event?eid=new", ...(e.meet ? { hangoutLink: "https://meet.google.com/new-meet-abc" } : {}), attendees: e.guests.map((email) => ({ email, responseStatus: "needsAction" })) };
+    },
   } satisfies GoogleApi & Record<string, unknown>;
   return fake;
 }
@@ -134,12 +146,12 @@ const opener = (...fakes: ReturnType<typeof fakeGoogle>[]) => async (email: stri
 
 /** A pretend Google for the login and the API: answers by address, and remembers what it was asked. */
 function googleSays(routes: Record<string, (body: URLSearchParams, url: URL, headers: Headers) => [number, unknown]>) {
-  const calls: { url: string; body: URLSearchParams; headers: Headers }[] = [];
+  const calls: { url: string; body: URLSearchParams; headers: Headers; text: string }[] = [];
   const fetchImpl: Fetch = async (input, init) => {
     const url = new URL(String(input));
     const body = new URLSearchParams(typeof init?.body === "string" ? init.body : "");
     const headers = new Headers(init?.headers);
-    calls.push({ url: url.toString(), body, headers });
+    calls.push({ url: url.toString(), body, headers, text: typeof init?.body === "string" ? init.body : "" });
     const route = routes[`${url.origin}${url.pathname}`];
     if (!route) throw new Error(`Unexpected request in a test: ${url}`);
     const [status, answer] = route(body, url, headers);
@@ -216,7 +228,7 @@ describe("where Google may be used", () => {
     await connected();
     process.env.DATABASE_URL = HOSTED;
     const state = await loadState(db, OWNER_ID, new Date(NOW));
-    expect([state.googleAvailable, state.connections.google.connected, state.googleAccounts, state.googleAllows]).toEqual([false, false, [], { gmail: false, calendar: false }]);
+    expect([state.googleAvailable, state.connections.google.connected, state.googleAccounts, state.googleAllows]).toEqual([false, false, [], { gmail: false, send: false, calendar: false, addEvents: false }]);
     const run = await runJob(db, "gmail-pull", OWNER_ID, NOW);
     expect([run.ok, run.message]).toEqual([false, GOOGLE_OFF_HERE]);
   });
@@ -257,7 +269,7 @@ describe("connecting Google", () => {
     expect(`${to.origin}${to.pathname}`).toBe("https://accounts.google.com/o/oauth2/v2/auth");
     expect(Object.fromEntries(to.searchParams)).toMatchObject({
       client_id: "1234-abcd.apps.googleusercontent.com", redirect_uri: `${SITE}/api/google/callback`, response_type: "code",
-      scope: `${GMAIL_SCOPE} ${CALENDAR_SCOPE}`, access_type: "offline", prompt: "consent select_account", code_challenge_method: "S256",
+      scope: `${GMAIL_SCOPE} ${GMAIL_SEND_SCOPE} ${CALENDAR_EDIT_SCOPE}`, access_type: "offline", prompt: "consent select_account", code_challenge_method: "S256",
     });
     expect(res.headers.get("set-cookie")).toMatch(/^cc_google_login=[^;]+; Path=\/api\/google; HttpOnly; SameSite=Lax; Max-Age=600$/);
   });
@@ -286,8 +298,8 @@ describe("connecting Google", () => {
     const state = await loadState(db, OWNER_ID, new Date(NOW));
     expect([state.connections.google, state.googleAccounts, state.googleAllows]).toEqual([
       { connected: true, connectedAt: NOW + MINUTE, label: JEREMY_MAIL },
-      [{ email: JEREMY_MAIL, connectedAt: NOW + MINUTE, gmail: true, calendar: true }],
-      { gmail: true, calendar: true },
+      [{ email: JEREMY_MAIL, connectedAt: NOW + MINUTE, gmail: true, send: false, calendar: true, addEvents: false }],
+      { gmail: true, send: false, calendar: true, addEvents: false },
     ]);
   });
 
@@ -333,7 +345,7 @@ describe("connecting Google", () => {
     });
     const one = pending(NOW);
     expect(await finishGoogleLogin(db, OWNER_ID, new URLSearchParams({ state: one.state, code: "c" }), one.cookie, onlyCalendar.fetchImpl, NOW)).toEqual({ email: JEREMY_MAIL, scopes: [CALENDAR_SCOPE] });
-    expect((await loadState(db, OWNER_ID, new Date(NOW))).googleAllows).toEqual({ gmail: false, calendar: true });
+    expect((await loadState(db, OWNER_ID, new Date(NOW))).googleAllows).toEqual({ gmail: false, send: false, calendar: true, addEvents: false });
     // Gmail's check says why it does not run, without asking Google anything.
     const run = await runJob(db, "gmail-pull", OWNER_ID, NOW);
     expect([run.ok, run.message]).toEqual([false, "Gmail was not allowed for any connected Google account. Connect the account again and tick Gmail."]);
@@ -499,10 +511,11 @@ describe("Gmail check", () => {
     expect((await gmailRows()).find((c) => c.id.endsWith(":t1"))).toMatchObject({ done: false, text: "One more thing" });
   });
 
-  it("is read-only: a reply to an email is refused, and the thread opens in Gmail instead", async () => {
+  it("answers an email by email, never through Slack, whichever reply box is used", async () => {
+    await connected();
     await gmailPull(ctx(), [account()], opener(mailbox()));
-    await expect(applyAction(db, "sendReply", [`gmail:${JEREMY_MAIL}:t1`, "Thanks", false, null], OWNER_ID, new Date(NOW))).rejects.toThrow("Open it in Gmail to answer");
-    expect(await db.query("select id from outbox")).toEqual([]);
+    await applyAction(db, "sendReply", [`gmail:${JEREMY_MAIL}:t1`, "Thanks", false, null], OWNER_ID, new Date(NOW));
+    expect(await db.query("select source, target from outbox")).toEqual([{ source: "gmail", target: `${JEREMY_MAIL}:t1` }]);
   });
 });
 
@@ -635,5 +648,157 @@ describe("disconnecting Google", () => {
     await forgetGoogle(db, OWNER_ID, JEREMY_MAIL, true, google.fetchImpl);
     expect((await db.query<{ id: string }>("select id from conversations where source = 'gmail'")).map((r) => r.id)).toEqual([`gmail:${OPS_MAIL}:t1`]);
     expect(await db.query("select id from messages where conversation_id like 'gmail:jeremy%'")).toEqual([]);
+  });
+});
+
+// ---------- Sending email ----------
+
+/** The written-out email, read back: its headers and its text. */
+function readRaw(raw: string) {
+  const text = Buffer.from(raw, "base64url").toString("utf8");
+  const [head, body] = text.split("\r\n\r\n");
+  const headers = Object.fromEntries(head.split("\r\n").map((l) => [l.slice(0, l.indexOf(":")), l.slice(l.indexOf(":") + 2)]));
+  return { headers, lines: head.split("\r\n"), body: Buffer.from(body.replace(/\r\n/g, ""), "base64").toString("utf8") };
+}
+
+describe("writing an email out", () => {
+  it("writes plain text in UTF-8, with names quoted and other letters encoded, and no From for Gmail to fill in", () => {
+    const out = readRaw(rawEmail({ to: [{ name: "Whitfield, Dana", email: "dana@example.com" }], cc: [{ name: "sam@example.com", email: "sam@example.com" }], subject: "Re: Café plans ☕", body: "Yes, 3pm.\nSee you." }));
+    expect(out.headers).toMatchObject({ To: '"Whitfield, Dana" <dana@example.com>', Cc: "sam@example.com", Subject: `=?UTF-8?B?${Buffer.from("Re: Café plans ☕").toString("base64")}?=`, "Content-Type": 'text/plain; charset="UTF-8"' });
+    expect(out.headers.From).toBeUndefined();
+    expect(out.body).toBe("Yes, 3pm.\r\nSee you.");
+  });
+
+  it("keeps what was typed on one line, so it can never add a header of its own", () => {
+    const out = readRaw(rawEmail({ to: [{ name: "Dana\r\nBcc: someone@example.com", email: "dana@example.com" }], cc: [], subject: "Hello\r\nBcc: someone@example.com", body: "Hi" }));
+    expect(out.lines.filter((l) => l.startsWith("Bcc"))).toEqual([]);
+    expect(out.headers.Subject).toBe("Hello Bcc: someone@example.com");
+  });
+});
+
+describe("answering and writing email", () => {
+  /** Two emails read into the inbox, from an account that may send. */
+  async function inboxWithEmail() {
+    await connected();
+    const google = fakeGoogle();
+    google.deliver(mail("m1", "t1", { from: DANA, subject: "Thursday", text: "Can we move it to 3pm?", at: NOW - 30 * MINUTE }));
+    google.deliver(mail("n1", "t2", { from: "Sam Ortiz <sam@example.com>", to: "Team <team@example.com>, Jeremy Moser <jeremy@example.com>", cc: "Ines Marsh <ines@example.com>", subject: "Q4 numbers", text: "See attached.", at: NOW - 20 * MINUTE }));
+    await gmailPull(ctx(), [account()], opener(google));
+    return google;
+  }
+  const waiting = () => db.query<{ source: string; target: string; to_name: string; body: string; details: Record<string, unknown> }>("select source, target, to_name, body, details from outbox order by created_at");
+
+  it("answers whoever wrote last, in the same thread, with Re: and the headers that keep it there", async () => {
+    await inboxWithEmail();
+    await applyAction(db, "replyEmail", [`gmail:${JEREMY_MAIL}:t1`, "Yes, 3pm works.", false, false], OWNER_ID, new Date(NOW));
+    expect(await waiting()).toEqual([{
+      source: "gmail", target: `${JEREMY_MAIL}:t1`, to_name: "Dana Whitfield", body: "Yes, 3pm works.",
+      details: { account: JEREMY_MAIL, threadId: "t1", to: [{ name: "Dana Whitfield", email: "dana@example.com" }], cc: [], subject: "Re: Thursday", inReplyTo: "<m1@mail.example.com>", references: "<m1@mail.example.com>" },
+    }]);
+    const row = (await loadState(db, OWNER_ID, new Date(NOW))).inbox.find((c) => c.id === `gmail:${JEREMY_MAIL}:t1`)!;
+    expect([row.replied, row.thread.at(-1)]).toMatchObject([true, { me: true, text: "Yes, 3pm works.", status: "queued" }]);
+  });
+
+  it("with Reply all, also copies everyone else the email was to, but not the owner's own account", async () => {
+    await inboxWithEmail();
+    await applyAction(db, "replyEmail", [`gmail:${JEREMY_MAIL}:t2`, "Thanks Sam", true, true], OWNER_ID, new Date(NOW));
+    const [out] = await waiting();
+    expect([out.to_name, out.details.to, out.details.cc]).toEqual(["Sam Ortiz and 2 more", [{ name: "Sam Ortiz", email: "sam@example.com" }], [{ name: "Team", email: "team@example.com" }, { name: "Ines Marsh", email: "ines@example.com" }]]);
+  });
+
+  it("goes out from the account into its thread once sending is on, and is not brought in a second time", async () => {
+    const google = await inboxWithEmail();
+    await applyAction(db, "replyEmail", [`gmail:${JEREMY_MAIL}:t1`, "Yes, 3pm works.", false, false], OWNER_ID, new Date(NOW));
+    expect(await outboxSend(ctx(), null, null, opener(google))).toMatchObject({ items: 0, message: "1 waiting. Sending is switched off." });
+    expect(google.sent).toEqual([]);
+
+    process.env.SENDING_ENABLED = "true";
+    expect(await outboxSend(ctx(), null, null, opener(google))).toMatchObject({ items: 1, message: "Sent 1 of 1" });
+    expect(google.sent.map((s) => s.threadId)).toEqual(["t1"]);
+    expect(readRaw(google.sent[0].raw)).toMatchObject({ headers: { To: '"Dana Whitfield" <dana@example.com>', Subject: "Re: Thursday", "In-Reply-To": "<m1@mail.example.com>" }, body: "Yes, 3pm works." });
+
+    // Gmail now has the reply in the thread, under the id it gave it.
+    google.deliver(mail("sent1", "t1", { from: JEREMY, subject: "Re: Thursday", text: "Yes, 3pm works.", at: NOW + MINUTE, labels: ["SENT", "INBOX"] }));
+    await gmailPull(ctx((await db.query<{ cursor: Record<string, unknown> }>("select cursor from jobs where job_id = 'gmail-pull'"))[0].cursor, NOW + 5 * MINUTE), [account()], opener(google));
+    const thread = (await loadState(db, OWNER_ID, new Date(NOW))).inbox.find((c) => c.id === `gmail:${JEREMY_MAIL}:t1`)!.thread;
+    expect(thread.map((m) => [m.me, m.text, m.status ?? null])).toEqual([[false, "Can we move it to 3pm?", null], [true, "Yes, 3pm works.", "sent"]]);
+  });
+
+  it("writes a new email from a chosen account, and checks every address first", async () => {
+    await connected();
+    await expect(applyAction(db, "composeEmail", [JEREMY_MAIL, "dana@example.com, not-an-address", "", "Hi", "Hello"], OWNER_ID, new Date(NOW))).rejects.toThrow('"not-an-address" is not an email address.');
+    await expect(applyAction(db, "composeEmail", [JEREMY_MAIL, "", "", "Hi", "Hello"], OWNER_ID, new Date(NOW))).rejects.toThrow("Who is it to?");
+    await applyAction(db, "composeEmail", [JEREMY_MAIL, "Dana Whitfield <dana@example.com>; sam@example.com", "ines@example.com", "Q4 plan", "Draft attached soon."], OWNER_ID, new Date(NOW));
+    const [out] = await waiting();
+    expect(out).toMatchObject({ source: "gmail", target: JEREMY_MAIL, to_name: "Dana Whitfield and 2 more", details: { account: JEREMY_MAIL, subject: "Q4 plan", cc: [{ email: "ines@example.com" }] } });
+
+    process.env.SENDING_ENABLED = "true";
+    const google = fakeGoogle();
+    await outboxSend(ctx(), null, null, opener(google));
+    expect(google.sent.map((s) => [s.threadId, readRaw(s.raw).headers.To, readRaw(s.raw).headers.Cc])).toEqual([[undefined, '"Dana Whitfield" <dana@example.com>, sam@example.com', "ines@example.com"]]);
+  });
+
+  it("will not send from an account that did not allow sending", async () => {
+    await connected(JEREMY_MAIL, [GMAIL_SCOPE, CALENDAR_SCOPE]);
+    await expect(applyAction(db, "composeEmail", [JEREMY_MAIL, "dana@example.com", "", "Hi", "Hello"], OWNER_ID, new Date(NOW))).rejects.toThrow("Sending was not allowed for jeremy@example.com");
+    await expect(applyAction(db, "composeEmail", [OPS_MAIL, "dana@example.com", "", "Hi", "Hello"], OWNER_ID, new Date(NOW))).rejects.toThrow("ops@example.com is not connected");
+  });
+
+  it("sends through Gmail's API, into the thread", async () => {
+    await connected();
+    const google = googleSays({
+      [TOKEN]: () => [200, { access_token: "a" }],
+      "https://gmail.googleapis.com/gmail/v1/users/me/messages/send": (_b, _u, headers) => [headers.get("content-type") === "application/json" ? 200 : 400, { id: "g1", threadId: "t1" }],
+    });
+    const api = await googleApi(db, OWNER_ID, JEREMY_MAIL, google.fetchImpl);
+    expect(await api.send("cmF3", "t1")).toEqual({ id: "g1", threadId: "t1" });
+    expect([google.calls[1].headers.get("authorization"), JSON.parse(google.calls[1].text)]).toEqual(["Bearer a", { raw: "cmF3", threadId: "t1" }]);
+  });
+});
+
+// ---------- Adding events ----------
+
+describe("adding a calendar event", () => {
+  const form = (more: Record<string, unknown> = {}) => ({ account: JEREMY_MAIL, title: "Podcast prep", start: NOW + 2 * HOUR, end: NOW + 2 * HOUR + 30 * MINUTE, timeZone: "America/New_York", guests: "dana@example.com, Jeremy@Example.com, dana@example.com", meet: true, description: "Talking points", ...more });
+
+  it("adds it to the chosen calendar with its guests and a Meet link, and shows it straight away", async () => {
+    await connected();
+    process.env.SENDING_ENABLED = "true";
+    const google = fakeGoogle();
+    expect(await addCalendarEvent(db, OWNER_ID, form(), opener(google), NOW)).toEqual({ title: "Podcast prep", link: "https://meet.google.com/new-meet-abc" });
+    // The owner is not invited to their own event, and nobody twice.
+    expect(google.added).toEqual([{ title: "Podcast prep", start: NOW + 2 * HOUR, end: NOW + 2 * HOUR + 30 * MINUTE, timeZone: "America/New_York", guests: ["dana@example.com"], meet: true, description: "Talking points" }]);
+    expect((await loadState(db, OWNER_ID, new Date(NOW))).calendar).toMatchObject([{ title: "Podcast prep", where: "Google Meet", link: "https://meet.google.com/new-meet-abc", accounts: [JEREMY_MAIL] }]);
+  });
+
+  it("says what is wrong before anything reaches Google", async () => {
+    await connected();
+    process.env.SENDING_ENABLED = "true";
+    const google = fakeGoogle();
+    await expect(addCalendarEvent(db, OWNER_ID, form({ title: "  " }), opener(google))).rejects.toThrow("Give the event a title.");
+    await expect(addCalendarEvent(db, OWNER_ID, form({ end: NOW }), opener(google))).rejects.toThrow("The event has to end after it starts.");
+    await expect(addCalendarEvent(db, OWNER_ID, form({ guests: "dana@example" }), opener(google))).rejects.toThrow('"dana@example" is not an email address.');
+    expect(google.added).toEqual([]);
+  });
+
+  it("needs sending switched on, and an account that allowed adding events", async () => {
+    await connected(JEREMY_MAIL, [GMAIL_SCOPE, CALENDAR_SCOPE]);
+    const google = fakeGoogle();
+    await expect(addCalendarEvent(db, OWNER_ID, form(), opener(google))).rejects.toThrow("Sending is switched off");
+    process.env.SENDING_ENABLED = "true";
+    await expect(addCalendarEvent(db, OWNER_ID, form(), opener(google))).rejects.toThrow("Adding events was not allowed for jeremy@example.com");
+    expect(google.added).toEqual([]);
+  });
+
+  it("asks Google for a Meet link and to send the invitations", async () => {
+    await connected();
+    const google = googleSays({
+      [TOKEN]: () => [200, { access_token: "a" }],
+      [EVENTS]: (_b, url) => [url.searchParams.get("conferenceDataVersion") === "1" && url.searchParams.get("sendUpdates") === "all" ? 200 : 400, { id: "e9", summary: "Call" }],
+    });
+    const api = await googleApi(db, OWNER_ID, JEREMY_MAIL, google.fetchImpl);
+    expect(await api.addEvent({ title: "Call", start: NOW, end: NOW + HOUR, timeZone: "UTC", guests: ["dana@example.com"], meet: true })).toMatchObject({ id: "e9" });
+    const sent = JSON.parse(google.calls[1].text);
+    expect([sent.summary, sent.attendees, sent.start, sent.conferenceData.createRequest.conferenceSolutionKey]).toEqual(["Call", [{ email: "dana@example.com" }], { dateTime: new Date(NOW).toISOString(), timeZone: "UTC" }, { type: "hangoutsMeet" }]);
   });
 });

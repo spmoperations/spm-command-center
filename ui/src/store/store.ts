@@ -242,6 +242,35 @@ export const setConversationMode = (id: string, mode: Mode) => void act("setConv
  * Adds the reply to the conversation. It goes out from the owner's own account, if sending is
  * on. `thread` puts it in that Slack thread; without it, it is a new message in the chat.
  */
+/** Answers an email row by email, to whoever wrote last, or with `replyAll` to everyone on it. */
+export function replyEmail(id: string, text: string, markDone: boolean, replyAll: boolean) {
+  if (markDone) setUi({ openConversation: null });
+  void act("replyEmail", [id, text, markDone, replyAll], app?.state.sendingEnabled ? "Email sent" : "Email saved. Sending is switched off, so it waits in the outbox.");
+}
+
+/** A new email from one of the connected Google accounts. Resolves to an error message, or null once it is on its way. */
+export async function composeEmail(account: string, to: string, cc: string, subject: string, body: string): Promise<string | null> {
+  try {
+    setState(await request<AppState>("/api/action", { type: "composeEmail", args: [account, to, cc, subject, body] }));
+    toast(app?.state.sendingEnabled ? "Email sent" : "Email saved. Sending is switched off, so it waits in the outbox.");
+    return null;
+  } catch (error) {
+    return (error as Error).message;
+  }
+}
+
+/** New event on the Calendar tab. Resolves to an error message, or null once it is on the calendar. */
+export async function addCalendarEvent(form: { account: string; title: string; start: number; end: number; timeZone: string; guests: string; meet: boolean; description: string }): Promise<string | null> {
+  try {
+    const { state, title } = await request<{ state: AppState; title: string }>("/api/google/event", form);
+    setState(state);
+    toast(`Added to your calendar: ${title}${form.guests.trim() ? ". Guests get an invitation from Google." : ""}`);
+    return null;
+  } catch (error) {
+    return (error as Error).message;
+  }
+}
+
 export function sendReply(id: string, text: string, markDone: boolean, thread: string | null = null) {
   if (markDone) setUi({ openConversation: null });
   void act("sendReply", [id, text, markDone, thread], app?.state.sendingEnabled ? "Reply sent" : "Reply saved. Sending is switched off, so it waits in the outbox.");

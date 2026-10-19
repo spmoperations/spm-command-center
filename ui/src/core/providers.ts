@@ -13,7 +13,7 @@ export const PROVIDER_ABOUT: Record<Provider, string> = {
   slack: "Reads your messages and sends your replies from your own account.",
   telegram: "Reads your one-to-one chats and the group messages addressed to you, and sends your replies from your own account.",
   fathom: "Brings in your recorded calls with notes, transcript and action items.",
-  google: "Brings in your emails and the meetings coming up on your calendar. It only reads: nothing is sent or changed.",
+  google: "Brings in your emails and your calendar. You can answer and write emails, and add events, from here. Nothing is sent or added unless you do it.",
 };
 
 /**

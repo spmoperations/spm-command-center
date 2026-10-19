@@ -1,5 +1,6 @@
 // Reading an email as Gmail hands it over: who wrote it, to whom, the subject, and the text
-// of the message without the quoted history underneath. Plain logic, no network.
+// of the message without the quoted history underneath. And writing one out to send. Plain
+// logic, no network.
 
 /** One part of a message, as the Gmail API returns it with format=full. Parts nest. */
 export interface GmailPart {
@@ -49,6 +50,9 @@ export interface Email {
   bulk: boolean;
   /** The Gmail tab it landed in. "primary" when Gmail sorted it there, or does not sort into tabs. */
   tab: "primary" | "promotions" | "social" | "updates" | "forums";
+  /** Its Message-ID and References headers, which a reply carries to stay in the same thread. */
+  messageId: string;
+  references: string;
 }
 
 const TABS: [string, Email["tab"]][] = [["CATEGORY_PROMOTIONS", "promotions"], ["CATEGORY_SOCIAL", "social"], ["CATEGORY_UPDATES", "updates"], ["CATEGORY_FORUMS", "forums"]];
@@ -204,5 +208,56 @@ export function readEmail(message: GmailMessage, ownerEmail: string): Email {
     unread: labels.includes("UNREAD"),
     bulk: isBulk(p, from),
     tab: TABS.find(([label]) => labels.includes(label))?.[1] ?? "primary",
+    messageId: header(p, "Message-ID").trim(),
+    references: header(p, "References").trim(),
   };
+}
+
+// ---------- Writing one ----------
+
+/** An address someone typed, such as "dana@example.com". */
+export const isEmailAddress = (v: string) => /^[^\s@<>(),;:"]+@[^\s@<>(),;:"]+\.[^\s@<>(),;:"]+$/.test(v.trim());
+
+/** An email to send, before it is written out. */
+export interface Outgoing {
+  to: Address[];
+  cc: Address[];
+  subject: string;
+  body: string;
+  /** For a reply: the Message-ID of the email answered, and the thread's References. */
+  inReplyTo?: string;
+  references?: string;
+}
+
+/** A header value on one line: nothing typed can start a header of its own. */
+const oneLine = (v: string) => v.replace(/[\r\n]+/g, " ").trim();
+const plain = (v: string) => /^[\x20-\x7e]*$/.test(v);
+/** Text with letters outside plain ASCII, written the way mail headers allow (RFC 2047). */
+const headerText = (v: string) => (plain(v) ? v : `=?UTF-8?B?${Buffer.from(v, "utf8").toString("base64")}?=`);
+
+function formatAddress(a: Address): string {
+  const email = oneLine(a.email);
+  const name = oneLine(a.name ?? "");
+  if (!name || name.toLowerCase() === email.toLowerCase()) return email;
+  return `${plain(name) ? `"${name.replace(/["\\]/g, "\\$&")}"` : headerText(name)} <${email}>`;
+}
+
+/**
+ * The email written out as Gmail's API takes it: the whole message, base64url encoded. Plain
+ * text in UTF-8. There is no From: Gmail sends it from the account, under its own name.
+ */
+export function rawEmail(m: Outgoing): string {
+  const lines = [
+    `To: ${m.to.map(formatAddress).join(", ")}`,
+    ...(m.cc.length ? [`Cc: ${m.cc.map(formatAddress).join(", ")}`] : []),
+    `Subject: ${headerText(oneLine(m.subject))}`,
+    ...(m.inReplyTo ? [`In-Reply-To: ${oneLine(m.inReplyTo)}`] : []),
+    ...(m.references ? [`References: ${oneLine(m.references)}`] : []),
+    "MIME-Version: 1.0",
+    'Content-Type: text/plain; charset="UTF-8"',
+    "Content-Transfer-Encoding: base64",
+    "",
+    Buffer.from(m.body.replace(/\r?\n/g, "\r\n"), "utf8").toString("base64").replace(/.{76}/g, "$&\r\n"),
+  ];
+  return Buffer.from(lines.join("\r\n"), "utf8").toString("base64url");
 }

@@ -193,12 +193,14 @@ export interface CalendarItem {
   response?: string;
 }
 
-/** A connected Google account, and what it allowed. */
+/** A connected Google account, and what it allowed: reading Gmail, sending, reading the calendar, adding events. */
 export interface GoogleAccountInfo {
   email: string;
   connectedAt: number;
   gmail: boolean;
+  send: boolean;
   calendar: boolean;
+  addEvents: boolean;
 }
 
 export interface Person {
@@ -354,8 +356,8 @@ export interface AppState {
   googleBlocked: string | null;
   /** The connected Google accounts. */
   googleAccounts: GoogleAccountInfo[];
-  /** Whether any connected Google account allowed Gmail, and Calendar. */
-  googleAllows: { gmail: boolean; calendar: boolean };
+  /** Whether any connected Google account allowed each of these. */
+  googleAllows: { gmail: boolean; send: boolean; calendar: boolean; addEvents: boolean };
   /** True when the data is the copy on this machine and not the hosted database. */
   localData: boolean;
   /** False until the AI key is set and has credit to run. */

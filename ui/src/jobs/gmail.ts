@@ -1,6 +1,6 @@
 // The Gmail check. Brings every new email in each connected account's inbox into the
-// dashboard's inbox, from the moment the account was connected. Reading only: nothing is
-// sent, archived or marked as read.
+// dashboard's inbox, from the moment the account was connected. It only reads: nothing is
+// archived or marked as read. Sending is the outbox's (see outbox.ts).
 //
 // One inbox row per email thread. Each account is read from where its mailbox stood last time
 // (Gmail's history of what arrived), so nothing is missed however much comes in between two
@@ -11,7 +11,7 @@
 // put them low.
 import type { Email } from "@/server/gmail";
 import { readEmail } from "@/server/gmail";
-import { GMAIL_SCOPE, GoogleSaid, HistoryGone, type GoogleAccount, type GoogleApi } from "@/server/google";
+import { googleCan, GoogleSaid, HistoryGone, type GoogleAccount, type GoogleApi } from "@/server/google";
 import { RateLimited } from "@/server/slack";
 import type { JobContext, JobResult } from "./runner";
 import { refreshConversation } from "./slack";
@@ -77,7 +77,7 @@ export async function gmailPull({ db, ownerId, now, cursor }: JobContext, accoun
   let waiting = 0;
   const signedOut: string[] = [];
 
-  for (const account of accounts.filter((a) => a.scopes.includes(GMAIL_SCOPE))) {
+  for (const account of accounts.filter((a) => googleCan(a.scopes).gmail)) {
     const before = kept[account.email] ?? {};
     let google: GoogleApi;
     try {
@@ -124,10 +124,15 @@ export async function gmailPull({ db, ownerId, now, cursor }: JobContext, accoun
         [conversationId, ownerId, `${me}:${thread.id}`, latest.from.name, subjectOf(emails), direct],
       );
       for (const e of emails) {
+        // Who it was to, and the headers a reply needs to stay in this thread for everyone.
+        const details = { to: e.to, cc: e.cc, messageId: e.messageId, references: e.references };
+        // A reply sent from the dashboard is here already, under the id Gmail gave it.
         stored += await db.run(
-          `insert into messages (id, conversation_id, owner_id, external_id, sender_name, sender_id, me, body, at, scanned)
-           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) on conflict (id) do nothing`,
-          [`${conversationId}:${e.id}`, conversationId, ownerId, e.id, e.me ? ownerName : e.from.name, e.me ? null : e.from.email, e.me, e.text, e.at, e.me],
+          `insert into messages (id, conversation_id, owner_id, external_id, sender_name, sender_id, me, body, at, scanned, email)
+           select $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb
+           where not exists (select 1 from messages where conversation_id = $2 and external_id = $4)
+           on conflict (id) do nothing`,
+          [`${conversationId}:${e.id}`, conversationId, ownerId, e.id, e.me ? ownerName : e.from.name, e.me ? null : e.from.email, e.me, e.text, e.at, e.me, JSON.stringify(details)],
         );
       }
       touched++;

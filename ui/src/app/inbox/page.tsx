@@ -13,7 +13,7 @@ import { groupByThread, threadToAnswer } from "@/core/threads";
 import { canAssignInChat } from "@/core/delegation";
 import type { Conversation, Line, Mode, Priority, Source, ThreadMessage } from "@/core/types";
 import {
-  conversationToTask, delegateConversation, markConversationDone, openConversation, readThreads, restoreConversation, sendReply,
+  composeEmail, conversationToTask, delegateConversation, markConversationDone, openConversation, readThreads, replyEmail, restoreConversation, sendReply,
   setConversationMode, setConversationPriority, toast, useApp, type App,
 } from "@/store/store";
 
@@ -123,7 +123,7 @@ function Thread({ c, app, draft, onDraft }: { c: Conversation; app: App; draft: 
         ))}
       </div>
       {c.source === "gmail" ? (
-        <EmailNote c={c} />
+        <EmailReply c={c} app={app} draft={draft} onDraft={onDraft} />
       ) : (
         <div className="composer">
           <label className="label" htmlFor={`reply-${c.id}`}>
@@ -190,18 +190,143 @@ export const gmailLink = (c: Conversation) => {
   return `https://mail.google.com/mail/u/${encodeURIComponent(account || "0")}/#all/${encodeURIComponent(thread)}`;
 };
 
-/** In place of the reply box on an email: Google is connected for reading only, for now. */
-function EmailNote({ c }: { c: Conversation }) {
+/**
+ * The reply box on an email. The answer goes from the account the email came to, into the same
+ * thread, to whoever wrote last; "Reply all" adds everyone else that email was to or copied to.
+ */
+function EmailReply({ c, app, draft, onDraft }: { c: Conversation; app: App; draft: string; onDraft(text: string): void }) {
+  const [all, setAll] = useState(false);
+  const field = useRef<HTMLTextAreaElement>(null);
+  const { account } = gmailOf(c);
+  const canSend = app.state.googleAccounts.find((a) => a.email === account)?.send ?? false;
+  const lastFrom = [...c.thread].reverse().find((m) => !m.me)?.from ?? c.from;
+  if (!canSend) {
+    return (
+      <div className="composer">
+        <div className="composer-row">
+          <span className="hint">
+            To answer from here, <a href="/api/google/start">connect {account} again</a> and allow sending. Or reply in Gmail.
+          </span>
+          <div className="btns">
+            <a className="btn" href={gmailLink(c)} target="_blank" rel="noopener noreferrer">
+              Open in Gmail ↗
+            </a>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  const send = (markDone: boolean) => {
+    const text = draft.trim();
+    if (!text) {
+      toast("Write a reply first");
+      return field.current?.focus();
+    }
+    replyEmail(c.id, text, markDone, all);
+    onDraft("");
+  };
   return (
     <div className="composer">
+      <label className="label" htmlFor={`reply-${c.id}`}>
+        Reply by email from {account}
+      </label>
+      <div className="reply-to">
+        <span>
+          To {lastFrom}
+          {all ? " and everyone else on the email" : ""}, in this thread
+        </span>
+        <label className="inline-check">
+          <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} /> Reply all
+        </label>
+      </div>
+      <textarea
+        id={`reply-${c.id}`}
+        ref={field}
+        value={draft}
+        placeholder="Write your reply…"
+        onChange={(e) => onDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            send(false);
+          }
+        }}
+      />
       <div className="composer-row">
-        <span className="hint">Answering emails from here comes later. For now, reply in Gmail.</span>
-        <div className="btns">
-          <a className="btn" href={gmailLink(c)} target="_blank" rel="noopener noreferrer">
+        <span className="hint">
+          {app.state.sendingEnabled ? "⌘ + Enter to send. It goes out from your Gmail, as a normal reply." : "⌘ + Enter to save. Sending is switched off, so it waits in the outbox."}{" "}
+          <a href={gmailLink(c)} target="_blank" rel="noopener noreferrer">
             Open in Gmail ↗
           </a>
-          <button className="btn" onClick={() => markConversationDone(c.id)}>
-            Mark done
+        </span>
+        <div className="btns">
+          <button className="btn" onClick={() => send(true)}>
+            Send and mark done
+          </button>
+          <button className="btn primary" onClick={() => send(false)}>
+            Send
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** A new email from one of the connected accounts that may send. */
+function NewEmail({ app, onClose }: { app: App; onClose(): void }) {
+  const senders = app.state.googleAccounts.filter((a) => a.send);
+  const [from, setFrom] = useState(senders[0]?.email ?? "");
+  const [to, setTo] = useState("");
+  const [cc, setCc] = useState("");
+  const [subject, setSubject] = useState("");
+  const [body, setBody] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const go = async () => {
+    setBusy(true);
+    const failed = await composeEmail(from, to, cc, subject, body);
+    setBusy(false);
+    if (failed) setError(failed);
+    else onClose();
+  };
+  return (
+    <div className="panel new-email">
+      <div className="new-email-head">
+        <h3>New email</h3>
+        <button className="linkbtn" onClick={onClose} aria-label="Close">
+          ✕
+        </button>
+      </div>
+      <div className="new-email-grid">
+        <label htmlFor="ne-from">From</label>
+        <select id="ne-from" className="f" value={from} onChange={(e) => setFrom(e.target.value)}>
+          {senders.map((a) => (
+            <option key={a.email} value={a.email}>
+              {a.email}
+            </option>
+          ))}
+        </select>
+        <label htmlFor="ne-to">To</label>
+        <input id="ne-to" className="f" value={to} onChange={(e) => setTo(e.target.value)} placeholder="name@example.com, another@example.com" autoFocus />
+        <label htmlFor="ne-cc">Cc</label>
+        <input id="ne-cc" className="f" value={cc} onChange={(e) => setCc(e.target.value)} placeholder="Optional" />
+        <label htmlFor="ne-subject">Subject</label>
+        <input id="ne-subject" className="f" value={subject} onChange={(e) => setSubject(e.target.value)} />
+      </div>
+      <textarea className="f" rows={8} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Write your email…" aria-label="Message" />
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="composer-row">
+        <span className="hint">{app.state.sendingEnabled ? "It goes out from your Gmail straight away." : "Sending is switched off, so it waits in the outbox."}</span>
+        <div className="btns">
+          <button className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn primary" disabled={busy || !from} onClick={() => void go()}>
+            {busy ? "Sending…" : "Send"}
           </button>
         </div>
       </div>
@@ -323,6 +448,8 @@ export default function InboxPage() {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   /** Looking at what was cleared, to read a chat or put one back. */
   const [showCleared, setShowCleared] = useState(false);
+  /** The New email form is open. */
+  const [writing, setWriting] = useState(false);
   if (!app) return null;
   const { state, ui } = app;
   const mode = ui.mode;
@@ -357,6 +484,11 @@ export default function InboxPage() {
           </div>
         </div>
         <div className="brand-meta">
+          {state.googleAllows.send && (
+            <button className="btn" onClick={() => setWriting(!writing)} aria-expanded={writing}>
+              New email
+            </button>
+          )}
           {queued > 0 && (
             <span className="outbox-note" title={state.sendingEnabled ? "These will be sent on the next try" : "Saved, not sent: sending is switched off"}>
               {queued} {queued === 1 ? "reply" : "replies"} waiting to send
@@ -377,6 +509,7 @@ export default function InboxPage() {
           )}
         </div>
       </div>
+      {writing && <NewEmail app={app} onClose={() => setWriting(false)} />}
 
       {viewingCleared && (
         <div className="inbox-group">

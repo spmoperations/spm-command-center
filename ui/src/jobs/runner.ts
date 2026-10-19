@@ -6,7 +6,7 @@ import type { JobId, JobSetting } from "@/core/types";
 import { aiConfigured } from "@/server/ai";
 import { secretFor } from "@/server/connections";
 import type { Db } from "@/server/db";
-import { CALENDAR_SCOPE, GMAIL_SCOPE, googleAccounts, googleApi, googleAvailable, googleBlocked, googleConnected } from "@/server/google";
+import { googleAccounts, googleApi, googleAvailable, googleBlocked, googleCan, googleConnected } from "@/server/google";
 import { ageOutInbox, OWNER_ID, resortInbox, sendingEnabled } from "@/server/repo";
 import { RateLimited, slackClient } from "@/server/slack";
 import { telegramApi, telegramAvailable, telegramBlocked, telegramConnected } from "@/server/telegram";
@@ -74,7 +74,12 @@ async function execute(jobId: JobId, ctx: JobContext): Promise<JobResult> {
     case "outbox-retry": {
       const token = await secretFor(ctx.db, ctx.ownerId, "slack");
       // Telegram is opened only if something is waiting to go there.
-      return outboxSend(ctx, token ? slackClient(token) : null, (await telegramConnected(ctx.db, ctx.ownerId)) ? () => telegramApi(ctx.db, ctx.ownerId) : null);
+      return outboxSend(
+        ctx,
+        token ? slackClient(token) : null,
+        (await telegramConnected(ctx.db, ctx.ownerId)) ? () => telegramApi(ctx.db, ctx.ownerId) : null,
+        (await googleConnected(ctx.db, ctx.ownerId)) ? (email) => googleApi(ctx.db, ctx.ownerId, email) : null,
+      );
     }
     case "telegram-pull": {
       const blocked = telegramBlocked();
@@ -94,8 +99,8 @@ async function execute(jobId: JobId, ctx: JobContext): Promise<JobResult> {
       const accounts = await googleAccounts(ctx.db, ctx.ownerId);
       if (!accounts.length) throw new NotReady("Google is not connected");
       // The person may have allowed only one of the two on Google's page.
-      const [scope, name] = jobId === "gmail-pull" ? [GMAIL_SCOPE, "Gmail"] : [CALENDAR_SCOPE, "Calendar"];
-      if (!accounts.some((a) => a.scopes.includes(scope))) throw new NotReady(`${name} was not allowed for any connected Google account. Connect the account again and tick ${name}.`);
+      const [scope, name] = jobId === "gmail-pull" ? (["gmail", "Gmail"] as const) : (["calendar", "Calendar"] as const);
+      if (!accounts.some((a) => googleCan(a.scopes)[scope])) throw new NotReady(`${name} was not allowed for any connected Google account. Connect the account again and tick ${name}.`);
       const open = (email: string) => googleApi(ctx.db, ctx.ownerId, email);
       return jobId === "gmail-pull" ? gmailPull(ctx, accounts, open) : calendarPull(ctx, accounts, open);
     }

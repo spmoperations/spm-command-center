@@ -1,5 +1,6 @@
 // Google, through a person's own accounts: Gmail for the inbox and Calendar for the Calendar
-// and Meetings tabs. Read-only. More than one account can be connected.
+// and Meetings tabs. More than one account can be connected. It reads, and it can send an
+// email and add an event, both only when the person does so in the dashboard.
 //
 // Connecting is one button. The person is sent to Google's own page, picks an account and
 // allows it; Google sends them back here with a one-time code, which is swapped for a lasting
@@ -13,9 +14,25 @@ import type { GmailThread } from "./gmail";
 import { seal, unseal } from "./secrets";
 import { RateLimited, type Fetch } from "./slack";
 
+/** Read the mailbox. */
 export const GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
+/** Send email as the account. It cannot read, change or delete anything. */
+export const GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
+/** Read the calendar's events. What accounts connected before events could be added have. */
 export const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly";
-export const GOOGLE_SCOPES = [GMAIL_SCOPE, CALENDAR_SCOPE];
+/** Read and add events. */
+export const CALENDAR_EDIT_SCOPE = "https://www.googleapis.com/auth/calendar.events";
+/** What Connect Google asks for. */
+export const GOOGLE_SCOPES = [GMAIL_SCOPE, GMAIL_SEND_SCOPE, CALENDAR_EDIT_SCOPE];
+const KNOWN_SCOPES = [...GOOGLE_SCOPES, CALENDAR_SCOPE];
+
+/** What an account may do, by what it allowed on Google's page. */
+export const googleCan = (scopes: string[]) => ({
+  gmail: scopes.includes(GMAIL_SCOPE),
+  send: scopes.includes(GMAIL_SEND_SCOPE),
+  calendar: scopes.includes(CALENDAR_SCOPE) || scopes.includes(CALENDAR_EDIT_SCOPE),
+  addEvents: scopes.includes(CALENDAR_EDIT_SCOPE),
+});
 
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -191,10 +208,10 @@ export async function finishGoogleLogin(
   }
   if (typeof body.refresh_token !== "string") throw new GoogleSaid("Google did not hand over a lasting login. Click Connect Google again.");
   // The person may untick Gmail or Calendar on Google's page. What was allowed is kept, and shown.
-  const scopes = String(body.scope ?? "").split(" ").filter((s) => GOOGLE_SCOPES.includes(s));
+  const scopes = String(body.scope ?? "").split(" ").filter((s) => KNOWN_SCOPES.includes(s));
   if (!scopes.length) {
     await revoke(fetchImpl, body.refresh_token);
-    throw new GoogleSaid("Neither Gmail nor Calendar was allowed, so nothing was connected. Click Connect Google again and tick both.");
+    throw new GoogleSaid("Neither Gmail nor Calendar was allowed, so nothing was connected. Click Connect Google again and tick the boxes.");
   }
 
   const who = await whoIs(fetchImpl, body.access_token, scopes);
@@ -216,7 +233,7 @@ export async function finishGoogleLogin(
  */
 async function whoIs(fetchImpl: Fetch, access: string, scopes: string[]): Promise<{ email: string; history: string | null }> {
   try {
-    if (scopes.includes(GMAIL_SCOPE)) {
+    if (googleCan(scopes).gmail) {
       const profile = (await call(fetchImpl, access, `${GMAIL}/profile`)) as { emailAddress?: string; historyId?: string };
       return { email: String(profile.emailAddress ?? "").toLowerCase(), history: profile.historyId ? String(profile.historyId) : null };
     }
@@ -269,6 +286,19 @@ export interface MailboxChanges {
   next?: string;
 }
 
+/** An event to add, as the person filled it in. Times are epoch milliseconds. */
+export interface NewEvent {
+  title: string;
+  start: number;
+  end: number;
+  /** The person's timezone, such as "America/New_York", so the event is set in it. */
+  timeZone: string;
+  guests: string[];
+  /** Add a Google Meet link. */
+  meet: boolean;
+  description?: string;
+}
+
 /** The few things the checks do with one Google account. The tests swap in a fake. */
 export interface GoogleApi {
   email: string;
@@ -283,10 +313,19 @@ export interface GoogleApi {
   thread(id: string): Promise<GmailThread>;
   /** Events on the main calendar that overlap this window, in start order, repeating ones as single events. */
   events(from: number, to: number): Promise<{ timeZone: string; items: CalendarEvent[] }>;
+  /** Sends an email written out by `rawEmail`, into a thread when one is given. */
+  send(raw: string, threadId?: string): Promise<{ id: string; threadId: string }>;
+  /** Adds an event to the main calendar. Its guests get Google's own invitation. */
+  addEvent(event: NewEvent): Promise<CalendarEvent>;
 }
 
-async function call(fetchImpl: Fetch, access: string, url: string): Promise<unknown> {
-  const res = await fetchImpl(url, { headers: { authorization: `Bearer ${access}` } });
+async function call(fetchImpl: Fetch, access: string, url: string, post?: unknown): Promise<unknown> {
+  const res = await fetchImpl(
+    url,
+    post === undefined
+      ? { headers: { authorization: `Bearer ${access}` } }
+      : { method: "POST", headers: { authorization: `Bearer ${access}`, "content-type": "application/json" }, body: JSON.stringify(post) },
+  );
   const body = (await res.json().catch(() => ({}))) as { error?: { message?: string; errors?: { reason?: string }[] } };
   if (res.ok) return body;
   const reason = body.error?.errors?.[0]?.reason ?? "";
@@ -317,6 +356,7 @@ export async function googleApi(db: Db, ownerId: string, email: string, fetchImp
   }
   const access = body.access_token;
   const get = (url: string) => call(fetchImpl, access, url);
+  const post = (url: string, body: unknown) => call(fetchImpl, access, url, body);
   return {
     email: saved.email,
     scopes: saved.scopes,
@@ -355,6 +395,23 @@ export async function googleApi(db: Db, ownerId: string, email: string, fetchImp
         if (!page) break;
       }
       return { timeZone, items };
+    },
+    async send(raw, threadId) {
+      const sent = (await post(`${GMAIL}/messages/send`, { raw, ...(threadId ? { threadId } : {}) })) as { id?: string; threadId?: string };
+      return { id: String(sent.id ?? ""), threadId: String(sent.threadId ?? threadId ?? "") };
+    },
+    async addEvent(e) {
+      const at = (ms: number) => ({ dateTime: new Date(ms).toISOString(), timeZone: e.timeZone });
+      const body = {
+        summary: e.title,
+        ...(e.description ? { description: e.description } : {}),
+        start: at(e.start),
+        end: at(e.end),
+        attendees: e.guests.map((email) => ({ email })),
+        ...(e.meet ? { conferenceData: { createRequest: { requestId: crypto.randomUUID(), conferenceSolutionKey: { type: "hangoutsMeet" } } } } : {}),
+      };
+      // conferenceDataVersion lets Google make the Meet link; sendUpdates sends the guests their invitation.
+      return (await post(`${CALENDAR}/events?conferenceDataVersion=1&sendUpdates=all`, body)) as CalendarEvent;
     },
   };
 }

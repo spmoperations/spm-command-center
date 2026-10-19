@@ -272,7 +272,7 @@ function GoogleSteps() {
     <ol className="steps">
       <Step
         title="Connect your Google account"
-        help="Google opens its own page: pick your account and click Allow. The Command Center reads your inbox and your calendar. It cannot send, delete or change anything."
+        help="Google opens its own page: pick your account and click Allow, with every box ticked. The Command Center reads your inbox and your calendar, and sends an email or adds an event only when you do it here. It cannot delete anything."
       >
         <a className="btn primary extlink" href="/api/google/start">
           Connect Google
@@ -292,7 +292,7 @@ function GoogleConnected({ app, lastChecked }: { app: App; lastChecked: string }
   return (
     <>
       <div className="st-help">
-        {lastChecked} Emails come in from the moment an account is connected. Change how often in <Link href="/settings#timers">Settings, Timers</Link>.
+        {lastChecked} Emails come in from the moment an account is connected. Replies and new emails go out from the account, like Slack replies, and only while sending is on. Change how often in <Link href="/settings#timers">Settings, Timers</Link>.
       </div>
       <ul className="g-accounts">
         {accounts.map((a) => (
@@ -300,11 +300,12 @@ function GoogleConnected({ app, lastChecked }: { app: App; lastChecked: string }
             <div style={{ minWidth: 0 }}>
               <div style={{ fontWeight: 600, overflowWrap: "anywhere" }}>{a.email}</div>
               <div className="st-help">
-                Since {date(a.connectedAt)} · {a.gmail ? "Gmail" : "Gmail not allowed"} · {a.calendar ? "Calendar" : "Calendar not allowed"}
-                {!(a.gmail && a.calendar) && (
+                Since {date(a.connectedAt)} · {[a.gmail ? "reads Gmail" : null, a.send ? "sends email" : null, a.calendar ? "reads Calendar" : null, a.addEvents ? "adds events" : null].filter(Boolean).join(", ") || "nothing allowed"}
+                {!(a.gmail && a.send && a.calendar && a.addEvents) && (
                   <>
                     {" "}
-                    · <a href="/api/google/start">Connect it again</a> and tick both
+                    · <a href="/api/google/start">Connect it again</a> and tick every box to also{" "}
+                    {[!a.gmail && "read Gmail", !a.send && "send email", !a.calendar && "read Calendar", !a.addEvents && "add events"].filter(Boolean).join(", ")}
                   </>
                 )}
               </div>

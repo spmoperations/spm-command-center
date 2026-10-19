@@ -1,9 +1,11 @@
-// Sends what is waiting in the outbox through the owner's own Slack account.
+// Sends what is waiting in the outbox through the owner's own Slack, Telegram or Gmail account.
 //
-// Sending is OFF unless SENDING_ENABLED=true. While it is off, replies and delegation
-// messages stay queued and nothing leaves the dashboard. This is the only code that
-// writes to Slack.
-import { sendingEnabled } from "@/server/repo";
+// Sending is OFF unless SENDING_ENABLED=true. While it is off, replies, emails and delegation
+// messages stay queued and nothing leaves the dashboard. This is the only code that writes to
+// Slack, sends to Telegram or sends email.
+import { rawEmail } from "@/server/gmail";
+import type { GoogleApi } from "@/server/google";
+import { sendingEnabled, type EmailDetails } from "@/server/repo";
 import type { SlackClient } from "@/server/slack";
 import type { TelegramApi } from "@/server/telegram";
 import type { JobContext, JobResult } from "./runner";
@@ -11,19 +13,38 @@ import type { JobContext, JobResult } from "./runner";
 const BATCH = 20;
 const MAX_ATTEMPTS = 5;
 
-interface Queued { id: string; source: "slack" | "telegram"; target: string | null; to_name: string; ctx: string; body: string; message_id: string | null; thread_ts: string | null; attempts: number; after_id: string | null }
+interface Queued {
+  id: string;
+  source: "slack" | "telegram" | "gmail";
+  target: string | null;
+  to_name: string;
+  ctx: string;
+  body: string;
+  message_id: string | null;
+  thread_ts: string | null;
+  attempts: number;
+  after_id: string | null;
+  details: EmailDetails | null;
+}
 
 /**
- * `openTelegram` connects to Telegram with the saved login. It is called only when something
- * is waiting to go there, and is null where Telegram is not connected.
+ * `openTelegram` connects to Telegram with the saved login, and `openGoogle` to one Google
+ * account. Each is called only when something is waiting to go there, and is null where that
+ * service is not connected.
  */
-export async function outboxSend({ db, ownerId, now }: JobContext, slack: SlackClient | null, openTelegram: (() => Promise<TelegramApi>) | null = null): Promise<JobResult> {
-  const queued = await db.query<Queued>("select id, source, target, to_name, ctx, body, message_id, thread_ts, attempts, after_id from outbox where owner_id = $1 and status = 'queued' order by created_at limit $2", [ownerId, BATCH]);
+export async function outboxSend(
+  { db, ownerId, now }: JobContext,
+  slack: SlackClient | null,
+  openTelegram: (() => Promise<TelegramApi>) | null = null,
+  openGoogle: ((email: string) => Promise<GoogleApi>) | null = null,
+): Promise<JobResult> {
+  const queued = await db.query<Queued>("select id, source, target, to_name, ctx, body, message_id, thread_ts, attempts, after_id, details from outbox where owner_id = $1 and status = 'queued' order by created_at limit $2", [ownerId, BATCH]);
   if (!queued.length) return { items: 0, message: "Nothing waiting to send" };
   if (!sendingEnabled()) return { items: 0, message: `${queued.length} waiting. Sending is switched off.` };
-  if (!slack && !openTelegram) return { items: 0, message: `${queued.length} waiting. Slack is not connected.` };
+  if (!slack && !openTelegram && !openGoogle) return { items: 0, message: `${queued.length} waiting. Slack is not connected.` };
 
   let telegram: TelegramApi | null = null;
+  const google = new Map<string, GoogleApi>();
   let sent = 0;
   for (const item of queued) {
     try {
@@ -36,6 +57,19 @@ export async function outboxSend({ db, ownerId, now }: JobContext, slack: SlackC
           continue;
         }
         item.thread_ts = first?.thread_ts ?? item.thread_ts;
+      }
+      if (item.source === "gmail") {
+        const email = item.details;
+        if (!openGoogle) throw new Error("Google is not connected");
+        if (!email?.account || !email.to.length) throw new Error(`There is no address to send this email to ${item.to_name}`);
+        let account = google.get(email.account);
+        if (!account) google.set(email.account, (account = await openGoogle(email.account)));
+        const out = await account.send(rawEmail({ to: email.to, cc: email.cc, subject: email.subject, body: item.body, inReplyTo: email.inReplyTo, references: email.references }), email.threadId);
+        await db.run("update outbox set status = 'sent', sent_at = $1, attempts = attempts + 1, last_error = null where id = $2", [now, item.id]);
+        // Under the id Gmail gave it, so the Gmail check does not bring it in a second time.
+        if (item.message_id) await db.run("update messages set status = 'sent', external_id = $1 where id = $2", [out.id || null, item.message_id]);
+        sent++;
+        continue;
       }
       if (item.source === "telegram") {
         if (!openTelegram) throw new Error("Telegram is not connected");

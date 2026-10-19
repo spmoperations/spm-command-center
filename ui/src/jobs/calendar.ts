@@ -1,10 +1,14 @@
 // The Calendar check. Keeps a copy of the main Google Calendar of each connected account,
 // from the start of last week to three weeks ahead, for the Calendar tab and for the meetings
-// coming up on the Meetings tab. Reading only: nothing is changed in Google.
+// coming up on the Meetings tab. The check only reads. Adding an event is `addCalendarEvent`,
+// which runs when the person fills in New event on the Calendar tab.
 //
 // Left out: events the owner declined, cancelled ones, birthdays and working-location
 // markers. All-day events, focus time and out of office are kept, as Google Calendar shows them.
-import { CALENDAR_SCOPE, GoogleSaid, type CalendarEvent, type GoogleAccount, type GoogleApi } from "@/server/google";
+import type { Db } from "@/server/db";
+import { isEmailAddress } from "@/server/gmail";
+import { googleAvailable, googleCan, GoogleSaid, type CalendarEvent, type GoogleAccount, type GoogleApi, type NewEvent } from "@/server/google";
+import { sendingEnabled } from "@/server/repo";
 import { PLACES } from "./fathom";
 import type { JobContext, JobResult } from "./runner";
 
@@ -70,11 +74,70 @@ export function toRows(account: string, items: CalendarEvent[]) {
   });
 }
 
+/** What the New event form sends. */
+export interface EventForm {
+  account: string;
+  title: string;
+  start: number;
+  end: number;
+  timeZone: string;
+  guests: string;
+  meet: boolean;
+  description?: string;
+}
+
+const validZone = (zone: string) => {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: zone });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Adds an event to one connected account's main calendar, as the person filled it in, and to
+ * the copy the Calendar tab shows. Google sends the guests its own invitation, so this works
+ * only while sending is switched on, like replies.
+ */
+export async function addCalendarEvent(db: Db, ownerId: string, form: EventForm, open: (email: string) => Promise<GoogleApi>, now = Date.now()): Promise<{ title: string; link: string | null }> {
+  if (!sendingEnabled()) throw new GoogleSaid("Sending is switched off (SENDING_ENABLED), so nothing is added to Google Calendar and no invitation goes out.");
+  const [row] = googleAvailable() ? await db.query<{ scopes: string }>("select scopes from google_accounts where owner_id = $1 and email = $2", [ownerId, form.account]) : [];
+  if (!row) throw new GoogleSaid(`${form.account} is not connected. Connect it on the Connections tab.`);
+  if (!googleCan(row.scopes.split(",")).addEvents) throw new GoogleSaid(`Adding events was not allowed for ${form.account}. Connect it again on the Connections tab and allow it.`);
+
+  const title = String(form.title ?? "").trim();
+  if (!title) throw new GoogleSaid("Give the event a title.");
+  const start = Number(form.start);
+  const end = Number(form.end);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) throw new GoogleSaid("The event has to end after it starts.");
+  if (end - start > 14 * DAY) throw new GoogleSaid("An event can be at most two weeks long.");
+  const guests: string[] = [];
+  for (const part of String(form.guests ?? "").split(/[,;\s]+/).map((g) => g.trim().toLowerCase()).filter(Boolean)) {
+    if (!isEmailAddress(part)) throw new GoogleSaid(`"${part}" is not an email address.`);
+    if (part !== form.account.toLowerCase() && !guests.includes(part)) guests.push(part);
+  }
+  const event: NewEvent = { title, start, end, timeZone: validZone(form.timeZone) ? form.timeZone : "UTC", guests, meet: Boolean(form.meet), description: String(form.description ?? "").trim() || undefined };
+
+  const made = await (await open(form.account)).addEvent(event);
+  const rows = toRows(form.account, [made]);
+  if (rows.length) {
+    await db.run(
+      `insert into calendar_events (owner_id, account, id, title, start_at, end_at, all_day, kind, location, link, html_link, organizer, attendees, response, saved_at)
+       select $1, r.account, r.id, r.title, r.start_at, r.end_at, r.all_day, r.kind, r.place, r.link, r.html_link, r.organizer, coalesce(r.attendees, '[]'), r.response, $3
+       from jsonb_to_recordset($2::jsonb) as r(account text, id text, title text, start_at bigint, end_at bigint, all_day boolean, kind text, place text, link text, html_link text, organizer text, attendees jsonb, response text)
+       on conflict (owner_id, account, id) do update set title = excluded.title, start_at = excluded.start_at, end_at = excluded.end_at, location = excluded.location, link = excluded.link, html_link = excluded.html_link, attendees = excluded.attendees, saved_at = excluded.saved_at`,
+      [ownerId, JSON.stringify(rows), now],
+    );
+  }
+  return { title, link: joinLink(made) };
+}
+
 export async function calendarPull({ db, ownerId, now }: JobContext, accounts: GoogleAccount[], open: (email: string) => Promise<GoogleApi>): Promise<JobResult> {
   const rows: ReturnType<typeof toRows> = [];
   let found = 0;
   const signedOut: string[] = [];
-  const reading = accounts.filter((a) => a.scopes.includes(CALENDAR_SCOPE));
+  const reading = accounts.filter((a) => googleCan(a.scopes).calendar);
   for (const account of reading) {
     let google: GoogleApi;
     try {

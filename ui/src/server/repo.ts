@@ -8,10 +8,11 @@ import { clampInterval, defaultJobSettings, JOBS } from "@/core/jobs";
 import { requestSummary } from "@/core/requests";
 import { applyRules } from "@/core/rules";
 import type {
-  AppState, Conversation, FocusBoard, JobId, JobStatus, Meeting, MessagePicture, Metric, Mode, Person, Priority, Provider, Reaction, Rule, Suggestion, Task, CalendarItem,
+  AppState, Conversation, FocusBoard, JobId, JobStatus, Meeting, MessagePicture, Metric, Mode, Person, Priority, Provider, Reaction, Rule, Source, Suggestion, Task, CalendarItem,
 } from "@/core/types";
 import { aiConfigured } from "./ai";
-import { CALENDAR_SCOPE, disconnectGoogle, GMAIL_SCOPE, googleAccounts, googleAvailable, googleBlocked } from "./google";
+import { isEmailAddress, parseAddress, type Address } from "./gmail";
+import { disconnectGoogle, googleAccounts, googleAvailable, googleBlocked, googleCan } from "./google";
 import { telegramAvatarIds, type StoredPicture } from "./media";
 import { SLACK_FILES_SCOPE, type Fetch } from "./slack";
 import { telegramAvailable, telegramBlocked } from "./telegram";
@@ -290,7 +291,7 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     db.query<{ metric_id: string; day: string; value: number }>("select metric_id, day, value from metric_logs where owner_id = $1 and day like $2", [ownerId, `${month}-%`]),
     db.query<{ id: string; scope: "day" | "week"; period: string; body: string; done: boolean; mode: Mode }>("select * from focus_items where owner_id = $1 and period >= $2 order by position", [ownerId, addDays(now, -14)]),
     db.query<{ id: string; label: string; url: string; mode: Mode }>("select id, label, url, mode from quick_links where owner_id = $1 order by position", [ownerId]),
-    db.query<{ id: string; source: "slack" | "telegram"; to_name: string; ctx: string; body: string; created_at: number; status: "queued" | "sent" | "failed"; conversation_id: string | null; task_id: string | null; after_id: string | null }>(
+    db.query<{ id: string; source: Source; to_name: string; ctx: string; body: string; created_at: number; status: "queued" | "sent" | "failed"; conversation_id: string | null; task_id: string | null; after_id: string | null }>(
       "select * from outbox where owner_id = $1 order by created_at desc limit 100",
       [ownerId],
     ),
@@ -317,7 +318,7 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
   const focus: AppState["focus"] = { professional: board(), personal: board() };
   for (const f of focusRows) (focus[f.mode][f.scope][f.period] ??= []).push({ id: f.id, text: f.body, done: f.done });
   const slackScopes = connections.find((c) => c.provider === "slack")?.scopes;
-  const allows = (scope: string) => google.some((a) => a.scopes.includes(scope));
+  const allows = (what: keyof ReturnType<typeof googleCan>) => google.some((a) => googleCan(a.scopes)[what]);
   const connection = (p: Provider) => {
     const row = connections.find((c) => c.provider === p);
     return row ? { connected: true, connectedAt: Number(row.connected_at), label: row.label ?? undefined } : { connected: false };
@@ -366,8 +367,8 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     telegramBlocked: telegramBlocked(),
     googleAvailable: googleAvailable(),
     googleBlocked: googleBlocked(),
-    googleAccounts: google.map((a) => ({ email: a.email, connectedAt: a.connectedAt, gmail: a.scopes.includes(GMAIL_SCOPE), calendar: a.scopes.includes(CALENDAR_SCOPE) })),
-    googleAllows: { gmail: allows(GMAIL_SCOPE), calendar: allows(CALENDAR_SCOPE) },
+    googleAccounts: google.map((a) => ({ email: a.email, connectedAt: a.connectedAt, ...googleCan(a.scopes) })),
+    googleAllows: { gmail: allows("gmail"), send: allows("send"), calendar: allows("calendar"), addEvents: allows("addEvents") },
     localData: !process.env.DATABASE_URL,
     aiConfigured: aiConfigured(),
   };
@@ -541,6 +542,82 @@ async function replyTitle(c: ActionContext, lead: string, text: string) {
 }
 
 /** Reads a conversation and holds it for this change, so two clicks on the same button cannot both act on it. */
+/** What an email waiting in the outbox needs to go out: see `rawEmail` and outbox.ts. */
+export interface EmailDetails {
+  account: string;
+  threadId?: string;
+  to: Address[];
+  cc: Address[];
+  subject: string;
+  inReplyTo?: string;
+  references?: string;
+}
+
+/** An email row's account and Gmail thread: its external id is "<account>:<thread>". */
+function emailPlace(externalId: string): { account: string; threadId: string } {
+  const cut = externalId.lastIndexOf(":");
+  return { account: externalId.slice(0, cut), threadId: externalId.slice(cut + 1) };
+}
+
+/** Sending needs the account connected here, and allowed to send on Google's page. */
+async function mustSendFrom(c: ActionContext, account: string): Promise<void> {
+  const [row] = googleAvailable() ? await c.db.query<{ scopes: string }>("select scopes from google_accounts where owner_id = $1 and email = $2", [c.ownerId, account]) : [];
+  if (!row) throw new Error(`${account} is not connected. Connect it on the Connections tab.`);
+  if (!googleCan(row.scopes.split(",")).send) throw new Error(`Sending was not allowed for ${account}. Connect it again on the Connections tab and allow sending.`);
+}
+
+/** Addresses typed in a box, split on commas, semicolons and new lines. Each one must be an address. */
+function typedAddresses(typed: string): Address[] {
+  return typed
+    .split(/[,;\n]+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const address = parseAddress(part);
+      if (!isEmailAddress(address.email)) throw new Error(`"${part}" is not an email address.`);
+      return address;
+    });
+}
+
+const reSubject = (subject: string) => (/^re\s*:/i.test(subject) ? subject : `Re: ${subject}`);
+
+/**
+ * Puts the answer to an email in the outbox. It goes to whoever wrote last, and with `replyAll`
+ * also to everyone else that email was to or copied to, except the owner's own account. It
+ * carries the headers that keep it in the same thread in everyone's mail.
+ */
+async function replyByEmail(c: ActionContext, conv: ConversationRow & { external_id: string }, text: string, markDone: boolean, replyAll: boolean): Promise<void> {
+  const { account, threadId } = emailPlace(conv.external_id);
+  await mustSendFrom(c, account);
+  if (!text.trim()) throw new Error("Write a reply first.");
+  const [last] = await c.db.query<{ sender_name: string; sender_id: string | null; email: { to?: Address[]; cc?: Address[]; messageId?: string; references?: string } | null }>(
+    "select sender_name, sender_id, email from messages where conversation_id = $1 and not me and sender_id is not null order by at desc limit 1",
+    [conv.id],
+  );
+  if (!last?.sender_id) throw new Error("There is no email from someone else here to answer.");
+  const to: Address[] = [{ name: last.sender_name, email: last.sender_id }];
+  const cc: Address[] = [];
+  const taken = new Set([account.toLowerCase(), last.sender_id.toLowerCase()]);
+  for (const a of replyAll ? [...(last.email?.to ?? []), ...(last.email?.cc ?? [])] : []) {
+    if (taken.has(a.email.toLowerCase())) continue;
+    taken.add(a.email.toLowerCase());
+    cc.push(a);
+  }
+  const messageId = last.email?.messageId || undefined;
+  const details: EmailDetails = { account, threadId, to, cc, subject: reSubject(conv.ctx), inReplyTo: messageId, references: [last.email?.references, messageId].filter(Boolean).join(" ") || undefined };
+  const [owner] = await c.db.query<{ name: string }>("select name from users where id = $1", [c.ownerId]);
+  const messageRow = uid("m");
+  await c.db.run(
+    "insert into messages (id, conversation_id, owner_id, sender_name, me, body, at, status, scanned, asked, email) values ($1, $2, $3, $4, true, $5, $6, 'queued', true, true, $7::jsonb)",
+    [messageRow, conv.id, c.ownerId, owner?.name ?? "You", text, c.now.getTime(), JSON.stringify({ to, cc })],
+  );
+  await c.db.run("update conversations set replied = true, done = done or $1, auto_done = auto_done and not $1 where id = $2", [markDone, conv.id]);
+  await c.db.run(
+    "insert into outbox (id, owner_id, source, target, to_name, ctx, body, conversation_id, message_id, created_at, details) values ($1, $2, 'gmail', $3, $4, $5, $6, $7, $8, $9, $10::jsonb)",
+    [uid("o"), c.ownerId, conv.external_id, `${last.sender_name}${cc.length ? ` and ${cc.length} more` : ""}`, conv.ctx, text, conv.id, messageRow, c.now.getTime(), JSON.stringify(details)],
+  );
+}
+
 async function conversation(c: ActionContext, id: string) {
   const [row] = await c.db.query<ConversationRow & { external_id: string }>("select * from conversations where owner_id = $1 and id = $2 for update", [c.ownerId, id]);
   if (!row) throw new Error("That conversation no longer exists.");
@@ -562,8 +639,8 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
   /** `thread` is the id of the message that started a thread: the reply then goes into that thread, as it would in Slack. */
   async sendReply(c, id: string, text: string, markDone: boolean, thread?: string | null) {
     const conv = await conversation(c, id);
-    // Google is connected for reading only.
-    if (conv.source === "gmail") throw new Error("Replying to an email from here is not built yet. Open it in Gmail to answer.");
+    // An email is answered by email (see `replyEmail`).
+    if (conv.source === "gmail") return replyByEmail(c, conv, text, markDone, false);
     const [owner] = await c.db.query<{ name: string }>("select name from users where id = $1", [c.ownerId]);
     let threadTs: string | null = null;
     // A row that is one thread in a channel is answered in that thread, never beside it.
@@ -582,6 +659,26 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
     await c.db.run(
       "insert into outbox (id, owner_id, source, target, to_name, ctx, body, conversation_id, message_id, thread_ts, created_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
       [uid("o"), c.ownerId, conv.source, conv.external_id, conv.from_name, conv.ctx, text, id, messageId, threadTs, c.now.getTime()],
+    );
+  },
+  /** Answers an email: to whoever wrote last, or with `replyAll` also to everyone else on that email. */
+  async replyEmail(c, id: string, text: string, markDone: boolean, replyAll: boolean) {
+    const conv = await conversation(c, id);
+    if (conv.source !== "gmail") throw new Error("That conversation is not an email.");
+    await replyByEmail(c, conv, text, markDone, replyAll);
+  },
+  /** A new email from one of the connected accounts. It goes out through the outbox, like a reply. */
+  async composeEmail(c, account: string, to: string, cc: string, subject: string, body: string) {
+    await mustSendFrom(c, account);
+    const toList = typedAddresses(to);
+    const ccList = typedAddresses(cc);
+    if (!toList.length) throw new Error("Who is it to? Type at least one email address.");
+    if (!body.trim()) throw new Error("Write the email first.");
+    const title = subject.trim() || "(no subject)";
+    const toName = `${toList[0].name}${toList.length + ccList.length > 1 ? ` and ${toList.length + ccList.length - 1} more` : ""}`;
+    await c.db.run(
+      "insert into outbox (id, owner_id, source, target, to_name, ctx, body, created_at, details) values ($1, $2, 'gmail', $3, $4, $5, $6, $7, $8::jsonb)",
+      [uid("o"), c.ownerId, account, toName, title, body, c.now.getTime(), JSON.stringify({ account, to: toList, cc: ccList, subject: title } satisfies EmailDetails)],
     );
   },
   async markConversationDone(c, id: string) {

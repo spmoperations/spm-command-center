@@ -4,7 +4,7 @@ import { failed, fromDashboard, refused, signedIn, signInFirst } from "@/server/
 import { applyAction, loadState, sendingEnabled } from "@/server/repo";
 
 // Actions that put a message in the outbox. With sending on, it goes out straight away.
-const SENDS = new Set(["sendReply", "delegateTask", "delegateConversation"]);
+const SENDS = new Set(["sendReply", "replyEmail", "composeEmail", "delegateTask", "delegateConversation"]);
 
 /** One change made on screen: { type, args }. Answers with the fresh state. */
 export async function POST(request: Request) {
