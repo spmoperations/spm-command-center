@@ -7,8 +7,10 @@ What it does:
   from last week to three weeks ahead.
 - **Meetings tab:** starts with the meetings for today and tomorrow, each with a Join link.
 
-More than one Google account can be connected. It only reads: nothing is sent, archived,
-marked as read or changed in Google.
+More than one Google account can be connected. Emails can be answered and written, and events
+added to the calendar, from the dashboard. Nothing is sent or added unless the person does it
+there, and only while sending is switched on (`SENDING_ENABLED`). Nothing is archived, marked
+as read or deleted in Google.
 
 For the person connecting, it is one button: **Connections → Connect Google → pick the
 account → Allow.** A second account: **Add another Google account**, the same way.
@@ -45,10 +47,12 @@ project you made in step 1.
       **Continue**, then **Create**.
 5. **Say what it may read.** https://console.cloud.google.com/auth/scopes
    - Click **Add or remove scopes**.
-   - Under **Manually add scopes**, paste these two lines:
+   - Under **Manually add scopes**, paste these three lines (read Gmail, send email, read and
+     add calendar events):
      ```
      https://www.googleapis.com/auth/gmail.readonly
-     https://www.googleapis.com/auth/calendar.events.readonly
+     https://www.googleapis.com/auth/gmail.send
+     https://www.googleapis.com/auth/calendar.events
      ```
    - Click **Add to table**, then **Update**, then **Save**.
 6. **Make the client.** https://console.cloud.google.com/auth/clients/create
@@ -137,9 +141,19 @@ emails** beside the account. Both also end the login on Google's side.
   - A meeting on two connected calendars shows once. With more than one account, each has
     its own colour and can be hidden.
   - Times show in the timezone of whoever is looking, with the zone named.
+- **Writing:**
+  - An email row has a reply box. The answer goes from the account the email came to, into
+    the same thread, to whoever wrote last; **Reply all** adds everyone else on that email.
+  - **New email** in the Inbox writes one from scratch, from any connected account.
+  - Both go through the outbox like Slack replies, so with sending switched off they wait
+    there.
+  - **New event** on the Calendar tab, or a click on an empty time, adds an event: title,
+    time, length, guests and a Google Meet link. Google sends the guests its invitation.
+  - An account connected before these were added shows what it is missing on the Connections
+    tab until it is connected again.
 - **Not built yet:**
-  - Replying to an email from the dashboard. It needs one more Google permission
-    (`gmail.send`); for now an email has **Open in Gmail** in place of the reply box.
+  - Changing or deleting events.
+  - Attachments on emails sent from here.
   - Calendars other than each account's main one.
 
 ## 3. The live site, for Jeremy
