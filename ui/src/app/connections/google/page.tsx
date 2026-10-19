@@ -121,14 +121,12 @@ const PROJECT = "SPM Command Center";
  * Every page in Google Cloud works on the project picked at the top. If another one is picked,
  * everything done on the page goes to that project instead, so each part checks it first.
  */
-function ProjectCheck({ big }: { big?: boolean }) {
+function ProjectCheck() {
   return (
-    <div className={`gs-check ${big ? "lead" : ""}`}>
+    <div className="gs-check">
       <p>
         <strong>First, look at the top of the page:</strong> the project must say <strong>{PROJECT}</strong>. If it shows another name, or &quot;Select a project&quot;, click it and pick <strong>{PROJECT}</strong> in the list.
-        {big && " Check it again on every page: each link below opens in whichever project is picked there, and anything done in another project will not work."}
       </p>
-      {big && <Sketch url="console.cloud.google.com" caption={`The project name, at the top left beside "Google Cloud", must say ${PROJECT}.`} parts={[{ t: "topbar", project: PROJECT, hi: true }]} />}
     </div>
   );
 }
@@ -183,7 +181,6 @@ export default function GoogleSetupPage() {
               <p className="st-help">
                 Do this on a computer, signed in to Google with your <strong>SPM Google account</strong>: the one your socialprofitmedia.co email uses. If you use more than one Google account in this browser, check the picture at the top right of Google Cloud is the SPM one. Each button below opens the right page.
               </p>
-              <ProjectCheck big />
               <ol className="gs-parts">
                 <Part n="1" title="Make a project">
                   <p>
