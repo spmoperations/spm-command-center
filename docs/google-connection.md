@@ -29,10 +29,20 @@ project you made in step 1.
 3. **Turn on Calendar.** https://console.cloud.google.com/apis/library/calendar-json.googleapis.com
    Click **Enable**.
 4. **Set up the sign-in screen.** https://console.cloud.google.com/auth/overview
-   - Click **Get started**.
-   - App name `SPM Command Center (dev)`, and your email as the support email.
-   - Audience **Internal**.
-   - Your email as the contact. Agree, then **Create**.
+   Click **Get started**. The page has four parts:
+   1. **App Information:** App name `SPM Command Center (dev)`. User support email: pick
+      `shruti@hermon.io` from the list. **Next**.
+   2. **Audience:** **Internal**. **Next**.
+      If Internal can't be picked, the account or the project is not inside the Hermon Google
+      Workspace. Then:
+      1. Pick **External**, then **Next**.
+      2. Once the setup is done, open https://console.cloud.google.com/auth/audience.
+      3. Under **Test users**, click **Add users**, add `shruti@hermon.io` and save.
+
+      In this Testing mode a login lasts 7 days, which is fine for a test.
+   3. **Contact Information:** `shruti@hermon.io`. **Next**.
+   4. **Finish:** tick **I agree to the Google API Services: User Data Policy**, click
+      **Continue**, then **Create**.
 5. **Say what it may read.** https://console.cloud.google.com/auth/scopes
    - Click **Add or remove scopes**.
    - Under **Manually add scopes**, paste these two lines:
