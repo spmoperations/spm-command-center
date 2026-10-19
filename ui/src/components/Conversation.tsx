@@ -8,7 +8,7 @@ import { DelegateForm } from "@/components/DelegateForm";
 import { EMAIL_TAG_NAME } from "@/core/email-tags";
 import { Avatar, MessageText, Pictures, Reactions } from "@/components/MessageText";
 import { PrioritySelect } from "@/components/bits";
-import { INBOX_DAYS, LINE_NAME, MODE_NAME, MODES, PERSONAL_SIDE, SOURCE_NAME } from "@/core/config";
+import { EMAIL_TAGS_SHOWN, INBOX_DAYS, LINE_NAME, MODE_NAME, MODES, PERSONAL_SIDE, SOURCE_NAME } from "@/core/config";
 import { ago, stamp } from "@/core/dates";
 import { plainPreview } from "@/core/message-format";
 import { requestSummary } from "@/core/requests";
@@ -363,7 +363,7 @@ export function MessageRow({ c, app, open, draft, onDraft, cleared }: { c: Conve
             {c.root && c.thread.length > 1 ? " · thread" : ""}
           </span>
           {c.tagged && <span className="chip me">Tagged you</span>}
-          {c.tags?.map((t) => (
+          {EMAIL_TAGS_SHOWN && c.tags?.map((t) => (
             <span key={t} className={`chip etag etag-${t}`}>
               {EMAIL_TAG_NAME[t]}
             </span>

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { gmailOf, MessageRow, NewEmail } from "@/components/Conversation";
 import { Seg } from "@/components/bits";
+import { EMAIL_TAGS_SHOWN } from "@/core/config";
 import { ago } from "@/core/dates";
 import { EMAIL_TAG_NAME, EMAIL_TAGS } from "@/core/email-tags";
 import type { EmailTag } from "@/core/types";
@@ -48,7 +49,7 @@ export default function EmailsPage() {
   const found = words ? emails.filter((c) => `${c.from} ${c.ctx} ${c.text}`.toLowerCase().includes(words)) : emails;
   const matches = (t: TagFilter) => (c: (typeof found)[number]) => t === "all" || (t === "untagged" ? !c.tags?.length : Boolean(c.tags?.includes(t)));
   // Newest first, as in Gmail.
-  const list = found.filter(matches(tag)).sort((a, b) => b.at - a.at);
+  const list = found.filter(matches(EMAIL_TAGS_SHOWN ? tag : "all")).sort((a, b) => b.at - a.at);
   const options: [TagFilter, string][] = [["all", `All ${found.length}`], ...EMAIL_TAGS.map((t): [TagFilter, string] => [t, `${EMAIL_TAG_NAME[t]} ${found.filter(matches(t)).length}`]), ["untagged", `No tag ${found.filter(matches("untagged")).length}`]];
 
   return (
@@ -57,7 +58,7 @@ export default function EmailsPage() {
         <div>
           <h2>Emails</h2>
           <div className="muted" style={{ fontSize: 14 }}>
-            Every email that arrives in your connected Gmail, newest first. Payments, subscriptions and newsletters are tagged; pick a tag to see only those. Open an email to read and answer it.
+            Every email that arrives in your connected Gmail, newest first.{EMAIL_TAGS_SHOWN ? " Payments, subscriptions and newsletters are tagged; pick a tag to see only those." : ""} Open an email to read and answer it.
           </div>
         </div>
         {ready && (
@@ -83,7 +84,7 @@ export default function EmailsPage() {
         <>
           {writing && <NewEmail app={app} onClose={() => setWriting(false)} />}
           <div className="email-tools">
-            <Seg label="Tag" value={tag} onChange={(v) => setTag(v)} options={options} />
+            {EMAIL_TAGS_SHOWN && <Seg label="Tag" value={tag} onChange={(v) => setTag(v)} options={options} />}
             <input type="search" className="f" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search sender, subject or text" aria-label="Search emails" />
             {accounts.length > 1 && (
               <select className="f" value={account} aria-label="Account" onChange={(e) => setAccount(e.target.value)}>
