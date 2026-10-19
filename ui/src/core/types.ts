@@ -197,6 +197,15 @@ export interface CalendarItem {
   organizer?: string;
   /** The owner's own answer to the invite: "accepted", "tentative" or "needsAction". */
   response?: string;
+  /** Google's own id for the event, on the first of `accounts`, for changing or answering it. */
+  eventId: string;
+  /** The owner made it: it can be changed and deleted. Otherwise it is an invitation to answer. */
+  mine: boolean;
+  /** One occurrence of a repeating event. */
+  recurring: boolean;
+  description?: string;
+  /** The guests' addresses, for the form that changes it. */
+  guests: string[];
 }
 
 /** Something ticked as important in Settings. */

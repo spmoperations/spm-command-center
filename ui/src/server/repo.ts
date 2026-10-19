@@ -247,8 +247,8 @@ async function loadCalendar(db: Db, ownerId: string): Promise<CalendarItem[]> {
   if (!googleAvailable()) return [];
   const rows = await db.query<{
     account: string; id: string; title: string; start_at: number; end_at: number; all_day: boolean; kind: string; location: string | null; link: string | null;
-    html_link: string | null; organizer: string | null; attendees: { name: string; email: string }[]; response: string | null;
-  }>("select account, id, title, start_at, end_at, all_day, kind, location, link, html_link, organizer, attendees, response from calendar_events where owner_id = $1 order by start_at, account", [ownerId]);
+    html_link: string | null; organizer: string | null; attendees: { name: string; email: string }[]; response: string | null; mine: boolean; description: string | null; recurring: boolean;
+  }>("select account, id, title, start_at, end_at, all_day, kind, location, link, html_link, organizer, attendees, response, mine, description, recurring from calendar_events where owner_id = $1 order by start_at, account", [ownerId]);
   const items = new Map<string, CalendarItem>();
   const mine = new Set(rows.map((e) => e.account));
   for (const e of rows) {
@@ -263,6 +263,7 @@ async function loadCalendar(db: Db, ownerId: string): Promise<CalendarItem[]> {
       // The owner's other connected accounts are not "someone else" in the meeting.
       who: (e.attendees ?? []).filter((a) => !mine.has(a.email.toLowerCase())).map((a) => a.name).join(", "),
       where: e.location ?? "", link: e.link ?? undefined, calendarLink: e.html_link ?? undefined, organizer: e.organizer ?? undefined, response: e.response ?? undefined,
+      eventId: e.id, mine: e.mine, recurring: e.recurring, description: e.description ?? undefined, guests: (e.attendees ?? []).map((a) => a.email).filter(Boolean),
     });
   }
   return [...items.values()];

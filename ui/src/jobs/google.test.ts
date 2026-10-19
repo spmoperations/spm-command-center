@@ -17,7 +17,7 @@ import { seal, unseal } from "@/server/secrets";
 import { createSession, SESSION_COOKIE } from "@/server/session";
 import { RateLimited, type Fetch } from "@/server/slack";
 import { NOW, reset, testDb } from "@/server/testing";
-import { addCalendarEvent, calendarPull, isShown, joinLink, placeOf, toRows } from "./calendar";
+import { addCalendarEvent, calendarPull, deleteCalendarEvent, isShown, joinLink, placeOf, respondToEvent, toRows, updateCalendarEvent } from "./calendar";
 import { gmailPull } from "./gmail";
 import { outboxSend } from "./outbox";
 import { runJob, type JobContext } from "./runner";
@@ -135,6 +135,21 @@ function fakeGoogle(email = JEREMY_MAIL, events: CalendarEvent[] = []) {
       fake.sent.push({ raw, threadId });
       return { id: `sent${fake.sent.length}`, threadId: threadId ?? `new${fake.sent.length}` };
     },
+    updated: [] as [string, NewEvent][],
+    deleted: [] as string[],
+    answered: [] as [string, string][],
+    async updateEvent(id: string, e: NewEvent): Promise<CalendarEvent> {
+      fake.updated.push([id, e]);
+      return { id, status: "confirmed", summary: e.title, organizer: { email, self: true }, start: { dateTime: new Date(e.start).toISOString() }, end: { dateTime: new Date(e.end).toISOString() }, attendees: e.guests.map((g) => ({ email: g, responseStatus: "needsAction" })) };
+    },
+    async deleteEvent(id: string): Promise<void> {
+      fake.deleted.push(id);
+    },
+    async respond(id: string, answer: "accepted" | "tentative" | "declined"): Promise<CalendarEvent> {
+      fake.answered.push([id, answer]);
+      const invite = events.find((e) => e.id === id)!;
+      return { ...invite, attendees: (invite.attendees ?? []).map((a) => (a.self ? { ...a, responseStatus: answer } : a)) };
+    },
     added: [] as NewEvent[],
     async addEvent(e: NewEvent): Promise<CalendarEvent> {
       fake.added.push(e);
@@ -147,17 +162,18 @@ function fakeGoogle(email = JEREMY_MAIL, events: CalendarEvent[] = []) {
 const opener = (...fakes: ReturnType<typeof fakeGoogle>[]) => async (email: string) => fakes.find((f) => f.email === email)!;
 
 /** A pretend Google for the login and the API: answers by address, and remembers what it was asked. */
-function googleSays(routes: Record<string, (body: URLSearchParams, url: URL, headers: Headers) => [number, unknown]>) {
-  const calls: { url: string; body: URLSearchParams; headers: Headers; text: string }[] = [];
+function googleSays(routes: Record<string, (body: URLSearchParams, url: URL, headers: Headers, method: string) => [number, unknown]>) {
+  const calls: { url: string; body: URLSearchParams; headers: Headers; text: string; method: string }[] = [];
   const fetchImpl: Fetch = async (input, init) => {
     const url = new URL(String(input));
     const body = new URLSearchParams(typeof init?.body === "string" ? init.body : "");
     const headers = new Headers(init?.headers);
-    calls.push({ url: url.toString(), body, headers, text: typeof init?.body === "string" ? init.body : "" });
+    calls.push({ url: url.toString(), body, headers, text: typeof init?.body === "string" ? init.body : "", method: init?.method ?? "GET" });
     const route = routes[`${url.origin}${url.pathname}`];
     if (!route) throw new Error(`Unexpected request in a test: ${url}`);
-    const [status, answer] = route(body, url, headers);
-    return new Response(JSON.stringify(answer), { status, headers: { "content-type": "application/json" } });
+    const [status, answer] = route(body, url, headers, init?.method ?? "GET");
+    // A delete is answered with 204 and nothing in it, as Google does.
+    return status === 204 ? new Response(null, { status }) : new Response(JSON.stringify(answer), { status, headers: { "content-type": "application/json" } });
   };
   return { fetchImpl, calls };
 }
@@ -602,7 +618,7 @@ describe("Calendar check", () => {
 // ---------- The week view ----------
 
 describe("the week view", () => {
-  const item = (id: string, at: number, end: number, more: Partial<CalendarItem> = {}): CalendarItem => ({ id, accounts: [JEREMY_MAIL], title: id, at, end, allDay: false, kind: "meeting", who: "", where: "", ...more });
+  const item = (id: string, at: number, end: number, more: Partial<CalendarItem> = {}): CalendarItem => ({ id, accounts: [JEREMY_MAIL], title: id, at, end, allDay: false, kind: "meeting", who: "", where: "", eventId: id, mine: true, recurring: false, guests: [], ...more });
   const local = (day: number, hour: number, minute = 0) => new Date(2026, 9, day, hour, minute).getTime();
 
   it("starts each week on Sunday and names it", () => {
@@ -802,7 +818,7 @@ describe("adding a calendar event", () => {
     const google = fakeGoogle();
     await expect(addCalendarEvent(db, OWNER_ID, form(), opener(google))).rejects.toThrow("Sending is switched off");
     process.env.SENDING_ENABLED = "true";
-    await expect(addCalendarEvent(db, OWNER_ID, form(), opener(google))).rejects.toThrow("Adding events was not allowed for jeremy@example.com");
+    await expect(addCalendarEvent(db, OWNER_ID, form(), opener(google))).rejects.toThrow("Changing events was not allowed for jeremy@example.com");
     expect(google.added).toEqual([]);
   });
 
@@ -865,5 +881,82 @@ describe("email tags", () => {
     expect(["t1", "t2", "t3", "t4"].map((t) => rows.find((c) => c.id.endsWith(`:${t}`))!.tags)).toEqual([["payment"], ["subscription"], ["newsletter"], []]);
     // Chats carry no email tags.
     expect((await loadState(db, OWNER_ID, new Date(NOW))).inbox.filter((c) => c.source !== "gmail").every((c) => c.tags === undefined)).toBe(true);
+  });
+});
+
+// ---------- Changing, deleting and answering events ----------
+
+describe("changing, deleting and answering events", () => {
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const own = (): CalendarEvent => ({ id: "mine1", status: "confirmed", summary: "Team sync", organizer: { email: JEREMY_MAIL, self: true }, description: "Agenda", start: { dateTime: iso(NOW + HOUR) }, end: { dateTime: iso(NOW + 2 * HOUR) }, attendees: [{ email: JEREMY_MAIL, self: true, responseStatus: "accepted" }, { email: "dana@example.com", displayName: "Dana Whitfield", responseStatus: "accepted" }] });
+  const invite = (): CalendarEvent => ({ id: "inv1", status: "confirmed", summary: "Podcast", organizer: { email: "sam@example.com", displayName: "Sam Ortiz" }, recurringEventId: "series1", start: { dateTime: iso(NOW + 3 * HOUR) }, end: { dateTime: iso(NOW + 4 * HOUR) }, attendees: [{ email: JEREMY_MAIL, self: true, responseStatus: "needsAction" }, { email: "sam@example.com", organizer: true, responseStatus: "accepted" }] });
+  const form = (more: Record<string, unknown> = {}) => ({ account: JEREMY_MAIL, title: "Team sync, moved", start: NOW + 5 * HOUR, end: NOW + 6 * HOUR, timeZone: "UTC", guests: "dana@example.com, ines@example.com", meet: false, description: "New agenda", ...more });
+  async function calendar() {
+    await connected();
+    process.env.SENDING_ENABLED = "true";
+    const google = fakeGoogle(JEREMY_MAIL, [own(), invite()]);
+    await calendarPull(ctx(), [account()], opener(google));
+    return google;
+  }
+  const item = async (title: string) => (await loadState(db, OWNER_ID, new Date(NOW))).calendar.find((e) => e.title === title);
+
+  it("knows which events the owner made, which are invitations, and which repeat", async () => {
+    await calendar();
+    expect(await item("Team sync")).toMatchObject({ eventId: "mine1", mine: true, recurring: false, description: "Agenda", guests: ["dana@example.com"] });
+    expect(await item("Podcast")).toMatchObject({ eventId: "inv1", mine: false, recurring: true, response: "needsAction", organizer: "Sam Ortiz" });
+  });
+
+  it("changes an event the owner made, and shows the change straight away", async () => {
+    const google = await calendar();
+    expect(await updateCalendarEvent(db, OWNER_ID, "mine1", form(), opener(google), NOW)).toEqual({ title: "Team sync, moved" });
+    expect(google.updated).toEqual([["mine1", { title: "Team sync, moved", start: NOW + 5 * HOUR, end: NOW + 6 * HOUR, timeZone: "UTC", guests: ["dana@example.com", "ines@example.com"], meet: false, description: "New agenda" }]]);
+    expect(await item("Team sync, moved")).toMatchObject({ at: NOW + 5 * HOUR, mine: true });
+    await expect(updateCalendarEvent(db, OWNER_ID, "inv1", form(), opener(google))).rejects.toThrow("Only whoever made an event can change it.");
+  });
+
+  it("deletes an event the owner made, but never someone else's", async () => {
+    const google = await calendar();
+    await expect(deleteCalendarEvent(db, OWNER_ID, JEREMY_MAIL, "inv1", opener(google))).rejects.toThrow("Only whoever made an event can delete it.");
+    expect(await deleteCalendarEvent(db, OWNER_ID, JEREMY_MAIL, "mine1", opener(google))).toEqual({ title: "Team sync" });
+    expect([google.deleted, await item("Team sync")]).toEqual([["mine1"], undefined]);
+  });
+
+  it("answers an invitation; one declined leaves the calendar here", async () => {
+    const google = await calendar();
+    await respondToEvent(db, OWNER_ID, JEREMY_MAIL, "inv1", "accepted", opener(google), NOW);
+    expect((await item("Podcast"))?.response).toBe("accepted");
+    await respondToEvent(db, OWNER_ID, JEREMY_MAIL, "inv1", "declined", opener(google), NOW);
+    expect([google.answered, await item("Podcast")]).toEqual([[["inv1", "accepted"], ["inv1", "declined"]], undefined]);
+    await expect(respondToEvent(db, OWNER_ID, JEREMY_MAIL, "mine1", "accepted", opener(google))).rejects.toThrow("This is an event you made");
+  });
+
+  it("does nothing while sending is switched off, since the guests or the organizer would be told", async () => {
+    const google = await calendar();
+    delete process.env.SENDING_ENABLED;
+    await expect(deleteCalendarEvent(db, OWNER_ID, JEREMY_MAIL, "mine1", opener(google))).rejects.toThrow("Sending is switched off");
+    await expect(respondToEvent(db, OWNER_ID, JEREMY_MAIL, "inv1", "accepted", opener(google))).rejects.toThrow("Sending is switched off");
+    expect([google.deleted, google.answered]).toEqual([[], []]);
+  });
+
+  it("asks Google to change, delete and answer in the right way", async () => {
+    await connected();
+    const url = (id: string) => `https://www.googleapis.com/calendar/v3/calendars/primary/events/${id}`;
+    const google = googleSays({
+      [TOKEN]: () => [200, { access_token: "a" }],
+      [url("mine1")]: (_b, u, _h, method) => (method === "GET" ? [200, own()] : method === "DELETE" ? [204, {}] : [u.searchParams.get("sendUpdates") === "all" ? 200 : 400, { id: "mine1" }]),
+      [url("inv1")]: (_b, _u, _h, method) => (method === "GET" ? [200, invite()] : [200, { id: "inv1" }]),
+      [url("alone")]: () => [200, { id: "alone", attendees: [] }],
+    });
+    const api = await googleApi(db, OWNER_ID, JEREMY_MAIL, google.fetchImpl);
+    await api.updateEvent("mine1", { title: "Moved", start: NOW, end: NOW + HOUR, timeZone: "UTC", guests: ["dana@example.com", "ines@example.com"], meet: true });
+    const change = JSON.parse(google.calls.find((c) => c.method === "PATCH")!.text);
+    // The owner stays, Dana keeps her answer, Ines is added, and a Meet link is asked for.
+    expect([change.summary, change.attendees, Boolean(change.conferenceData)]).toEqual(["Moved", [{ email: JEREMY_MAIL, self: true, responseStatus: "accepted" }, { email: "dana@example.com", displayName: "Dana Whitfield", responseStatus: "accepted" }, { email: "ines@example.com" }], true]);
+    await api.deleteEvent("mine1");
+    expect(google.calls.filter((c) => c.method === "DELETE").map((c) => new URL(c.url).searchParams.get("sendUpdates"))).toEqual(["all"]);
+    await api.respond("inv1", "tentative");
+    const answer = JSON.parse(google.calls.filter((c) => c.method === "PATCH").at(-1)!.text);
+    expect(answer.attendees).toEqual([{ email: JEREMY_MAIL, self: true, responseStatus: "tentative" }, { email: "sam@example.com", organizer: true, responseStatus: "accepted" }]);
+    await expect(api.respond("alone", "accepted")).rejects.toThrow("This is an event you made");
   });
 });

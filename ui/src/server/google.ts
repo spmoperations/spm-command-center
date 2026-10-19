@@ -275,7 +275,13 @@ export interface CalendarEvent {
   conferenceData?: { entryPoints?: { entryPointType?: string; uri?: string }[] };
   attendees?: { email?: string; displayName?: string; self?: boolean; responseStatus?: string; organizer?: boolean; resource?: boolean }[];
   organizer?: { email?: string; displayName?: string; self?: boolean };
+  description?: string;
+  /** Set on one occurrence of a repeating event. */
+  recurringEventId?: string;
 }
+
+/** The owner's answer to an invitation, in Google's words. */
+export type InviteAnswer = "accepted" | "tentative" | "declined";
 
 /** One page of what changed in the mailbox: the emails that arrived in the inbox, oldest first. */
 export interface MailboxChanges {
@@ -317,14 +323,22 @@ export interface GoogleApi {
   send(raw: string, threadId?: string): Promise<{ id: string; threadId: string }>;
   /** Adds an event to the main calendar. Its guests get Google's own invitation. */
   addEvent(event: NewEvent): Promise<CalendarEvent>;
+  /** Changes an event the owner made. Guests keep their answers and are told of the change. */
+  updateEvent(id: string, event: NewEvent): Promise<CalendarEvent>;
+  /** Deletes an event the owner made. Guests are told it is cancelled. */
+  deleteEvent(id: string): Promise<void>;
+  /** Answers an invitation: going, maybe or not. The organizer is told. */
+  respond(id: string, answer: InviteAnswer): Promise<CalendarEvent>;
 }
 
-async function call(fetchImpl: Fetch, access: string, url: string, post?: unknown): Promise<unknown> {
+async function call(fetchImpl: Fetch, access: string, url: string, send?: { method: "POST" | "PATCH" | "DELETE"; body?: unknown }): Promise<unknown> {
   const res = await fetchImpl(
     url,
-    post === undefined
+    !send
       ? { headers: { authorization: `Bearer ${access}` } }
-      : { method: "POST", headers: { authorization: `Bearer ${access}`, "content-type": "application/json" }, body: JSON.stringify(post) },
+      : send.body === undefined
+        ? { method: send.method, headers: { authorization: `Bearer ${access}` } }
+        : { method: send.method, headers: { authorization: `Bearer ${access}`, "content-type": "application/json" }, body: JSON.stringify(send.body) },
   );
   const body = (await res.json().catch(() => ({}))) as { error?: { message?: string; errors?: { reason?: string }[] } };
   if (res.ok) return body;
@@ -356,7 +370,11 @@ export async function googleApi(db: Db, ownerId: string, email: string, fetchImp
   }
   const access = body.access_token;
   const get = (url: string) => call(fetchImpl, access, url);
-  const post = (url: string, body: unknown) => call(fetchImpl, access, url, body);
+  const post = (url: string, body: unknown) => call(fetchImpl, access, url, { method: "POST", body });
+  const patch = (url: string, body: unknown) => call(fetchImpl, access, url, { method: "PATCH", body });
+  const eventUrl = (id: string) => `${CALENDAR}/events/${encodeURIComponent(id)}`;
+  const at = (ms: number, timeZone: string) => ({ dateTime: new Date(ms).toISOString(), timeZone });
+  const meetRequest = () => ({ conferenceData: { createRequest: { requestId: crypto.randomUUID(), conferenceSolutionKey: { type: "hangoutsMeet" } } } });
   return {
     email: saved.email,
     scopes: saved.scopes,
@@ -401,17 +419,36 @@ export async function googleApi(db: Db, ownerId: string, email: string, fetchImp
       return { id: String(sent.id ?? ""), threadId: String(sent.threadId ?? threadId ?? "") };
     },
     async addEvent(e) {
-      const at = (ms: number) => ({ dateTime: new Date(ms).toISOString(), timeZone: e.timeZone });
       const body = {
         summary: e.title,
         ...(e.description ? { description: e.description } : {}),
-        start: at(e.start),
-        end: at(e.end),
+        start: at(e.start, e.timeZone),
+        end: at(e.end, e.timeZone),
         attendees: e.guests.map((email) => ({ email })),
-        ...(e.meet ? { conferenceData: { createRequest: { requestId: crypto.randomUUID(), conferenceSolutionKey: { type: "hangoutsMeet" } } } } : {}),
+        ...(e.meet ? meetRequest() : {}),
       };
       // conferenceDataVersion lets Google make the Meet link; sendUpdates sends the guests their invitation.
       return (await post(`${CALENDAR}/events?conferenceDataVersion=1&sendUpdates=all`, body)) as CalendarEvent;
+    },
+    async updateEvent(id, e) {
+      const current = (await get(eventUrl(id))) as CalendarEvent;
+      // The owner and any rooms stay; a guest who is still invited keeps their answer; new guests are added.
+      const before = current.attendees ?? [];
+      const kept = before.filter((a) => a.self || a.resource);
+      const attendees = [...kept, ...e.guests.map((email) => before.find((a) => !a.self && !a.resource && (a.email ?? "").toLowerCase() === email) ?? { email })];
+      const hasMeet = Boolean(current.hangoutLink || current.conferenceData);
+      const body = { summary: e.title, description: e.description ?? "", start: at(e.start, e.timeZone), end: at(e.end, e.timeZone), attendees, ...(e.meet && !hasMeet ? meetRequest() : {}) };
+      return (await patch(`${eventUrl(id)}?conferenceDataVersion=1&sendUpdates=all`, body)) as CalendarEvent;
+    },
+    async deleteEvent(id) {
+      await call(fetchImpl, access, `${eventUrl(id)}?sendUpdates=all`, { method: "DELETE" });
+    },
+    async respond(id, answer) {
+      const current = (await get(eventUrl(id))) as CalendarEvent;
+      const attendees = current.attendees ?? [];
+      if (!attendees.some((a) => a.self)) throw new GoogleSaid("This is an event you made, so there is no invitation to answer.");
+      // Only the owner's own answer changes. Google tells the organizer.
+      return (await patch(`${eventUrl(id)}?sendUpdates=all`, { attendees: attendees.map((a) => (a.self ? { ...a, responseStatus: answer } : a)) })) as CalendarEvent;
     },
   };
 }

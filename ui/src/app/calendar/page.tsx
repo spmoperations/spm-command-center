@@ -6,7 +6,7 @@ import { Seg } from "@/components/bits";
 import { allDayOn, dayAfter, layDay, sameDay, weekDays, weekStart, weekTitle, WEEKS_AHEAD, WEEKS_BACK, type Placed } from "@/core/calendar";
 import { ago } from "@/core/dates";
 import type { CalendarItem } from "@/core/types";
-import { addCalendarEvent, runJobNow, useApp, type App } from "@/store/store";
+import { addCalendarEvent, deleteCalendarEvent, respondToEvent, runJobNow, updateCalendarEvent, useApp, type App } from "@/store/store";
 
 /** Height of one hour in the grid. */
 const HOUR = 48;
@@ -76,7 +76,92 @@ function EventBlock({ p, app, onOpen }: { p: Placed; app: App; onOpen(item: Cale
 }
 
 /** The details of one event, over the page. Esc or a click outside closes it. */
-function EventDetails({ item, app, onClose }: { item: CalendarItem; app: App; onClose(): void }) {
+/**
+ * What can be done with an event: change or delete one the owner made (its guests are told), or
+ * answer an invitation from someone else (the organizer is told).
+ */
+function EventActions({ item, app, onEdit, onClose }: { item: CalendarItem; app: App; onEdit(): void; onClose(): void }) {
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const account = item.accounts[0];
+  if (!app.state.googleAccounts.find((a) => a.email === account)?.addEvents) {
+    return <p className="st-help">To change or answer events from here, connect {account} again on the Connections tab and allow it.</p>;
+  }
+  const run = async (work: () => Promise<string | null>, close: boolean) => {
+    setBusy(true);
+    setError(null);
+    const failed = await work();
+    setBusy(false);
+    if (failed) setError(failed);
+    else if (close) onClose();
+  };
+  const once = item.recurring ? " This is one occurrence of a repeating event: only this one changes." : "";
+  return (
+    <div className="cal-actions">
+      {item.mine ? (
+        deleting ? (
+          <div className="cal-confirm">
+            <span>
+              Delete this event?{item.guests.length ? " Its guests are told it is cancelled." : ""}
+              {once}
+            </span>
+            <button className="btn danger" disabled={busy} onClick={() => void run(() => deleteCalendarEvent(account, item.eventId), true)}>
+              {busy ? "Deleting…" : "Delete"}
+            </button>
+            <button className="btn" onClick={() => setDeleting(false)}>
+              Keep it
+            </button>
+          </div>
+        ) : (
+          <div className="cal-actions-row">
+            {!item.allDay && item.kind === "meeting" && (
+              <button className="btn" onClick={onEdit}>
+                Edit
+              </button>
+            )}
+            <button className="btn" onClick={() => setDeleting(true)}>
+              Delete
+            </button>
+            {item.recurring && (
+              <span className="muted" style={{ fontSize: 12.5 }}>
+                Changes are for this occurrence only.
+              </span>
+            )}
+          </div>
+        )
+      ) : item.kind === "meeting" ? (
+        <div className="cal-actions-row" role="group" aria-label="Your answer">
+          <span className="label">Going?</span>
+          {(
+            [
+              ["accepted", "Yes"],
+              ["tentative", "Maybe"],
+              ["declined", "No"],
+            ] as const
+          ).map(([answer, label]) => (
+            <button
+              key={answer}
+              className={`btn ${item.response === answer ? "primary" : ""}`}
+              aria-pressed={item.response === answer}
+              disabled={busy}
+              onClick={() => void run(() => respondToEvent(account, item.eventId, answer), answer === "declined")}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function EventDetails({ item, app, onClose, onEdit }: { item: CalendarItem; app: App; onClose(): void; onEdit(): void }) {
   useEffect(() => {
     const key = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", key);
@@ -133,6 +218,8 @@ function EventDetails({ item, app, onClose }: { item: CalendarItem; app: App; on
               On {item.accounts.join(" and ")}
             </div>
           )}
+          {item.description && <div className="cal-notes">{item.description}</div>}
+          <EventActions item={item} app={app} onEdit={onEdit} onClose={onClose} />
         </div>
         <div className="cal-card-foot">
           {item.calendarLink && (
@@ -168,17 +255,22 @@ const LENGTHS: [number, string][] = [
  * New event: what, when, how long and who, on one of the calendars that may be added to. The
  * guests get Google's own invitation, and a Google Meet link is added unless it is unticked.
  */
-function NewEventForm({ app, start, onClose }: { app: App; start: number; onClose(): void }) {
+function NewEventForm({ app, start, editing, onClose }: { app: App; start: number; editing?: CalendarItem | null; onClose(): void }) {
   const calendars = app.state.googleAccounts.filter((a) => a.addEvents);
   const first = new Date(start);
-  const [account, setAccount] = useState(calendars[0]?.email ?? "");
-  const [title, setTitle] = useState("");
+  const length = editing ? Math.round((editing.end - editing.at) / 60_000) : 30;
+  const [account, setAccount] = useState(editing?.accounts[0] ?? calendars[0]?.email ?? "");
+  const [title, setTitle] = useState(editing?.title ?? "");
   const [date, setDate] = useState(dateValue(first));
   const [time, setTime] = useState(timeValue(first));
-  const [minutes, setMinutes] = useState(30);
-  const [guests, setGuests] = useState("");
-  const [meet, setMeet] = useState(true);
-  const [description, setDescription] = useState("");
+  const [minutes, setMinutes] = useState(length);
+  const [guests, setGuests] = useState(editing?.guests.join(", ") ?? "");
+  const [meet, setMeet] = useState(editing ? Boolean(editing.link) : true);
+  const [description, setDescription] = useState(editing?.description ?? "");
+  // A length that is not in the list, from an event made in Google Calendar, is offered too.
+  const lengths = LENGTHS.some(([m]) => m === length)
+    ? LENGTHS
+    : [...LENGTHS, [length, `${Math.floor(length / 60) ? `${Math.floor(length / 60)} h ` : ""}${length % 60 ? `${length % 60} min` : ""}`.trim()] as [number, string]].sort((a, b) => a[0] - b[0]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -191,16 +283,17 @@ function NewEventForm({ app, start, onClose }: { app: App; start: number; onClos
     const at = new Date(`${date}T${time}`).getTime();
     if (!Number.isFinite(at)) return setError("Pick a date and a time.");
     setBusy(true);
-    const failed = await addCalendarEvent({ account, title, start: at, end: at + minutes * 60_000, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, guests, meet, description });
+    const form = { account, title, start: at, end: at + minutes * 60_000, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, guests, meet, description };
+    const failed = editing ? await updateCalendarEvent(editing.eventId, form) : await addCalendarEvent(form);
     setBusy(false);
     if (failed) setError(failed);
     else onClose();
   };
   return (
     <div className="cal-modal" role="presentation" onClick={onClose}>
-      <div className="cal-card panel" role="dialog" aria-modal="true" aria-label="New event" onClick={(e) => e.stopPropagation()}>
+      <div className="cal-card panel" role="dialog" aria-modal="true" aria-label={editing ? "Change event" : "New event"} onClick={(e) => e.stopPropagation()}>
         <div className="cal-card-head">
-          <h3>New event</h3>
+          <h3>{editing ? "Change event" : "New event"}</h3>
           <button className="linkbtn" onClick={onClose} aria-label="Close">
             ✕
           </button>
@@ -211,7 +304,7 @@ function NewEventForm({ app, start, onClose }: { app: App; start: number; onClos
             <input className="f" type="date" value={date} onChange={(e) => setDate(e.target.value)} aria-label="Date" />
             <input className="f" type="time" value={time} step={300} onChange={(e) => setTime(e.target.value)} aria-label="Start time" />
             <select className="f" value={minutes} onChange={(e) => setMinutes(Number(e.target.value))} aria-label="How long">
-              {LENGTHS.map(([m, label]) => (
+              {lengths.map(([m, label]) => (
                 <option key={m} value={m}>
                   {label}
                 </option>
@@ -220,10 +313,18 @@ function NewEventForm({ app, start, onClose }: { app: App; start: number; onClos
           </div>
           <input className="f" value={guests} onChange={(e) => setGuests(e.target.value)} placeholder="Guests: name@example.com, another@example.com" aria-label="Guests" />
           <label className="inline-check">
-            <input type="checkbox" checked={meet} onChange={(e) => setMeet(e.target.checked)} /> Add a Google Meet link
+            {editing?.link ? (
+              <>
+                <input type="checkbox" checked disabled /> Has a Google Meet link
+              </>
+            ) : (
+              <>
+                <input type="checkbox" checked={meet} onChange={(e) => setMeet(e.target.checked)} /> Add a Google Meet link
+              </>
+            )}
           </label>
           <textarea className="f" rows={3} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Description (optional)" aria-label="Description" />
-          {calendars.length > 1 && (
+          {calendars.length > 1 && !editing && (
             <select className="f" value={account} onChange={(e) => setAccount(e.target.value)} aria-label="Calendar">
               {calendars.map((a) => (
                 <option key={a.email} value={a.email}>
@@ -240,13 +341,13 @@ function NewEventForm({ app, start, onClose }: { app: App; start: number; onClos
         </div>
         <div className="cal-card-foot">
           <span className="muted" style={{ fontSize: 12.5, marginRight: "auto" }}>
-            {guests.trim() ? "Guests get an invitation from Google." : `On ${account}`}
+            {guests.trim() ? (editing ? "Guests are told of the change." : "Guests get an invitation from Google.") : `On ${account}`}
           </span>
           <button className="btn" onClick={onClose}>
             Cancel
           </button>
           <button className="btn primary" disabled={busy || !account} onClick={() => void save()}>
-            {busy ? "Adding…" : "Add to calendar"}
+            {busy ? (editing ? "Saving…" : "Adding…") : editing ? "Save changes" : "Add to calendar"}
           </button>
         </div>
       </div>
@@ -278,6 +379,8 @@ export default function CalendarPage() {
   const [hidden, setHidden] = useState<string[]>([]);
   /** The New event form is open, starting at this time. */
   const [making, setMaking] = useState<number | null>(null);
+  /** The event whose Change form is open. */
+  const [editing, setEditing] = useState<CalendarItem | null>(null);
   // The week's one scrolling box: down through the hours, and sideways on a narrow screen.
   const box = useRef<HTMLDivElement>(null);
   const thisWeek = app ? weekStart(app.now).getTime() : 0;
@@ -456,8 +559,19 @@ export default function CalendarPage() {
           )}
         </>
       )}
-      {open && <EventDetails item={open} app={app} onClose={() => setOpen(null)} />}
+      {open && (
+        <EventDetails
+          item={open}
+          app={app}
+          onClose={() => setOpen(null)}
+          onEdit={() => {
+            setEditing(open);
+            setOpen(null);
+          }}
+        />
+      )}
       {making !== null && <NewEventForm app={app} start={making} onClose={() => setMaking(null)} />}
+      {editing && <NewEventForm app={app} start={editing.at} editing={editing} onClose={() => setEditing(null)} />}
     </section>
   );
 }

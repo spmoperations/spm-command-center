@@ -259,6 +259,46 @@ export async function composeEmail(account: string, to: string, cc: string, subj
   }
 }
 
+type EventFields = { account: string; title: string; start: number; end: number; timeZone: string; guests: string; meet: boolean; description: string };
+
+/** Changes an event you made. Resolves to an error message, or null once it is changed. */
+export async function updateCalendarEvent(eventId: string, form: EventFields): Promise<string | null> {
+  try {
+    const { state, title } = await request<{ state: AppState; title: string }>("/api/google/event", { action: "update", eventId, ...form });
+    setState(state);
+    toast(`Changed: ${title}${form.guests.trim() ? ". Guests are told." : ""}`);
+    return null;
+  } catch (error) {
+    return (error as Error).message;
+  }
+}
+
+/** Deletes an event you made. Resolves to an error message, or null once it is gone. */
+export async function deleteCalendarEvent(account: string, eventId: string): Promise<string | null> {
+  try {
+    const { state, title } = await request<{ state: AppState; title: string }>("/api/google/event", { action: "delete", account, eventId });
+    setState(state);
+    toast(`Deleted: ${title}`);
+    return null;
+  } catch (error) {
+    return (error as Error).message;
+  }
+}
+
+const ANSWERED: Record<string, string> = { accepted: "Going", tentative: "Maybe", declined: "Not going" };
+
+/** Answers an invitation. Resolves to an error message, or null once the organizer has the answer. */
+export async function respondToEvent(account: string, eventId: string, answer: "accepted" | "tentative" | "declined"): Promise<string | null> {
+  try {
+    const { state, title } = await request<{ state: AppState; title: string }>("/api/google/event", { action: "respond", account, eventId, answer });
+    setState(state);
+    toast(`${ANSWERED[answer]}: ${title}. The organizer is told.`);
+    return null;
+  } catch (error) {
+    return (error as Error).message;
+  }
+}
+
 /** New event on the Calendar tab. Resolves to an error message, or null once it is on the calendar. */
 export async function addCalendarEvent(form: { account: string; title: string; start: number; end: number; timeZone: string; guests: string; meet: boolean; description: string }): Promise<string | null> {
   try {
