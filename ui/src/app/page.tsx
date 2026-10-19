@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { Avatar } from "@/components/MessageText";
 import { DueText, Pill, PriPill } from "@/components/bits";
-import { DEPARTMENTS, PRIORITY_RANK, TARGETS } from "@/core/config";
+import { conversationPage, DEPARTMENTS, PRIORITY_RANK, TARGETS } from "@/core/config";
 import { ago, daysInMonth, isoDay, parseDay, weekStart } from "@/core/dates";
 import { plainPreview } from "@/core/message-format";
 import { isMine } from "@/core/delegation";
@@ -249,7 +249,7 @@ export default function TodayPage() {
                     <span className="num muted" style={{ fontSize: 12 }}>
                       {ago(c.at, now.getTime())}
                     </span>
-                    <Link className="reply-link" href="/inbox" onClick={() => openConversation(c.id)}>
+                    <Link className="reply-link" href={conversationPage(c.id)} onClick={() => openConversation(c.id)}>
                       Reply
                     </Link>
                   </div>

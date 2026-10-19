@@ -11,6 +11,7 @@ import type {
   AppState, Conversation, FocusBoard, JobId, JobStatus, Meeting, MessagePicture, Metric, Mode, Person, Priority, Provider, Reaction, Rule, Source, Suggestion, Task, CalendarItem,
 } from "@/core/types";
 import { aiConfigured } from "./ai";
+import { emailTags, type TaggedEmail } from "@/core/email-tags";
 import { isEmailAddress, parseAddress, type Address } from "./gmail";
 import { disconnectGoogle, googleAccounts, googleAvailable, googleBlocked, googleCan } from "./google";
 import { telegramAvatarIds, type StoredPicture } from "./media";
@@ -68,6 +69,8 @@ interface ConversationRow {
 interface MessageRow {
   id: string; conversation_id: string; sender_name: string; sender_id: string | null; me: boolean; body: string; at: number; status: "queued" | "sent" | "failed" | null; external_id: string | null; thread_ts: string | null;
   attachments: StoredPicture[] | null; reactions: Reaction[] | null;
+  /** For an email: who it went to, and whether it is a mailing and which Gmail tab it landed in. */
+  email: { bulk?: boolean; tab?: string } | null;
 }
 
 /** Where the browser gets a message's picture from. The dashboard hands it over itself, to a signed-in person only. */
@@ -102,9 +105,10 @@ export async function loadRules(db: Db, ownerId: string): Promise<{ labelRules: 
 }
 
 // Everything still open, plus what was cleared lately so links back to it keep working.
-const SHOWN = `(select id from conversations where owner_id = $1 and not done order by last_at desc limit 300)
-               union all
-               (select id from conversations where owner_id = $1 and done order by last_at desc limit 100)`;
+// Counted for each source on its own, so a busy mailbox never pushes chats out of view.
+const SHOWN = `select id from (
+                 select id, done, row_number() over (partition by source, done order by last_at desc) as n from conversations where owner_id = $1
+               ) shown where shown.n <= case when shown.done then 100 else 300 end`;
 
 async function loadConversations(db: Db, ownerId: string): Promise<Conversation[]> {
   // Both reads go out together. Only the newest part of each conversation is fetched: a busy
@@ -124,7 +128,7 @@ async function loadConversations(db: Db, ownerId: string): Promise<Conversation[
                 row_number() over (partition by conversation_id order by grp_at desc, at desc, id desc) as overall
          from grouped g
        )
-       select id, conversation_id, sender_name, sender_id, me, body, at, status, external_id, thread_ts, attachments, reactions from ranked
+       select id, conversation_id, sender_name, sender_id, me, body, at, status, external_id, thread_ts, attachments, reactions, email from ranked
        where grp_rank <= $2 and overall <= $4 and (in_grp <= $3 or external_id = grp)
        order by at, id`,
       [ownerId, GROUPS_SHOWN, REPLIES_SHOWN, MESSAGES_SHOWN],
@@ -134,7 +138,17 @@ async function loadConversations(db: Db, ownerId: string): Promise<Conversation[
   const telegram = new Set(rows.filter((r) => r.source === "telegram").map((r) => r.id));
   const faces = telegram.size ? await telegramAvatarIds(db, ownerId) : new Set<string>();
   const threads = new Map<string, Conversation["thread"]>();
+  // What an email thread's tags are worked out from: its emails from other people.
+  const mail = new Map<string, TaggedEmail>();
   for (const m of messages) {
+    if (m.email && !m.me) {
+      const seen = mail.get(m.conversation_id) ?? { subject: "", texts: [], senders: [], bulk: true, tab: undefined };
+      seen.texts.push(m.body);
+      if (m.sender_id) seen.senders.push(m.sender_id);
+      seen.bulk = seen.bulk && Boolean(m.email.bulk);
+      seen.tab = m.email.tab ?? seen.tab;
+      mail.set(m.conversation_id, seen);
+    }
     const thread = threads.get(m.conversation_id) ?? [];
     thread.push({
       me: m.me, text: m.body, at: Number(m.at), from: m.me ? undefined : m.sender_name, status: m.status === "failed" ? "queued" : (m.status ?? undefined), ts: m.external_id ?? undefined, thread: m.thread_ts ?? undefined,
@@ -152,6 +166,7 @@ async function loadConversations(db: Db, ownerId: string): Promise<Conversation[
       id: r.id, source: r.source, from: r.from_name, ctx: r.ctx, direct: r.direct, tagged: r.tagged, text: r.last_text, at: r.last_at,
       pri: r.pri, line: r.line, mode: r.mode, project: r.project, done: r.done, replied: r.replied, manualPri: r.manual_pri || undefined, manualMode: r.manual_mode || undefined,
       root: r.thread_ts ?? undefined,
+      tags: r.source === "gmail" ? emailTags({ ...(mail.get(r.id) ?? { texts: [r.last_text], senders: [], bulk: false }), subject: r.ctx }) : undefined,
       autoCleared: (r.done && r.auto_done) || undefined,
       // A one-to-one chat shows the other person. A group shows whoever wrote last.
       avatar: r.source !== "telegram" ? undefined : r.direct && faces.has(r.external_id) ? avatarUrl(r.external_id) : thread.findLast((m) => !m.me)?.avatar,

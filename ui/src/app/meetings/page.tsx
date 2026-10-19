@@ -20,19 +20,22 @@ const ANSWER: Record<string, string> = { tentative: "Maybe", needsAction: "Not a
 
 /** A meeting on the calendar that has not ended yet: when, with whom, and the link to join. */
 function UpcomingRow({ m, day }: { m: CalendarItem; day: string }) {
-  const until = new Date(m.end).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  // "8:30 – 9:00 PM", with the AM or PM once when both are the same, and the zone on its own line.
+  const clock = (ms: number) => new Date(ms).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  const [from, to] = [clock(m.at), clock(m.end)];
+  const range = from.slice(-2) === to.slice(-2) ? `${from.slice(0, -3)} – ${to}` : `${from} – ${to}`;
+  const zone = clockWithZone(m.at).split(" ").pop();
   return (
-    <div className="mt">
+    <div className={`mt up ${day === "Now" ? "now" : ""}`}>
       <div className="mt-head up-head">
-        <div className="mt-when">
-          {clockWithZone(m.at)}
-          <small>
-            {day} · until {until}
-          </small>
+        <div className="up-when">
+          <span className="up-day">{day}</span>
+          <span className="up-time">{range}</span>
+          <span className="up-zone">{zone}</span>
         </div>
         <div style={{ minWidth: 0 }}>
           <div className="mt-title">{m.title}</div>
-          <div className="mt-who">{[m.who, m.where].filter(Boolean).join(" · ") || "Just you"}</div>
+          <div className="mt-who">{[m.where, m.who ? `with ${m.who}` : "just you"].filter(Boolean).join(" · ")}</div>
         </div>
         <div className="mt-chips">
           {m.response && ANSWER[m.response] && <span className="chip">{ANSWER[m.response]}</span>}

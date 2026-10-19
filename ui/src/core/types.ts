@@ -1,6 +1,8 @@
 export type Source = "slack" | "telegram" | "gmail";
 /** Services a person connects themselves, from the Connections tab. */
 export type Provider = "slack" | "telegram" | "fathom" | "google";
+/** What an email is about, for the filter on the Emails tab (see core/email-tags). */
+export type EmailTag = "payment" | "subscription" | "newsletter";
 export type Priority = "high" | "mid" | "low";
 /** Business line of a conversation: the agency or the consulting offer. */
 export type Line = "agency" | "consulting";
@@ -72,6 +74,8 @@ export interface Conversation {
   avatar?: string;
   /** Cleared by itself, for having nothing new in `INBOX_DAYS` days, and not by the owner. */
   autoCleared?: boolean;
+  /** For an email: what it is about (payment, subscription, newsletter). */
+  tags?: EmailTag[];
   /**
    * Set when this row is one thread in a Slack channel: the id of the message that started
    * it. A reply written here goes into that thread.

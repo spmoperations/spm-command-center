@@ -125,7 +125,7 @@ export async function gmailPull({ db, ownerId, now, cursor }: JobContext, accoun
       );
       for (const e of emails) {
         // Who it was to, and the headers a reply needs to stay in this thread for everyone.
-        const details = { to: e.to, cc: e.cc, messageId: e.messageId, references: e.references };
+        const details = { to: e.to, cc: e.cc, messageId: e.messageId, references: e.references, bulk: e.bulk, tab: e.tab };
         // A reply sent from the dashboard is here already, under the id Gmail gave it.
         stored += await db.run(
           `insert into messages (id, conversation_id, owner_id, external_id, sender_name, sender_id, me, body, at, scanned, email)

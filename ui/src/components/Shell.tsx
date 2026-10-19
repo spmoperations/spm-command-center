@@ -17,6 +17,7 @@ const TABS = [
   { href: "/", key: "today", label: "Today" },
   { href: "/departments", key: "departments", label: "Departments" },
   { href: "/inbox", key: "inbox", label: "Inbox" },
+  { href: "/emails", key: "emails", label: "Emails" },
   { href: "/meetings", key: "meetings", label: "Meetings" },
   { href: "/calendar", key: "calendar", label: "Calendar" },
   { href: "/tasks", key: "tasks", label: "Tasks" },
@@ -28,7 +29,8 @@ const TABS = [
 type Count = { text: string | number; hot: boolean; title: string };
 
 function navCounts({ state, now, today }: App, mode: Mode): Record<string, Count> {
-  const open = state.inbox.filter((c) => c.mode === mode && !c.done && !c.replied);
+  const open = state.inbox.filter((c) => c.mode === mode && !c.done && !c.replied && c.source !== "gmail");
+  const emails = state.inbox.filter((c) => c.source === "gmail" && !c.done && !c.replied);
   const mine = state.tasks.filter((t) => t.mode === mode && isMine(t));
   const clock = { day: now.getDate(), dim: daysInMonth(now) };
   const lagging = state.metrics
@@ -39,6 +41,7 @@ function navCounts({ state, now, today }: App, mode: Mode): Record<string, Count
   const connected = providers.filter((p) => state.connections[p].connected).length;
   return {
     inbox: { text: open.length, hot: open.some((c) => c.pri === "high"), title: `${open.length} waiting for a reply` },
+    emails: { text: emails.length, hot: false, title: `${emails.length} ${emails.length === 1 ? "email" : "emails"} not answered or done` },
     tasks: { text: mine.length, hot: mine.some((t) => t.due <= today), title: `${mine.length} on your plate` },
     targets: { text: lagging ? `${lagging} off` : "OK", hot: lagging > 0, title: lagging ? `${lagging} behind pace` : "All on pace" },
     connections: { text: `${connected} of ${providers.length}`, hot: false, title: `${connected} of ${providers.length} apps connected` },

@@ -6,7 +6,7 @@ import { DelegateForm } from "@/components/DelegateForm";
 import { MessageText } from "@/components/MessageText";
 import { SuggestionRow } from "@/components/SuggestionRow";
 import { DueText, PriPill, PrioritySelect, SourceLink, VisuallyHidden } from "@/components/bits";
-import { DEPARTMENTS, DEPTS, MODE_NAME, MODES, PERSONAL_SIDE, PRIORITY_RANK, SOURCE_NAME } from "@/core/config";
+import { conversationPage, DEPARTMENTS, DEPTS, MODE_NAME, MODES, PERSONAL_SIDE, PRIORITY_RANK, SOURCE_NAME } from "@/core/config";
 import { clockWithZone, dueLabel, parseDay, stamp } from "@/core/dates";
 import { canAssign, canAssignInChat, isMine } from "@/core/delegation";
 import type { Mode, Priority, Task } from "@/core/types";
@@ -138,7 +138,7 @@ function TaskDetail({ t, app }: { t: Task; app: App }) {
               {chat.done ? (
                 <span className="muted">This conversation has been cleared from the inbox.</span>
               ) : (
-                <Link className="srclink" href="/inbox" onClick={() => openConversation(chat.id)}>
+                <Link className="srclink" href={conversationPage(chat.id)} onClick={() => openConversation(chat.id)}>
                   Open the conversation
                 </Link>
               )}

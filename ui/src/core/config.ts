@@ -48,6 +48,9 @@ export const TARGETS: boolean = false;
  */
 export const PERSONAL_SIDE: boolean = false;
 export const SOURCE_NAME: Record<Source, string> = { slack: "Slack", telegram: "Telegram", gmail: "Gmail" };
+/** The tab a conversation is read on: emails have a tab of their own. */
+export const conversationPage = (id: string) => (id.startsWith("gmail:") ? "/emails" : "/inbox");
+
 /** The connection each source comes through: Gmail comes with the Google account. */
 export const SOURCE_PROVIDER: Record<Source, Provider> = { slack: "slack", telegram: "telegram", gmail: "google" };
 

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { PRIORITIES, PRIORITY_NAME, SOURCE_NAME, SOURCE_SHORT } from "@/core/config";
+import { conversationPage, PRIORITIES, PRIORITY_NAME, SOURCE_NAME, SOURCE_SHORT } from "@/core/config";
 import { dueLabel } from "@/core/dates";
 import type { Priority, Source, Task, TaskSource } from "@/core/types";
 import { openConversation, showMeeting, type App } from "@/store/store";
@@ -47,7 +47,7 @@ export function SourceLink({ src, app }: { src: TaskSource | null | undefined; a
     const c = app.state.inbox.find((x) => x.id === src.id);
     if (!c) return null;
     return (
-      <Link className="srclink" href="/inbox" onClick={() => openConversation(c.id)}>
+      <Link className="srclink" href={conversationPage(c.id)} onClick={() => openConversation(c.id)}>
         {SOURCE_NAME[c.source]} · {c.from}
       </Link>
     );
