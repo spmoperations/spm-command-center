@@ -45,8 +45,8 @@ project you made in step 1.
    - Application type **Web application**, name `Local`.
    - Under **Authorized redirect URIs**, add both of these, then **Create**:
      ```
-     http://127.0.0.1:3000/api/google/callback
-     http://localhost:3000/api/google/callback
+     http://127.0.0.1:3100/api/google/callback
+     http://localhost:3100/api/google/callback
      ```
    - Copy the **Client ID** and the **Client secret** straight away: newer projects show the
      secret in full only this once.
@@ -63,19 +63,21 @@ project you made in step 1.
    ```
    cd "/Users/shruti/Desktop/work/Jermey's Dashboard/ui"
    git switch google-connection
-   npm run dev:local
+   npm run dev:local -- -p 3100
    ```
+   Port 3100 is the one the redirect URIs above name; Google refuses any other. (Port 3000 is
+   often taken by another app on this Mac, and Next would then quietly pick a different one.)
    Only `dev:local`. Plain `npm run dev` uses the hosted database: Google refuses to start
    there, but this branch's database changes would still be applied to it.
-2. Open http://127.0.0.1:3000/connections and click **Connect Google**.
+2. Open http://127.0.0.1:3100/connections and click **Connect Google**.
 3. Pick your account and click **Allow**, leaving both boxes ticked. You come back to
    Connections with the account listed.
-4. Open http://127.0.0.1:3000/calendar: last week to three weeks ahead. Click an event for
+4. Open http://127.0.0.1:3100/calendar: last week to three weeks ahead. Click an event for
    who is in it and the Join link.
 5. Emails start from the moment you connected. Send yourself an email, then:
-   - In http://127.0.0.1:3000/settings, under Timers, click **Run now** beside "Gets new emails
+   - In http://127.0.0.1:3100/settings, under Timers, click **Run now** beside "Gets new emails
      from Gmail". **Sync now** runs every check instead.
-   - The email appears in http://127.0.0.1:3000/inbox.
+   - The email appears in http://127.0.0.1:3100/inbox.
 
    On your machine checks run only when clicked, because `.env.local` has `TICKER=off`. On
    the live site they run by themselves: emails every 15 minutes, the calendar every 30.
