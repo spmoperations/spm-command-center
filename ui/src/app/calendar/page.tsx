@@ -208,7 +208,7 @@ function EventDetails({ item, app, onClose, onEdit }: { item: CalendarItem; app:
               <span className="label">Invited by</span> {item.organizer}
             </div>
           )}
-          {item.response && item.kind === "meeting" && (
+          {item.response && item.kind === "meeting" && !item.mine && (
             <div>
               <span className="label">Your answer</span> {ANSWER[item.response] ?? item.response}
             </div>
