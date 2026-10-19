@@ -1,12 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
 import { toast, useApp } from "@/store/store";
 
 // The guide for setting Google up, for the person whose Google account it is. Step 1 happens
-// in Google Cloud, once, and ends with two keys sent to Shruti in #spm-development. She adds
-// them to the live site, and Step 2, connecting the account, appears here by itself.
+// in Google Cloud, once, and ends with the two keys posted to Shruti in #spm-development. She
+// adds them to the live site, and Step 2, connecting the account, appears here by itself.
 
 const SCOPES = ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.send", "https://www.googleapis.com/auth/calendar.events"];
 
@@ -119,30 +118,6 @@ function Part({ n, title, children }: { n: string; title: string; children: Reac
         {children}
       </div>
     </li>
-  );
-}
-
-/** The message for #spm-development, made from the two keys. Nothing is kept or sent from here. */
-function KeysMessage() {
-  const [id, setId] = useState("");
-  const [secret, setSecret] = useState("");
-  const message = `Google keys for the Command Center:\nClient ID: ${id.trim() || "…"}\nClient secret: ${secret.trim() || "…"}`;
-  return (
-    <div className="gs-keys">
-      <label>
-        Client ID
-        <input className="f" value={id} onChange={(e) => setId(e.target.value)} placeholder="…apps.googleusercontent.com" spellCheck={false} />
-      </label>
-      <label>
-        Client secret
-        <input className="f" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="GOCSPX-…" spellCheck={false} />
-      </label>
-      <pre className="gs-message">{message}</pre>
-      <div>
-        <Copy text={message} label="Copy the message" />
-      </div>
-      <p className="st-help">Nothing you type here is saved or sent by the dashboard. It only makes the message for you to paste in Slack.</p>
-    </div>
   );
 }
 
@@ -292,9 +267,8 @@ export default function GoogleSetupPage() {
                 </Part>
                 <Part n="7" title="Send them to Shruti in #spm-development">
                   <p>
-                    Paste them below to make the message, then post it in Slack in <strong>#spm-development</strong> (a private channel). That&apos;s the end of Step 1. Shruti adds them to the Command Center and tells you there. Step 2 then turns on here by itself.
+                    In Slack, post the <strong>Client ID</strong> and the <strong>Client secret</strong> in <strong>#spm-development</strong> (a private channel), in one message. That&apos;s the end of Step 1. Shruti adds them to the Command Center and tells you there. Step 2 then turns on here by itself.
                   </p>
-                  <KeysMessage />
                 </Part>
               </ol>
             </>

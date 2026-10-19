@@ -722,10 +722,7 @@ img.avatar { object-fit: cover; background: var(--surface-2); }
 .gs-list { margin: 0; padding-left: 20px; display: grid; gap: 6px; max-width: 72ch; }
 .gs-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .gs-copy { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; width: 100%; }
-.gs-copy pre, .gs-message { margin: 0; flex: 1 1 320px; min-width: 0; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font: 12.5px/1.6 var(--f-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
-.gs-keys { display: grid; gap: 10px; width: min(100%, 560px); }
-.gs-keys label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
-.gs-keys .f { width: 100%; box-sizing: border-box; font-family: var(--f-mono); }
+.gs-copy pre { margin: 0; flex: 1 1 320px; min-width: 0; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font: 12.5px/1.6 var(--f-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .gs-help { padding: 14px 18px; margin-top: 16px; }
 .gs-help h3 { margin: 0 0 8px; font-size: 15px; }
 .gs-help ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
