@@ -271,7 +271,7 @@ export default function GoogleSetupPage() {
                     ))}
                   </ul>
                   <p className="st-help">
-                    The dashboard only reads, sends what you write, and adds the events you make. It never deletes anything. After <strong>Update</strong>, Google lists them in two groups on the page, <strong>gmail.readonly</strong> under restricted scopes and the other two under sensitive scopes. That is expected: click <strong>Save</strong>.
+                    The dashboard only reads by itself. It sends an email, or adds, changes, deletes or answers an event, only when you do that in the dashboard. It never deletes an email. After <strong>Update</strong>, Google lists them in two groups on the page, <strong>gmail.readonly</strong> under restricted scopes and the other two under sensitive scopes. That is expected: click <strong>Save</strong>.
                   </p>
                   <Open href="https://console.cloud.google.com/auth/scopes">Open Data access</Open>
                   <Sketch

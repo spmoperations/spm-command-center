@@ -273,7 +273,7 @@ function GoogleSteps() {
       <Step title="Set up Google Cloud, and send Shruti the two keys" help="Done: the keys are in place on this site." />
       <Step
         title="Connect your Google account"
-        help="Google opens its own page: pick your account and click Allow, with every box ticked. The Command Center reads your inbox and your calendar, and sends an email or adds an event only when you do it here. It never deletes anything."
+        help="Google opens its own page: pick your account and click Allow, with every box ticked. The Command Center reads your inbox and your calendar. It sends an email, or adds, changes or answers an event, only when you do it here. It never deletes an email."
       >
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <a className="btn primary extlink" href="/api/google/start">

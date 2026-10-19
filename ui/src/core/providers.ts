@@ -13,7 +13,7 @@ export const PROVIDER_ABOUT: Record<Provider, string> = {
   slack: "Reads your messages and sends your replies from your own account.",
   telegram: "Reads your one-to-one chats and the group messages addressed to you, and sends your replies from your own account.",
   fathom: "Brings in your recorded calls with notes, transcript and action items.",
-  google: "Brings in your emails and your calendar. You can answer and write emails, and add events, from here. Nothing is sent or added unless you do it.",
+  google: "Brings in your emails and your calendar. You can answer and write emails, and add, change and answer events, from here. Nothing is sent or changed unless you do it.",
 };
 
 /**
@@ -53,7 +53,7 @@ export const SLACK_CREATE_APP_URL = `https://api.slack.com/apps?new_app=1&manife
 export const GOOGLE_PERMISSIONS: [string, string][] = [
   ["https://www.googleapis.com/auth/gmail.readonly", "Read your emails, so they show on the Emails tab"],
   ["https://www.googleapis.com/auth/gmail.send", "Send the emails and replies you write in the dashboard"],
-  ["https://www.googleapis.com/auth/calendar.events", "Read your calendar, and add the events you create in the dashboard"],
+  ["https://www.googleapis.com/auth/calendar.events", "Read your calendar, add, change and delete your own events, and answer invitations, when you do it in the dashboard"],
 ];
 
 export const FATHOM_API_ACCESS_URL = "https://fathom.video/customize#api-access-header";

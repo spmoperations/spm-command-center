@@ -20,7 +20,7 @@ export const GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
 export const GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
 /** Read the calendar's events. What accounts connected before events could be added have. */
 export const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly";
-/** Read and add events. */
+/** Read, add, change and delete events, and answer invitations. */
 export const CALENDAR_EDIT_SCOPE = "https://www.googleapis.com/auth/calendar.events";
 /** What Connect Google asks for. */
 export const GOOGLE_SCOPES = [GMAIL_SCOPE, GMAIL_SEND_SCOPE, CALENDAR_EDIT_SCOPE];

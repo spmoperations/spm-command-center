@@ -8,9 +8,9 @@ What it does:
 - **Meetings tab:** starts with the meetings for today and tomorrow, each with a Join link.
 
 More than one Google account can be connected. Emails can be answered and written, and events
-added to the calendar, from the dashboard. Nothing is sent or added unless the person does it
-there, and only while sending is switched on (`SENDING_ENABLED`). Nothing is archived, marked
-as read or deleted in Google.
+added, changed, deleted and answered, from the dashboard. Nothing is sent or changed unless the
+person does it there, and only while sending is switched on (`SENDING_ENABLED`). No email is
+archived, marked as read or deleted in Gmail.
 
 For the person connecting, it is one button: **Connections → Connect Google → pick the
 account → Allow.** A second account: **Add another Google account**, the same way.
@@ -149,10 +149,18 @@ emails** beside the account. Both also end the login on Google's side.
     there.
   - **New event** on the Calendar tab, or a click on an empty time, adds an event: title,
     time, length, guests and a Google Meet link. Google sends the guests its invitation.
+  - Clicking an event the owner made offers **Edit** and **Delete**. Guests keep their answers
+    and are told of the change or the cancellation. A repeating event changes one occurrence
+    at a time.
+  - An invitation from someone else offers **Going? Yes / Maybe / No**, and Google tells the
+    organizer. Only the organizer can change or delete someone else's event, as in Google
+    Calendar. A declined invitation leaves the calendar here.
+  - These need sending switched on too: someone else is always told.
+  - No extra permission is needed for changing, deleting or answering events: the
+    `calendar.events` permission covers them.
   - An account connected before these were added shows what it is missing on the Connections
     tab until it is connected again.
 - **Not built yet:**
-  - Changing or deleting events.
   - Attachments on emails sent from here.
   - Calendars other than each account's main one.
 
