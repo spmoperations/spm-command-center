@@ -45,10 +45,16 @@ export function cookieValue(request: Request, name: string): string | null {
   return null;
 }
 
-/** The address the dashboard was opened at, such as "http://127.0.0.1:3000", as the person typed it. */
+/**
+ * The address the dashboard was opened at, such as "http://127.0.0.1:3000", as the person typed
+ * it. On a host the scheme comes from the header it adds ("x-forwarded-proto"), since the
+ * request can reach the app as plain http behind it. Google's return address depends on this.
+ */
 export function siteOf(request: Request): string {
   const url = new URL(request.url);
-  return `${url.protocol}//${request.headers.get("host") ?? url.host}`;
+  const forwarded = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  const scheme = forwarded === "https" || forwarded === "http" ? forwarded : url.protocol.replace(":", "");
+  return `${scheme}://${request.headers.get("host") ?? url.host}`;
 }
 
 export const failed = (error: unknown, status = 400) => Response.json({ error: error instanceof Error ? error.message : String(error) }, { status });

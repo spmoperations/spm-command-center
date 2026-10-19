@@ -755,8 +755,8 @@ img.avatar { object-fit: cover; background: var(--surface-2); }
 .sk .hi { outline: 2px solid var(--warn); outline-offset: 2px; }
 .gs-check { display: grid; gap: 8px; border-left: 3px solid var(--warn); background: var(--warn-soft); border-radius: 6px; padding: 8px 12px; width: min(100%, 720px); box-sizing: border-box; }
 .gs-check p { margin: 0; font-size: 13.5px; }
-.gs-check.big { padding: 12px 14px; }
-.gs-check.big p { font-size: 14px; }
+.gs-check.lead { padding: 12px 14px; }
+.gs-check.lead p { font-size: 14px; }
 .sk-top { display: flex; gap: 12px; align-items: center; padding: 4px 2px 10px; border-bottom: 1px solid var(--line); font-size: 13px; }
 .sk-top b { font: 600 14px var(--f-display); white-space: nowrap; }
 .sk-project { border: 1px solid var(--line); border-radius: 99px; padding: 3px 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }

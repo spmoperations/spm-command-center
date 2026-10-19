@@ -275,6 +275,14 @@ describe("connecting Google", () => {
     expect(res.headers.get("set-cookie")).toMatch(/^cc_google_login=[^;]+; Path=\/api\/google; HttpOnly; SameSite=Lax; Max-Age=600$/);
   });
 
+  it("asks Google to send the person back to the https address of the live site, even when the request reaches the app as http", () => {
+    withKeys();
+    const request = new Request("http://spm-command-center.vercel.app/api/google/start", { headers: { host: "spm-command-center.vercel.app", cookie: signedIn(), "sec-fetch-site": "same-origin", "x-forwarded-proto": "https" } });
+    const res = googleLoginRedirect(request, NOW);
+    expect(new URL(res.headers.get("location")!).searchParams.get("redirect_uri")).toBe("https://spm-command-center.vercel.app/api/google/callback");
+    expect(res.headers.get("set-cookie")).toMatch(/; Secure$/);
+  });
+
   it("starts only from the dashboard's own button, for someone signed in, on a server that may use Google", () => {
     withKeys();
     const back = (res: Response) => [res.status, new URL(res.headers.get("location")!).searchParams.get("google_error")];

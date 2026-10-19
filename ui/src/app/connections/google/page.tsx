@@ -123,7 +123,7 @@ const PROJECT = "SPM Command Center";
  */
 function ProjectCheck({ big }: { big?: boolean }) {
   return (
-    <div className={`gs-check ${big ? "big" : ""}`}>
+    <div className={`gs-check ${big ? "lead" : ""}`}>
       <p>
         <strong>First, look at the top of the page:</strong> the project must say <strong>{PROJECT}</strong>. If it shows another name, or &quot;Select a project&quot;, click it and pick <strong>{PROJECT}</strong> in the list.
         {big && " Check it again on every page: each link below opens in whichever project is picked there, and anything done in another project will not work."}
@@ -377,7 +377,10 @@ export default function GoogleSetupPage() {
             and turn on <strong>Trust internal, domain-owned apps</strong>.
           </li>
           <li>
-            <strong>&quot;redirect_uri_mismatch&quot;:</strong> the address in part 5 is missing or different. Open the client under Clients and check it reads exactly <code>{callback}</code>.
+            <strong>&quot;redirect_uri_mismatch&quot;:</strong> the address in part 5 is missing or different. Open the client under Clients and check it reads exactly <code>{callback}</code>. Google also says a new or changed client can take a few minutes to work: if it was made just now, wait five minutes and try again.
+          </li>
+          <li>
+            <strong>Always open the dashboard at the same address</strong> (<code>{callback.replace("/api/google/callback", "")}</code>) when you connect: Google only sends you back to the address in part 5.
           </li>
           <li>
             <strong>Something else:</strong> send Shruti a screenshot in #spm-development.
