@@ -53,11 +53,16 @@ project you made in step 1.
    - Click **Add to table**, then **Update**, then **Save**.
 6. **Make the client.** https://console.cloud.google.com/auth/clients/create
    - Application type **Web application**, name `Local`.
-   - Under **Authorized redirect URIs**, add both of these, then **Create**:
+   - Under **Authorized redirect URIs**, add all three of these (one per **Add URI**), then
+     **Create**. The first two are for your machine, the third for the live site:
      ```
      http://127.0.0.1:3100/api/google/callback
      http://localhost:3100/api/google/callback
+     https://spm-command-center.vercel.app/api/google/callback
      ```
+     Leave **Authorized JavaScript origins** empty: the dashboard talks to Google from its
+     server, not from the browser. If Google asks for the live site's domain to be authorised,
+     add `spm-command-center.vercel.app` under **Branding → Authorized domains**.
    - Copy the **Client ID** and the **Client secret** straight away: newer projects show the
      secret in full only this once.
 7. **Give them to the app.** Open `ui/.env.local`. The two lines are already at the bottom.
