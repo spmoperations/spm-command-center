@@ -1037,8 +1037,19 @@ describe("an email shown as its sender laid it out", () => {
       const page = emailPage(withHtml(html));
       expect(page).toMatch(/^<!doctype html><html[^>]*><head>/);
       expect(page.match(/<!doctype/gi)).toHaveLength(1);
-      expect(page).toContain("html, body { height: auto !important; min-height: 0 !important; }");
+      expect(page).toContain("html, body { height: auto !important; min-height: 0 !important; color-scheme: only light !important; }");
     }
+  });
+
+  it("is drawn the light way even when the computer is set to dark: the sender's dark styles never switch on", () => {
+    const page = emailPage(
+      withHtml(`<html><head><style>.t{color:#3c4043}@media (prefers-color-scheme: dark){.t{color:#e8eaed}}@media only screen and (prefers-color-scheme:dark){.u{color:#eee}}@media (prefers-color-scheme: light){.v{color:#111}}</style></head><body><picture><source srcset="https://example.com/dark.png" media="(prefers-color-scheme: dark)"><img src="https://example.com/logo.png"></picture></body></html>`),
+    );
+    expect(page).not.toMatch(/prefers-color-scheme/i);
+    expect(page).toContain("@media (max-width: 0px){.t{color:#e8eaed}}");
+    expect(page).toContain("@media only screen and (max-width: 0px){.u{color:#eee}}");
+    expect(page).toContain("@media (min-width: 0px){.v{color:#111}}");
+    expect(page).toContain('media="(max-width: 0px)"');
   });
 
   it("shows an email with only plain text, with its links made clickable and nothing it says taken as HTML", () => {

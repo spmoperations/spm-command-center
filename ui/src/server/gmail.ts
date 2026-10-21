@@ -243,19 +243,27 @@ function stripActive(html: string): string {
 const QUOTES = ".gmail_quote, blockquote[type=cite], #divRplyFwdMsg, #divRplyFwdMsg ~ *, .yahoo_quoted, #appendonsend ~ * { display: none !important; }";
 
 /**
+ * An email's styles for a dark screen, switched off, and its styles for a light one always on.
+ * The email is drawn on white, as Gmail draws it, and a computer set to dark would otherwise
+ * switch on the sender's dark styles inside the frame and turn the text pale on that white.
+ * The conditions put in are always false and always true, so "screen and …" and "not …" still work.
+ */
+export const lightOnly = (html: string) => html.replace(/\(\s*prefers-color-scheme\s*:\s*dark\s*\)/gi, "(max-width: 0px)").replace(/\(\s*prefers-color-scheme\s*:\s*light\s*\)/gi, "(min-width: 0px)");
+
+/**
  * A whole page showing one email: its own HTML when it has some, made safe, or else its text with
  * the links made clickable. Links open in a new tab. It is drawn on white, as senders design for.
  */
 export function emailPage(message: GmailMessage): string {
   const html = htmlOf(message.payload);
   const body = html
-    ? stripActive(html)
+    ? lightOnly(stripActive(html))
     : `<pre class="cc-plain">${escapeHtml(bodyText(message.payload) || message.snippet || "").replace(/(https?:\/\/[^\s<>"]+)/g, '<a href="$1">$1</a>')}</pre>`;
   // The page has no height of its own, so the dashboard can read the email's height from it and
   // make the frame exactly that tall. It never scrolls up and down: the frame shows all of it.
   const head = `<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base target="_blank"><style>
-html { background: #fff; color-scheme: light; overflow-y: hidden; }
-html, body { height: auto !important; min-height: 0 !important; }
+html { background: #fff; overflow-y: hidden; }
+html, body { height: auto !important; min-height: 0 !important; color-scheme: only light !important; }
 body { margin: 0; padding: 14px 16px; color: #202124; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; overflow-wrap: anywhere; }
 img { max-width: 100%; height: auto; }
 table { max-width: 100%; }
