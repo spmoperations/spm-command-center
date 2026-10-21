@@ -48,22 +48,43 @@ interface Options {
   firstRead?: boolean;
 }
 
+/**
+ * Each attempt to connect is kept with the checks' runs, as "google-connect", and written to the
+ * host's log: a failure happens on the person's screen, and this is how it can be looked at later.
+ * Only the account's domain is kept, not its address.
+ */
+async function noteAttempt(db: Db | null, now: number, ok: boolean, message: string): Promise<void> {
+  console[ok ? "log" : "error"](`[command-center] google connect ${ok ? "worked" : "failed"}: ${message}`);
+  if (!db) return;
+  await db
+    .run("insert into job_runs (owner_id, job_id, started_at, finished_at, ok, items, message) values ($1, 'google-connect', $2, $2, $3, $4, $5)", [OWNER_ID, now, ok, ok ? 1 : 0, message.slice(0, 500)])
+    .catch(() => {});
+}
+
 export async function googleCallback(request: Request, { db: given, fetchImpl = fetch, now = Date.now(), firstRead = true }: Options = {}): Promise<Response> {
   const cleared = clearedGoogleCookie(isHttps(request));
-  if (!signedIn(request)) return backToConnections(request, { error: "Please sign in, then click Connect Google again." }, cleared);
+  if (!signedIn(request)) {
+    await noteAttempt(null, now, false, "not signed in to the dashboard on the way back from Google");
+    return backToConnections(request, { error: "Please sign in, then click Connect Google again." }, cleared);
+  }
+  let db: Db | null = given ?? null;
   try {
-    const db = given ?? (await ready());
-    const { email } = await finishGoogleLogin(db, OWNER_ID, new URL(request.url).searchParams, cookieValue(request, GOOGLE_LOGIN_COOKIE) ?? undefined, fetchImpl, now);
+    db ??= await ready();
+    const { email, scopes } = await finishGoogleLogin(db, OWNER_ID, new URL(request.url).searchParams, cookieValue(request, GOOGLE_LOGIN_COOKIE) ?? undefined, fetchImpl, now);
+    await noteAttempt(db, now, true, `an account @${email.split("@")[1] ?? "?"} connected, allowing ${scopes.map((s) => s.replace("https://www.googleapis.com/auth/", "")).join(" ")}`);
+    const connected = db;
     // The first read runs once the person is on their way back, so they are not kept waiting.
     if (firstRead) {
       after(async () => {
         for (const job of ["calendar-pull", "gmail-pull"] as const) {
-          await runNow(db, job).catch((error) => console.error(`[command-center] first ${job} failed:`, (error as Error).message));
+          await runNow(connected, job).catch((error) => console.error(`[command-center] first ${job} failed:`, (error as Error).message));
         }
       });
     }
     return backToConnections(request, { account: email }, cleared);
   } catch (error) {
-    return backToConnections(request, { error: said(error) }, cleared);
+    const message = said(error);
+    await noteAttempt(db, now, false, message);
+    return backToConnections(request, { error: message }, cleared);
   }
 }

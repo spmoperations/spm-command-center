@@ -389,6 +389,35 @@ describe("connecting Google", () => {
     expect(nothing.calls.find((c) => c.url === REVOKE)!.body.get("token")).toBe("r2");
   });
 
+  it("says which API is not switched on in the Google Cloud project, and keeps nothing", async () => {
+    withKeys();
+    const { url, cookie } = startGoogleLogin(SITE, false, NOW);
+    const google = googleSays({
+      [TOKEN]: () => [200, { access_token: "a", refresh_token: "r3", scope: `${GMAIL_SCOPE} ${CALENDAR_EDIT_SCOPE}` }],
+      [PROFILE]: () => [403, { error: { message: "Gmail API has not been used in project 1234 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/gmail.googleapis.com/overview?project=1234 then retry.", errors: [{ reason: "accessNotConfigured" }] } }],
+      [REVOKE]: () => [200, {}],
+    });
+    const sealed = /cc_google_login=([^;]*)/.exec(cookie)![1];
+    await expect(finishGoogleLogin(db, OWNER_ID, new URLSearchParams({ state: new URL(url).searchParams.get("state")!, code: "c" }), sealed, google.fetchImpl, NOW)).rejects.toThrow(
+      "The Gmail API is not switched on in the Google Cloud project. Do part 2 of the setup guide (Turn on Gmail and Calendar), then click Connect Google again.",
+    );
+    expect(google.calls.find((c) => c.url === REVOKE)!.body.get("token")).toBe("r3");
+    expect(await db.query("select email from google_accounts")).toEqual([]);
+  });
+
+  it("keeps each attempt to connect, and why one failed, without the account's address", async () => {
+    const session = signedIn();
+    await connect(JEREMY_MAIL, session);
+    withKeys();
+    await googleCallback(visit("/api/google/callback?state=wrong&code=good-code", [session, "cc_google_login=nope"]), { db, fetchImpl: googleFor(JEREMY_MAIL).fetchImpl, now: NOW + 2 * MINUTE, firstRead: false });
+    const attempts = await db.query<{ ok: boolean; message: string }>("select ok, message from job_runs where job_id = 'google-connect' order by started_at");
+    expect(attempts).toEqual([
+      { ok: true, message: `an account @example.com connected, allowing ${["gmail.readonly", "calendar.events.readonly"].join(" ")}` },
+      { ok: false, message: "That Google login has timed out or did not start here. Click Connect Google again." },
+    ]);
+    expect(JSON.stringify(attempts)).not.toContain("jeremy@");
+  });
+
   it("says plainly when the address or the keys are not the ones set up in Google Cloud", async () => {
     withKeys();
     for (const [error, said] of [["redirect_uri_mismatch", `Add ${SITE}/api/google/callback to the OAuth client's Authorized redirect URIs`], ["invalid_client", "Google did not accept the app keys"]]) {

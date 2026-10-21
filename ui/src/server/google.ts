@@ -214,9 +214,14 @@ export async function finishGoogleLogin(
     throw new GoogleSaid("Neither Gmail nor Calendar was allowed, so nothing was connected. Click Connect Google again and tick the boxes.");
   }
 
-  const who = await whoIs(fetchImpl, body.access_token, scopes);
+  const refresh = body.refresh_token;
+  const who = await whoIs(fetchImpl, body.access_token, scopes).catch(async (error) => {
+    // Nothing is kept, so the login Google handed over is ended.
+    await revoke(fetchImpl, refresh);
+    throw error;
+  });
   if (!who.email) {
-    await revoke(fetchImpl, body.refresh_token);
+    await revoke(fetchImpl, refresh);
     throw new GoogleSaid("Google did not say which account this is, so nothing was connected. Click Connect Google again.");
   }
   await db.run(
@@ -232,15 +237,20 @@ export async function finishGoogleLogin(
  * new ones. With only Calendar allowed, the address is the main calendar's id.
  */
 async function whoIs(fetchImpl: Fetch, access: string, scopes: string[]): Promise<{ email: string; history: string | null }> {
+  const gmail = googleCan(scopes).gmail;
   try {
-    if (googleCan(scopes).gmail) {
+    if (gmail) {
       const profile = (await call(fetchImpl, access, `${GMAIL}/profile`)) as { emailAddress?: string; historyId?: string };
       return { email: String(profile.emailAddress ?? "").toLowerCase(), history: profile.historyId ? String(profile.historyId) : null };
     }
     const list = (await call(fetchImpl, access, `${CALENDAR}/events?maxResults=1`)) as { summary?: string };
     return { email: String(list.summary ?? "").toLowerCase(), history: null };
-  } catch {
-    return { email: "", history: null };
+  } catch (error) {
+    // The most likely snag in a new Google Cloud project: the API was never switched on.
+    if (error instanceof GoogleError && error.status === 403 && /has not been used|is disabled|SERVICE_DISABLED|accessNotConfigured/i.test(error.message)) {
+      throw new GoogleSaid(`The ${gmail ? "Gmail API" : "Google Calendar API"} is not switched on in the Google Cloud project. Do part 2 of the setup guide (Turn on Gmail and Calendar), then click Connect Google again.`);
+    }
+    throw new GoogleSaid(`Google did not say which account this is (${error instanceof Error ? error.message : String(error)}), so nothing was connected. Click Connect Google again.`);
   }
 }
 
