@@ -48,12 +48,6 @@ export const TARGETS: boolean = false;
  */
 export const PERSONAL_SIDE: boolean = false;
 
-/**
- * Tags on emails (Payment, Subscription, Newsletter) and the filter by tag on the Emails tab
- * are switched off for now, until enough email has come in to check them against. They are
- * still worked out, so changing this to `true` shows them, on the emails already read too.
- */
-export const EMAIL_TAGS_SHOWN: boolean = false;
 export const SOURCE_NAME: Record<Source, string> = { slack: "Slack", telegram: "Telegram", gmail: "Gmail" };
 /** The tab a conversation is read on: emails have a tab of their own. */
 export const conversationPage = (id: string) => (id.startsWith("gmail:") ? "/emails" : "/inbox");

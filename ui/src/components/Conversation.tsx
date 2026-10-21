@@ -9,15 +9,15 @@ import { tidyEmailText } from "@/core/email-text";
 import { EMAIL_TAG_NAME } from "@/core/email-tags";
 import { Avatar, MessageText, Pictures, Reactions } from "@/components/MessageText";
 import { PrioritySelect } from "@/components/bits";
-import { EMAIL_TAGS_SHOWN, INBOX_DAYS, LINE_NAME, MODE_NAME, MODES, PERSONAL_SIDE, SOURCE_NAME } from "@/core/config";
+import { INBOX_DAYS, LINE_NAME, MODE_NAME, MODES, PERSONAL_SIDE, PRIORITIES, PRIORITY_NAME, SOURCE_NAME } from "@/core/config";
 import { ago, stamp } from "@/core/dates";
 import { plainPreview } from "@/core/message-format";
 import { requestSummary } from "@/core/requests";
 import { groupByThread, threadToAnswer } from "@/core/threads";
 import { canAssignInChat } from "@/core/delegation";
-import type { Conversation, Mode, ThreadMessage } from "@/core/types";
+import type { Conversation, ConversationChange, Mode, Priority, ThreadMessage } from "@/core/types";
 import {
-  composeEmail, conversationToTask, delegateConversation, markConversationDone, openConversation, readThreads, replyEmail, restoreConversation, sendReply,
+  composeEmail, conversationToTask, delegateConversation, editConversations, markConversationDone, openConversation, readThreads, replyEmail, restoreConversation, sendReply,
   setConversationMode, setConversationPriority, toast, type App,
 } from "@/store/store";
 
@@ -428,7 +428,85 @@ export function NewEmail({ app, onClose }: { app: App; onClose(): void }) {
  * One conversation: who, where, the latest message, and what can be done with it. A cleared
  * one can only be read and put back.
  */
-export function MessageRow({ c, app, open, draft, onDraft, cleared }: { c: Conversation; app: App; open: boolean; draft: string; onDraft(text: string): void; cleared?: boolean }) {
+/** `picked` with `id` added or taken out. */
+export const togglePick = (picked: Set<string>, id: string, on: boolean) => {
+  const next = new Set(picked);
+  if (on) next.add(id);
+  else next.delete(id);
+  return next;
+};
+
+/**
+ * Changing many rows at once: tick them, or tick the box here for all of them, then mark them
+ * done, put them back, or set their priority. `shown` is what the list shows now: only those
+ * of the ticked that are still shown are changed.
+ */
+export function BulkBar({ shown, picked, onPick, cleared }: { shown: Conversation[]; picked: Set<string>; onPick(ids: Set<string>): void; cleared?: boolean }) {
+  if (!shown.length) return null;
+  const ids = shown.filter((c) => picked.has(c.id)).map((c) => c.id);
+  const all = ids.length === shown.length;
+  const apply = (change: ConversationChange) => {
+    editConversations(ids, change);
+    onPick(new Set());
+  };
+  return (
+    <div className="bulk">
+      <label className="inline-check">
+        <input
+          type="checkbox"
+          checked={all}
+          ref={(box) => {
+            if (box) box.indeterminate = ids.length > 0 && !all;
+          }}
+          onChange={() => onPick(new Set(all ? [] : shown.map((c) => c.id)))}
+        />
+        {ids.length ? `${ids.length} of ${shown.length} selected` : `Select all ${shown.length}`}
+      </label>
+      {ids.length > 0 && (
+        <div className="bulk-acts">
+          {cleared ? (
+            <button className="btn" onClick={() => apply({ done: false })}>
+              Restore
+            </button>
+          ) : (
+            <>
+              <button className="btn" onClick={() => apply({ done: true })}>
+                Mark done
+              </button>
+              <select className="f" value="" aria-label="Set the priority of the selected" onChange={(e) => e.target.value && apply({ pri: e.target.value as Priority })}>
+                <option value="">Set priority…</option>
+                {PRIORITIES.map((p) => (
+                  <option key={p} value={p}>
+                    {PRIORITY_NAME[p]}
+                  </option>
+                ))}
+              </select>
+              {PERSONAL_SIDE && (
+                <select className="f" value="" aria-label="Move the selected" onChange={(e) => e.target.value && apply({ mode: e.target.value as Mode })}>
+                  <option value="">Move to…</option>
+                  {MODES.map((m) => (
+                    <option key={m} value={m}>
+                      {MODE_NAME[m]}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </>
+          )}
+          <button className="linkbtn" onClick={() => onPick(new Set())}>
+            Clear selection
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function MessageRow({ c, app, open, draft, onDraft, cleared, picked, onPick }: {
+  c: Conversation; app: App; open: boolean; draft: string; onDraft(text: string): void; cleared?: boolean;
+  /** Ticked, to be changed with others at once (see BulkBar). Without `onPick` there is no box to tick. */
+  picked?: boolean; onPick?(on: boolean): void;
+}) {
   const [delegating, setDelegating] = useState(false);
   const row = useRef<HTMLDivElement>(null);
   // Arriving from another tab's "Reply" link: bring the opened conversation into view.
@@ -439,8 +517,11 @@ export function MessageRow({ c, app, open, draft, onDraft, cleared }: { c: Conve
   const last = c.thread[c.thread.length - 1];
   const canDelegate = c.mode === "professional";
   return (
-    <div className={`msg ${c.replied ? "replied" : ""} ${open || delegating ? "open" : ""}`} ref={row}>
-      <Avatar name={c.from} src={c.source === "telegram" ? c.avatar : app.state.avatars[c.from]} />
+    <div className={`msg ${c.replied ? "replied" : ""} ${open || delegating ? "open" : ""} ${picked ? "picked" : ""}`} ref={row}>
+      <div className="msg-lead">
+        {onPick && <input type="checkbox" className="pick" checked={Boolean(picked)} onChange={(e) => onPick(e.target.checked)} aria-label={`Select ${c.from}: ${c.ctx}`} />}
+        <Avatar name={c.from} src={c.source === "telegram" ? c.avatar : app.state.avatars[c.from]} />
+      </div>
       <div style={{ minWidth: 0 }}>
         <div className="line1">
           <span className="who">{c.from}</span>
@@ -451,7 +532,7 @@ export function MessageRow({ c, app, open, draft, onDraft, cleared }: { c: Conve
           </span>
           {c.important && <span className="chip important">Important</span>}
           {c.tagged && <span className="chip me">Tagged you</span>}
-          {EMAIL_TAGS_SHOWN && c.tags?.map((t) => (
+          {c.tags?.map((t) => (
             <span key={t} className={`chip etag etag-${t}`}>
               {EMAIL_TAG_NAME[t]}
             </span>

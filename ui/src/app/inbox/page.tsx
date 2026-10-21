@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { MessageRow } from "@/components/Conversation";
+import { BulkBar, MessageRow, togglePick } from "@/components/Conversation";
 import { PriPill, Seg } from "@/components/bits";
 import { INBOX_DAYS, liveSources, MODE_NAME, MODES, PERSONAL_SIDE, PRIORITIES, PRIORITY_NAME, SOURCE_NAME, SOURCE_PROVIDER } from "@/core/config";
 import type { Line, Priority, Source } from "@/core/types";
@@ -16,6 +16,7 @@ export default function InboxPage() {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   /** Looking at what was cleared, to read a chat or put one back. */
   const [showCleared, setShowCleared] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
   if (!app) return null;
   const { state, ui } = app;
   const mode = ui.mode;
@@ -63,6 +64,7 @@ export default function InboxPage() {
               title="See the chats you cleared, and put one back in the inbox"
               onClick={() => {
                 openConversation(null);
+                setPicked(new Set());
                 setShowCleared(!viewingCleared);
               }}
             >
@@ -80,9 +82,20 @@ export default function InboxPage() {
               {cleared} {cleared === 1 ? "conversation" : "conversations"}. Open one to read it, or click Restore to put it back in the inbox. A restored chat stays for {INBOX_DAYS} days, or longer if something new arrives.
             </span>
           </div>
+          <BulkBar shown={clearedList} picked={picked} onPick={setPicked} cleared />
           <div className="panel">
             {clearedList.map((c) => (
-              <MessageRow key={c.id} c={c} app={app} cleared open={ui.openConversation === c.id} draft={drafts[c.id] ?? ""} onDraft={(text) => setDrafts({ ...drafts, [c.id]: text })} />
+              <MessageRow
+                key={c.id}
+                c={c}
+                app={app}
+                cleared
+                open={ui.openConversation === c.id}
+                draft={drafts[c.id] ?? ""}
+                onDraft={(text) => setDrafts({ ...drafts, [c.id]: text })}
+                picked={picked.has(c.id)}
+                onPick={(on) => setPicked(togglePick(picked, c.id, on))}
+              />
             ))}
           </div>
         </div>
@@ -117,6 +130,8 @@ export default function InboxPage() {
         </div>
       )}
 
+      {!viewingCleared && <BulkBar shown={groups.flatMap((g) => g.items)} picked={picked} onPick={setPicked} />}
+
       {!viewingCleared && groups.map(({ p, items }) => (
         <div className="inbox-group" key={p}>
           <div className="group-head">
@@ -127,7 +142,16 @@ export default function InboxPage() {
           </div>
           <div className="panel">
             {items.map((c) => (
-              <MessageRow key={c.id} c={c} app={app} open={ui.openConversation === c.id} draft={drafts[c.id] ?? ""} onDraft={(text) => setDrafts({ ...drafts, [c.id]: text })} />
+              <MessageRow
+                key={c.id}
+                c={c}
+                app={app}
+                open={ui.openConversation === c.id}
+                draft={drafts[c.id] ?? ""}
+                onDraft={(text) => setDrafts({ ...drafts, [c.id]: text })}
+                picked={picked.has(c.id)}
+                onPick={(on) => setPicked(togglePick(picked, c.id, on))}
+              />
             ))}
           </div>
         </div>

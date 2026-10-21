@@ -132,6 +132,18 @@ emails** beside the account. Both also end the login on Google's side.
     emails the account is only copied on come in as **Low**.
   - The subject is the row's title, and the quoted history under a reply is cut off.
   - With more than one account, each row says which account it came to.
+
+  The Emails tab has a view for each tag (plain rules in `ui/src/core/email-tags.ts`, no AI):
+  - **Must respond:** a person wrote to the account (in Primary, not a mailing, the account
+    in To) and the latest email is theirs. A company address such as billing@ or support@,
+    or a payment service, does not count. Answering clears it.
+  - **Payments:** invoices, receipts, payouts and renewals: by the sending service, the
+    subject, or payment words with an amount in the text.
+  - **Newsletters:** mailings and Gmail's Promotions, Social and Forums tabs, unless about money.
+  - **Other:** none of these. An email can have two tags, such as a person sending an invoice.
+
+  Tick several rows (or the box above the list for all of them) to mark them done, put them
+  back, or set their priority at once. The Inbox has the same.
 - **Calendar:** the main calendar of each connected account, from the start of last week to
   three weeks ahead.
   - Shown as Google Calendar shows them: meetings, all-day events, focus time (striped) and

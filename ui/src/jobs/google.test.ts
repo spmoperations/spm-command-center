@@ -874,8 +874,21 @@ describe("adding a calendar event", () => {
 // ---------- Tags ----------
 
 describe("email tags", () => {
-  const tags = (o: { subject?: string; text?: string; senders?: string[]; bulk?: boolean; tab?: string }) =>
-    emailTags({ subject: o.subject ?? "Hello", texts: [o.text ?? "Hi there"], senders: o.senders ?? ["dana@example.com"], bulk: o.bulk ?? false, tab: o.tab });
+  const tags = (o: { subject?: string; text?: string; senders?: string[]; bulk?: boolean; tab?: string; direct?: boolean; answered?: boolean }) =>
+    emailTags({ subject: o.subject ?? "Hello", texts: [o.text ?? "Hi there"], senders: o.senders ?? ["dana@example.com"], bulk: o.bulk ?? false, tab: o.tab, direct: o.direct ?? false, answered: o.answered ?? false });
+
+  it("tags Must respond: a person wrote to the owner and has had no answer since", () => {
+    expect(tags({ direct: true })).toEqual(["respond"]);
+    expect(tags({ direct: true, answered: true })).toEqual([]);
+    // Copied in, a mailing, or another Gmail tab: not written to the owner (see gmailPull).
+    expect(tags({ direct: false })).toEqual([]);
+    // A person sending an invoice is waiting on both.
+    expect(tags({ direct: true, subject: "Invoice #88 for October" })).toEqual(["respond", "payment"]);
+    // A company's address or a payment service is not a person waiting.
+    expect(tags({ direct: true, senders: ["billing@tools.example.com"], subject: "Your plan" })).toEqual(["payment"]);
+    expect(tags({ direct: true, senders: ["support@example.com"] })).toEqual([]);
+    expect(tags({ direct: true, senders: ["dana@example.com", "receipts@stripe.com"] })).toEqual(["payment"]);
+  });
 
   it("tags payments by the subject, by a payment service sending it, or by money in a payment email", () => {
     expect(tags({ subject: "Your receipt from Harbor Realty" })).toEqual(["payment"]);
@@ -888,14 +901,14 @@ describe("email tags", () => {
     expect(tags({ subject: "Quick update", text: "We talked about payment terms." })).toEqual([]);
   });
 
-  it("tags subscriptions, but not a newsletter for saying where to unsubscribe", () => {
-    expect(tags({ subject: "Your subscription renews on Nov 1" })).toEqual(["subscription"]);
-    expect(tags({ subject: "Your free trial ends in 3 days" })).toEqual(["subscription"]);
-    expect(tags({ subject: "Heads up", text: "Your plan will automatically renew next week." })).toEqual(["subscription"]);
+  it("counts subscriptions as payments, but not a newsletter for saying where to unsubscribe", () => {
+    expect(tags({ subject: "Your subscription renews on Nov 1" })).toEqual(["payment"]);
+    expect(tags({ subject: "Your free trial ends in 3 days" })).toEqual(["payment"]);
+    expect(tags({ subject: "Heads up", text: "Your plan will automatically renew next week." })).toEqual(["payment"]);
     const footer = "This week's top stories.\nYou are receiving this because you subscribed. Manage your subscription or unsubscribe here.";
     expect(tags({ subject: "The weekly digest", text: footer, bulk: true })).toEqual(["newsletter"]);
-    // A renewal receipt is both, and not a newsletter.
-    expect(tags({ subject: "Receipt for your subscription renewal", bulk: true })).toEqual(["payment", "subscription"]);
+    // A renewal receipt is a payment, not a newsletter.
+    expect(tags({ subject: "Receipt for your subscription renewal", bulk: true })).toEqual(["payment"]);
   });
 
   it("tags newsletters: mailings, and Gmail's Promotions, Social and Forums tabs", () => {
@@ -912,9 +925,15 @@ describe("email tags", () => {
     google.deliver(mail("s1", "t2", { from: "Tools <billing@example.com>", subject: "Your free trial ends tomorrow", text: "Pick a plan", at: NOW - 2 * MINUTE }));
     google.deliver(mail("n1", "t3", { from: "News <news@example.com>", subject: "This week", text: "Read more\nUnsubscribe", at: NOW - MINUTE, headers: [["List-Unsubscribe", "<https://example.com/u>"]] }));
     google.deliver(mail("d1", "t4", { from: DANA, subject: "Thursday", text: "Can we move it?", at: NOW }));
+    google.deliver(mail("c1", "t5", { from: DANA, to: "Sam Lee <sam@example.com>", cc: JEREMY, subject: "Notes", text: "For the record", at: NOW }));
     await gmailPull(ctx(), [account()], opener(google));
     const rows = (await loadState(db, OWNER_ID, new Date(NOW))).inbox.filter((c) => c.source === "gmail");
-    expect(["t1", "t2", "t3", "t4"].map((t) => rows.find((c) => c.id.endsWith(`:${t}`))!.tags)).toEqual([["payment"], ["subscription"], ["newsletter"], []]);
+    const tagsOf = (t: string) => rows.find((c) => c.id.endsWith(`:${t}`))!.tags;
+    // Dana wrote to Jeremy and waits for an answer. Copied in on t5, he is not the one asked.
+    expect(["t1", "t2", "t3", "t4", "t5"].map(tagsOf)).toEqual([["payment"], ["payment"], ["newsletter"], ["respond"], []]);
+    // Answered, it no longer waits on him.
+    await applyAction(db, "replyEmail", [rows.find((c) => c.id.endsWith(":t4"))!.id, "Friday works", false, false], OWNER_ID, new Date(NOW + MINUTE));
+    expect((await loadState(db, OWNER_ID, new Date(NOW + MINUTE))).inbox.find((c) => c.id.endsWith(":t4"))!.tags).toEqual([]);
     // Chats carry no email tags.
     expect((await loadState(db, OWNER_ID, new Date(NOW))).inbox.filter((c) => c.source !== "gmail").every((c) => c.tags === undefined)).toBe(true);
   });

@@ -4,12 +4,12 @@
 // /api/state, and every action below is one request to the server, which answers with the
 // fresh state. Nothing but small screen preferences lives only in the browser.
 import { useSyncExternalStore } from "react";
-import { PERSONAL_SIDE } from "@/core/config";
+import { MODE_NAME, PERSONAL_SIDE, PRIORITY_NAME } from "@/core/config";
 import { isoDay, pad } from "@/core/dates";
 import { jobById } from "@/core/jobs";
 import { PROVIDER_NAME } from "@/core/providers";
 import type { AssignWhere } from "@/core/delegation";
-import type { AppState, JobId, Mode, Person, Priority, Provider, Rule, Suggestion, Task } from "@/core/types";
+import type { AppState, ConversationChange, JobId, Mode, Person, Priority, Provider, Rule, Suggestion, Task } from "@/core/types";
 
 export interface UiState {
   /** Which side of the dashboard is showing. Remembered in this browser. */
@@ -318,6 +318,16 @@ export function sendReply(id: string, text: string, markDone: boolean, thread: s
 
 export const markConversationDone = (id: string) => void act("markConversationDone", [id], "Marked done", inInbox(id, { done: true }));
 export const restoreConversation = (id: string) => void act("restoreConversation", [id], "Back in the inbox", inInbox(id, { done: false }));
+/** The same change to every conversation picked on screen. */
+export function editConversations(ids: string[], change: ConversationChange) {
+  if (!ids.length) return;
+  const n = ids.length === 1 ? "1 conversation" : `${ids.length} conversations`;
+  const said =
+    change.done === true ? `${n} marked done` : change.done === false ? `${n} back in the inbox` : change.pri ? `${n} set to ${PRIORITY_NAME[change.pri]}` : `${n} moved to ${MODE_NAME[change.mode ?? "professional"]}`;
+  const patch = { ...(change.done !== undefined && { done: change.done }), ...(change.pri && { pri: change.pri, manualPri: true }), ...(change.mode && { mode: change.mode }) };
+  const picked = new Set(ids);
+  void act("editConversations", [ids, change], said, (s) => ({ ...s, inbox: s.inbox.map((c) => (picked.has(c.id) ? { ...c, ...patch } : c)) }));
+}
 export const conversationToTask = (id: string, today: string) => void act("conversationToTask", [id, today], "Task added, due today", inInbox(id, { done: true }));
 
 const delegated = () => (app?.state.sendingEnabled ? "Assigned. They have been told on Slack." : "Assigned. Their Slack message waits in the outbox, because sending is off.");

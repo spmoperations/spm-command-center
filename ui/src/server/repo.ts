@@ -1,14 +1,14 @@
 // Reads and writes for the dashboard. `loadState` builds what the screens show; `ACTIONS`
 // holds every change a person can make. Jobs write through their own modules in `src/jobs`.
 import crypto from "node:crypto";
-import { INBOX_DAYS, PERSONAL } from "@/core/config";
+import { INBOX_DAYS, PERSONAL, PRIORITIES } from "@/core/config";
 import { assignmentText, canAssignInChat, CHANNEL_PICK, SLACK_PICK, type AssignWhere } from "@/core/delegation";
 import { addDays, isoDay, monthKey, pad } from "@/core/dates";
 import { clampInterval, defaultJobSettings, JOBS } from "@/core/jobs";
 import { requestSummary } from "@/core/requests";
 import { applyRules } from "@/core/rules";
 import type {
-  AppState, Conversation, FocusBoard, JobId, JobStatus, Meeting, MessagePicture, Metric, Mode, Person, Priority, Provider, Reaction, Rule, Source, Suggestion, Task, CalendarItem,
+  AppState, Conversation, ConversationChange, FocusBoard, JobId, JobStatus, Meeting, MessagePicture, Metric, Mode, Person, Priority, Provider, Reaction, Rule, Source, Suggestion, Task, CalendarItem,
 } from "@/core/types";
 import { aiConfigured } from "./ai";
 import { emailTags, type TaggedEmail } from "@/core/email-tags";
@@ -163,7 +163,7 @@ async function loadConversations(db: Db, ownerId: string): Promise<Conversation[
   const mail = new Map<string, TaggedEmail>();
   for (const m of messages) {
     if (m.email && !m.me) {
-      const seen = mail.get(m.conversation_id) ?? { subject: "", texts: [], senders: [], bulk: true, tab: undefined };
+      const seen = mail.get(m.conversation_id) ?? { subject: "", texts: [], senders: [], bulk: true, tab: undefined, direct: false, answered: false };
       seen.texts.push(m.body);
       if (m.sender_id) seen.senders.push(m.sender_id);
       seen.bulk = seen.bulk && Boolean(m.email.bulk);
@@ -188,7 +188,7 @@ async function loadConversations(db: Db, ownerId: string): Promise<Conversation[
       pri: r.pri, line: r.line, mode: r.mode, project: r.project, done: r.done, replied: r.replied, manualPri: r.manual_pri || undefined, manualMode: r.manual_mode || undefined,
       root: r.thread_ts ?? undefined,
       important: important.has(r.id) || undefined,
-      tags: r.source === "gmail" ? emailTags({ ...(mail.get(r.id) ?? { texts: [r.last_text], senders: [], bulk: false }), subject: r.ctx }) : undefined,
+      tags: r.source === "gmail" ? emailTags({ ...(mail.get(r.id) ?? { texts: [r.last_text], senders: [], bulk: false }), subject: r.ctx, direct: r.direct, answered: r.replied }) : undefined,
       autoCleared: (r.done && r.auto_done) || undefined,
       // A one-to-one chat shows the other person. A group shows whoever wrote last.
       avatar: r.source !== "telegram" ? undefined : r.direct && faces.has(r.external_id) ? avatarUrl(r.external_id) : thread.findLast((m) => !m.me)?.avatar,
@@ -696,6 +696,9 @@ async function conversation(c: ActionContext, id: string) {
   return row;
 }
 
+/** The most conversations one change made on screen may touch. */
+const BULK_MOST = 500;
+
 // Each action is one change a person makes on screen. Arguments arrive from the browser as JSON.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promise<void>> = {
@@ -760,6 +763,25 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
   async restoreConversation(c, id: string) {
     // Its age counts from now, so the rule that clears old conversations leaves it for a few days.
     await c.db.run("update conversations set done = false, auto_done = false, restored_at = $3 where owner_id = $1 and id = $2", [c.ownerId, id, c.now.getTime()]);
+  },
+  /**
+   * The same change to many conversations at once, picked on screen: done, back in the inbox,
+   * a priority or a side, each as the one-at-a-time action does it. Only the owner's own change.
+   */
+  async editConversations(c, ids: unknown, change: ConversationChange) {
+    const list = Array.isArray(ids) ? [...new Set(ids.filter((id): id is string => typeof id === "string"))] : [];
+    if (!list.length) return;
+    if (list.length > BULK_MOST) throw new Error(`Pick at most ${BULK_MOST} at a time.`);
+    if (change.pri !== undefined && !PRIORITIES.includes(change.pri)) throw new Error("That priority does not exist.");
+    const picked = "owner_id = $1 and id in (select jsonb_array_elements_text($2::jsonb))";
+    const args = [c.ownerId, JSON.stringify(list)];
+    if (change.done === true) await c.db.run(`update conversations set done = true, auto_done = false where ${picked}`, args);
+    if (change.done === false) await c.db.run(`update conversations set done = false, auto_done = false, restored_at = $3 where ${picked}`, [...args, c.now.getTime()]);
+    if (change.pri) await c.db.run(`update conversations set pri = $3, manual_pri = true where ${picked}`, [...args, change.pri]);
+    if (change.mode) {
+      await c.db.run(`update conversations set mode = $3, manual_mode = true where ${picked}`, [...args, asMode(change.mode)]);
+      await c.db.run("update suggestions set mode = $3 where owner_id = $1 and src_type = 'message' and status = 'new' and src_id in (select jsonb_array_elements_text($2::jsonb))", [...args, asMode(change.mode)]);
+    }
   },
   async conversationToTask(c, id: string, today: string) {
     const conv = await conversation(c, id);

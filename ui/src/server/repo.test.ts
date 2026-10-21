@@ -141,6 +141,32 @@ describe("inbox actions", () => {
     expect(await cleared()).toEqual(["slack:C1"]);
   });
 
+  it("changes the picked conversations at once, and only the owner's", async () => {
+    await db.run("insert into users (id, name, email, created_at) values ('u_other', 'Someone Else', 'other@example.com', $1)", [NOW]);
+    await db.run("insert into conversations (id, owner_id, source, external_id, from_name, ctx, last_text, last_at) values ('slack:X1', 'u_other', 'slack', 'X1', 'Ana', 'Direct message', 'Hi', $1)", [NOW]);
+    const rows = async () => Object.fromEntries((await db.query<{ id: string; done: boolean; pri: string; manual_pri: boolean; restored_at: number | null }>("select id, done, pri, manual_pri, restored_at from conversations order by id")).map((r) => [r.id, r]));
+    const before = await rows();
+
+    await act("editConversations", ["slack:D1", "slack:C1", "slack:X1", "slack:D1", 7], { pri: "high" });
+    let after = await rows();
+    expect([after["slack:D1"], after["slack:C1"]].map((r) => [r.pri, r.manual_pri])).toEqual([["high", true], ["high", true]]);
+    // Someone else's row, named among them, is left as it was.
+    expect(after["slack:X1"]).toEqual(before["slack:X1"]);
+
+    await act("editConversations", ["slack:D1", "slack:C1"], { done: true });
+    expect((await state()).inbox.filter((c) => c.done).map((c) => c.id).sort()).toEqual(["slack:C1", "slack:D1"]);
+    await act("editConversations", ["slack:C1"], { done: false });
+    after = await rows();
+    expect([after["slack:C1"].done, Number(after["slack:C1"].restored_at), after["slack:D1"].done]).toEqual([false, NOW, true]);
+
+    await expect(act("editConversations", ["slack:D1"], { pri: "urgent" })).rejects.toThrow("That priority does not exist.");
+    await expect(act("editConversations", Array.from({ length: 501 }, (_, i) => `slack:N${i}`), { done: true })).rejects.toThrow("at most 500");
+    // Nothing picked changes nothing.
+    await act("editConversations", [], { done: true });
+    await act("editConversations", "slack:D1", { done: false });
+    expect((await rows())["slack:D1"].done).toBe(true);
+  });
+
   it("saves a reply in the thread and queues it for the same Slack conversation", async () => {
     await act("sendReply", "slack:D1", "Sounds good, swapping it today.", false);
     const s = await state();

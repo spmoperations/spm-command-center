@@ -2,7 +2,7 @@ export type Source = "slack" | "telegram" | "gmail";
 /** Services a person connects themselves, from the Connections tab. */
 export type Provider = "slack" | "telegram" | "fathom" | "google";
 /** What an email is about, for the filter on the Emails tab (see core/email-tags). */
-export type EmailTag = "payment" | "subscription" | "newsletter";
+export type EmailTag = "respond" | "payment" | "newsletter";
 export type Priority = "high" | "mid" | "low";
 /** Business line of a conversation: the agency or the consulting offer. */
 export type Line = "agency" | "consulting";
@@ -47,6 +47,14 @@ export interface ThreadMessage {
   reactions?: Reaction[];
   /** The sender's profile picture, when it is kept by the dashboard itself (Telegram). Slack's come from `AppState.avatars`. */
   avatar?: string;
+}
+
+/** One change made to many conversations at once, picked on screen. */
+export interface ConversationChange {
+  /** true marks them done, false puts them back in the inbox. */
+  done?: boolean;
+  pri?: Priority;
+  mode?: Mode;
 }
 
 export interface Conversation {
