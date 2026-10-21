@@ -1013,6 +1013,15 @@ describe("an email shown as its sender laid it out", () => {
     for (const gone of ["<script", "steal()</script>", "onload=", "onerror=", "javascript:", "<iframe", "<form", "<input", 'http-equiv="refresh"']) expect(page).not.toContain(gone);
   });
 
+  it("is always laid out as a modern page with no height of its own, so its frame can be made as tall as the email", () => {
+    for (const html of ["<html><body><table><tr><td>Hi</td></tr></table></body></html>", '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"><html><head></head><body>Hi</body></html>', "<p>Hi</p>"]) {
+      const page = emailPage(withHtml(html));
+      expect(page).toMatch(/^<!doctype html><html[^>]*><head>/);
+      expect(page.match(/<!doctype/gi)).toHaveLength(1);
+      expect(page).toContain("html, body { height: auto !important; min-height: 0 !important; }");
+    }
+  });
+
   it("shows an email with only plain text, with its links made clickable and nothing it says taken as HTML", () => {
     const page = emailPage(mail("p1", "t1", { from: DANA, text: "See https://example.com/deck and <b>this</b>", at: NOW }));
     expect(page).toContain('<pre class="cc-plain">See <a href="https://example.com/deck">https://example.com/deck</a> and &lt;b&gt;this&lt;/b&gt;</pre>');

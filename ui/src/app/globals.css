@@ -160,7 +160,7 @@ select.f, input.f, textarea.f { background: var(--surface); border: 1px solid va
 .msg .acts .btn { padding: 4px 10px; font-size: 12.5px; }
 .msg.replied .who::after { content: " · Replied"; color: var(--good); font-weight: 600; font-size: 12.5px; }
 .msg.open { background: var(--surface-2); }
-.thread { grid-column: 1 / -1; display: grid; gap: 12px; padding-top: 4px; min-width: 0; }
+.thread { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; padding-top: 4px; min-width: 0; }
 .bubbles { display: flex; flex-direction: column; gap: 8px; max-height: 340px; overflow-y: auto; padding: 4px 2px; }
 .bubble { max-width: min(78%, 560px); padding: 8px 12px; border-radius: 12px; font-size: 14.5px; background: var(--surface); border: 1px solid var(--line); align-self: flex-start; overflow-wrap: anywhere; }
 .bubble.me { align-self: flex-end; background: var(--accent-soft); border-color: transparent; }
@@ -771,10 +771,18 @@ img.avatar { object-fit: cover; background: var(--surface-2); }
 .cal-notes { white-space: pre-wrap; font-size: 13.5px; color: var(--muted); max-height: 140px; overflow-y: auto; }
 
 /* ---------- Emails shown formatted ---------- */
-.brow.email .bubble.email { max-width: 100%; width: 100%; padding: 0; overflow: hidden; background: #fff; border-color: var(--line); }
-.brow.email.me .bubble.email { border-color: var(--accent); }
+/* An email thread is as long as its emails: the page scrolls, not a box inside it. */
+.bubbles.emails { max-height: none; overflow: visible; gap: 10px; padding: 0; }
+.email-msg { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--surface); min-width: 0; }
+.email-msg.me { border-color: var(--accent); }
+.email-head { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 14px; border: 0; background: none; color: var(--ink); font: inherit; text-align: left; cursor: pointer; min-width: 0; }
+.email-msg.open .email-head { border-bottom: 1px solid var(--line); }
+.email-head:hover { background: var(--surface-2); }
+.email-who { font-weight: 600; font-size: 14px; white-space: nowrap; }
+.email-peek { flex: 1; min-width: 0; color: var(--muted); font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.email-when { margin-left: auto; color: var(--muted); font: 11.5px var(--f-mono); white-space: nowrap; }
+/* Senders design for white, so the email itself stays on white in the dark look too. */
 .email-frame { display: block; width: 100%; border: 0; background: #fff; }
-.bubble.email .bmeta { padding: 6px 12px; background: var(--surface-2); color: var(--muted); margin: 0; }
 
 /* ---------- Light or dark ---------- */
 .theme-btn { display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; }

@@ -251,18 +251,24 @@ export function emailPage(message: GmailMessage): string {
   const body = html
     ? stripActive(html)
     : `<pre class="cc-plain">${escapeHtml(bodyText(message.payload) || message.snippet || "").replace(/(https?:\/\/[^\s<>"]+)/g, '<a href="$1">$1</a>')}</pre>`;
+  // The page has no height of its own, so the dashboard can read the email's height from it and
+  // make the frame exactly that tall. It never scrolls up and down: the frame shows all of it.
   const head = `<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base target="_blank"><style>
-html { background: #fff; color-scheme: light; }
+html { background: #fff; color-scheme: light; overflow-y: hidden; }
+html, body { height: auto !important; min-height: 0 !important; }
 body { margin: 0; padding: 14px 16px; color: #202124; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; overflow-wrap: anywhere; }
 img { max-width: 100%; height: auto; }
 table { max-width: 100%; }
 .cc-plain { white-space: pre-wrap; font: inherit; margin: 0; }
 ${QUOTES}
 </style>`;
+  // Laid out the way Gmail lays out every email, whatever its own first line says: an email with
+  // no doctype would otherwise be drawn the old way, with its body as tall as the frame.
+  const page = body.replace(/<!doctype[^>]*>/gi, "");
   // The dashboard's settings go first in the head, whether the email brought one or not.
-  if (/<head[^>]*>/i.test(body)) return body.replace(/<head[^>]*>/i, (h) => `${h}${head}`);
-  if (/<html[^>]*>/i.test(body)) return body.replace(/<html[^>]*>/i, (h) => `${h}<head>${head}</head>`);
-  return `<!doctype html><html><head>${head}</head><body>${body}</body></html>`;
+  if (/<head[^>]*>/i.test(page)) return `<!doctype html>${page.replace(/<head[^>]*>/i, (h) => `${h}${head}`)}`;
+  if (/<html[^>]*>/i.test(page)) return `<!doctype html>${page.replace(/<html[^>]*>/i, (h) => `${h}<head>${head}</head>`)}`;
+  return `<!doctype html><html><head>${head}</head><body>${page}</body></html>`;
 }
 
 // ---------- Writing one ----------

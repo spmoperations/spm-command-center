@@ -24,27 +24,54 @@ import {
 /** Slack hands a picture over only to an app that may read files. Until this one may, pictures are named and linked instead. */
 const slackPicturesBlocked = (c: Conversation, app: App) => c.source === "slack" && app.state.slackFilesAllowed === false;
 
-/** One message in the conversation. */
+/** The tallest an email is drawn, so that a page that grows with its frame cannot grow for ever. */
+const EMAIL_TALLEST = 40_000;
+/** The most a wide email is shrunk to fit its frame. */
+const EMAIL_SMALLEST = 0.45;
+
 /**
  * An email as its sender laid it out: its formatting, pictures and links. It comes from Gmail
- * when it is opened, in a frame that can run nothing (see server/email-page.ts), and grows to
- * fit the email.
+ * when it is opened, in a frame that can run nothing (see server/email-page.ts), and is as tall
+ * as the email, so all of it shows with no scrolling inside.
  */
 function EmailFrame({ c, b }: { c: Conversation; b: ThreadMessage }) {
   const frame = useRef<HTMLIFrameElement>(null);
-  const [height, setHeight] = useState(180);
+  const watch = useRef<ResizeObserver | null>(null);
+  const [height, setHeight] = useState(120);
+  useEffect(() => () => watch.current?.disconnect(), []);
   const fit = () => {
     try {
-      const doc = frame.current?.contentDocument;
-      if (!doc?.body) return;
-      // The height of the email itself, not of the frame: a scroll height is never less than the frame.
-      const box = doc.body.getBoundingClientRect();
-      const style = doc.defaultView?.getComputedStyle(doc.body);
-      const tall = Math.ceil(box.height + parseFloat(style?.marginTop ?? "0") + parseFloat(style?.marginBottom ?? "0"));
-      if (tall) setHeight(Math.min(Math.max(tall + 2, 48), 1600));
+      const root = frame.current?.contentDocument?.documentElement;
+      if (!root) return;
+      // An email wider than the frame, such as a 600px newsletter on a phone, is shrunk to fit, as
+      // Gmail does. One so wide it would be too small to read scrolls sideways instead.
+      root.style.zoom = "";
+      const scale = root.scrollWidth > root.clientWidth + 1 ? Math.max(root.clientWidth / root.scrollWidth, EMAIL_SMALLEST) : 1;
+      if (scale < 1) root.style.zoom = String(scale);
+      // The page has no height of its own (see emailPage), so its box is the email's height,
+      // with room for the sideways bar when there is one.
+      const bar = root.scrollWidth > root.clientWidth + 1 ? 16 : 0;
+      const tall = Math.ceil(root.getBoundingClientRect().height) + bar;
+      if (tall > 0) setHeight(Math.min(Math.max(tall, 40), EMAIL_TALLEST));
     } catch {
-      // The height cannot be read: it keeps the one it has, and scrolls inside.
+      // The height cannot be read: it keeps the one it has.
     }
+  };
+  const loaded = () => {
+    fit();
+    const doc = frame.current?.contentDocument;
+    const win = doc?.defaultView as (Window & typeof globalThis) | null | undefined;
+    if (!doc || !win) return;
+    // Pictures and web fonts arrive after the page, and a narrower window makes it taller.
+    for (const img of Array.from(doc.images)) {
+      if (img.complete) continue;
+      img.addEventListener("load", fit);
+      img.addEventListener("error", fit);
+    }
+    void doc.fonts?.ready.then(fit);
+    watch.current?.disconnect();
+    watch.current = new win.ResizeObserver(fit);
+    watch.current.observe(doc.documentElement);
   };
   return (
     <iframe
@@ -54,33 +81,38 @@ function EmailFrame({ c, b }: { c: Conversation; b: ThreadMessage }) {
       src={`/api/gmail/message?c=${encodeURIComponent(c.id)}&m=${encodeURIComponent(b.ts ?? "")}`}
       sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
       referrerPolicy="no-referrer"
-      loading="lazy"
       style={{ height }}
-      onLoad={() => {
-        fit();
-        // Late pictures and web fonts can still change its height.
-        setTimeout(fit, 900);
-      }}
+      onLoad={loaded}
     />
   );
 }
 
+/**
+ * One email in its thread, the way Gmail shows it: who sent it and when along the top, then the
+ * email across the whole width. Earlier emails in the thread are folded to one line; a click opens one.
+ */
+function EmailMessage({ b, c, app }: { b: ThreadMessage; c: Conversation; app: App }) {
+  const who = b.me ? app.state.owner.name : (b.from ?? c.from);
+  const newest = c.thread.filter((m) => m.ts && m.status !== "queued").at(-1);
+  const [open, setOpen] = useState(!newest || newest.ts === b.ts);
+  return (
+    <div className={`email-msg ${b.me ? "me" : ""} ${open ? "open" : ""}`}>
+      <button type="button" className="email-head" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <Avatar name={who} src={app.state.avatars[who]} small />
+        <span className="email-who">{b.me ? "You" : who}</span>
+        {!open && <span className="email-peek">{plainPreview(tidyEmailText(b.text), 140)}</span>}
+        <span className="email-when">{stamp(b.at, app.now)}</span>
+      </button>
+      {open && <EmailFrame c={c} b={b} />}
+    </div>
+  );
+}
+
+/** One message in the conversation. */
 function Bubble({ b, c, app }: { b: ThreadMessage; c: Conversation; app: App }) {
   const who = b.me ? app.state.owner.name : (b.from ?? c.from);
   // An email that is in Gmail (it has Gmail's id) is shown formatted. A reply still waiting to go is shown as written.
-  if (c.source === "gmail" && b.ts && b.status !== "queued") {
-    return (
-      <div className={`brow email ${b.me ? "me" : ""}`}>
-        {!b.me && <Avatar name={who} src={app.state.avatars[who]} small />}
-        <div className="bubble email">
-          <EmailFrame c={c} b={b} />
-          <div className="bmeta">
-            {b.me ? "You" : who} · {stamp(b.at, app.now)}
-          </div>
-        </div>
-      </div>
-    );
-  }
+  if (c.source === "gmail" && b.ts && b.status !== "queued") return <EmailMessage b={b} c={c} app={app} />;
   const pictures = b.attachments ?? [];
   // "(sent a photo)" stands in for a picture that is not here. Beside the picture itself it says nothing.
   const standIn = pictures.length > 0 && /^\(sent an? [^)]*\)$/.test(b.text);
@@ -147,7 +179,7 @@ function Thread({ c, app, draft, onDraft }: { c: Conversation; app: App; draft: 
 
   return (
     <div className="thread">
-      <div className="bubbles" ref={box}>
+      <div className={`bubbles ${c.source === "gmail" ? "emails" : ""}`} ref={box}>
         {groups.length === 0 && <p className="muted">No messages in this conversation yet.</p>}
         {checking && <p className="checking">{c.source === "telegram" ? "Checking Telegram for new messages and reactions…" : "Checking Slack for replies, pictures and reactions…"}</p>}
         {slackPicturesBlocked(c, app) && c.thread.some((m) => m.attachments?.length) && (
