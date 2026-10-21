@@ -6,7 +6,9 @@ import { GOOGLE_PERMISSIONS } from "@/core/providers";
 import { upcomingDay } from "@/core/dates";
 import type { CalendarItem } from "@/core/types";
 import type { Db } from "@/server/db";
-import { htmlToText, parseAddress, parseAddresses, rawEmail, readEmail, withoutQuoted, type GmailMessage, type GmailThread } from "@/server/gmail";
+import { emailPage, htmlToText, parseAddress, parseAddresses, rawEmail, readEmail, withoutQuoted, type GmailMessage, type GmailThread } from "@/server/gmail";
+import { emailPageResponse } from "@/server/email-page";
+import { tidyEmailText } from "@/core/email-text";
 import {
   CALENDAR_EDIT_SCOPE, CALENDAR_SCOPE, finishGoogleLogin, GMAIL_SCOPE, GMAIL_SEND_SCOPE, GOOGLE_OFF_HERE, GOOGLE_SCOPES, googleApi, googleBlocked, GoogleSaid, HistoryGone, startGoogleLogin,
   type CalendarEvent, type GoogleAccount, type GoogleApi, type MailboxChanges, type NewEvent,
@@ -119,6 +121,11 @@ function fakeGoogle(email = JEREMY_MAIL, events: CalendarEvent[] = []) {
     async threads(query: string, max: number): Promise<{ id: string }[]> {
       fake.queries.push(query);
       return threads.slice(-max).reverse().map((t) => ({ id: t.id }));
+    },
+    async message(id: string): Promise<GmailMessage> {
+      const found = threads.flatMap((t) => t.messages ?? []).find((m) => m.id === id);
+      if (!found) throw new Error("Not found");
+      return structuredClone(found);
     },
     async thread(id: string): Promise<GmailThread> {
       fake.opened.push(id);
@@ -987,5 +994,47 @@ describe("changing, deleting and answering events", () => {
     const answer = JSON.parse(google.calls.filter((c) => c.method === "PATCH").at(-1)!.text);
     expect(answer.attendees).toEqual([{ email: JEREMY_MAIL, self: true, responseStatus: "tentative" }, { email: "sam@example.com", organizer: true, responseStatus: "accepted" }]);
     await expect(api.respond("alone", "accepted")).rejects.toThrow("This is an event you made");
+  });
+});
+
+// ---------- Showing an email formatted ----------
+
+describe("an email shown as its sender laid it out", () => {
+  const withHtml = (html: string) => mail("h1", "t1", { from: DANA, subject: "News", text: "Plain <https://example.com/x> version", html, at: NOW });
+
+  it("keeps the layout, pictures and links, and takes out anything that could run", () => {
+    const page = emailPage(withHtml(`<html><head><style>.x{color:red}</style><meta http-equiv="refresh" content="0;url=https://evil.example"></head><body onload="steal()"><p class="x">Hello <b>Jeremy</b></p><img src="https://example.com/logo.png" onerror="steal()"><a href="https://example.com/offer">Offer</a><a href="javascript:steal()">Bad</a><script>steal()</script><iframe src="https://evil.example"></iframe><form action="https://evil.example"><input name="pw"></form></body></html>`));
+    expect(page).toContain('<p class="x">Hello <b>Jeremy</b></p>');
+    expect(page).toContain('<img src="https://example.com/logo.png">');
+    expect(page).toContain('<a href="https://example.com/offer">Offer</a>');
+    expect(page).toContain("<style>.x{color:red}</style>");
+    // Links open in a new tab, and the dashboard's settings come first in the head.
+    expect(page).toMatch(/<head><meta charset="utf-8">[\s\S]*<base target="_blank">/);
+    for (const gone of ["<script", "steal()</script>", "onload=", "onerror=", "javascript:", "<iframe", "<form", "<input", 'http-equiv="refresh"']) expect(page).not.toContain(gone);
+  });
+
+  it("shows an email with only plain text, with its links made clickable and nothing it says taken as HTML", () => {
+    const page = emailPage(mail("p1", "t1", { from: DANA, text: "See https://example.com/deck and <b>this</b>", at: NOW }));
+    expect(page).toContain('<pre class="cc-plain">See <a href="https://example.com/deck">https://example.com/deck</a> and &lt;b&gt;this&lt;/b&gt;</pre>');
+  });
+
+  it("is served only for the owner's own email rows, under a policy that runs nothing", async () => {
+    await connected();
+    const google = fakeGoogle();
+    google.deliver(withHtml("<p>Hello <b>Jeremy</b></p>"));
+    await gmailPull(ctx(), [account()], opener(google));
+    const res = await emailPageResponse(db, OWNER_ID, `gmail:${JEREMY_MAIL}:t1`, "h1", opener(google));
+    expect([res.status, res.headers.get("content-type")]).toEqual([200, "text/html; charset=utf-8"]);
+    expect(res.headers.get("content-security-policy")).toMatch(/default-src 'none'.*sandbox allow-same-origin allow-popups/);
+    expect(res.headers.get("content-security-policy")).not.toMatch(/script-src|allow-scripts/);
+    expect(await res.text()).toContain("Hello <b>Jeremy</b>");
+    // Another message id, or another row, gets nothing from Gmail.
+    expect(await (await emailPageResponse(db, OWNER_ID, `gmail:${JEREMY_MAIL}:t1`, "not-here", opener(google))).text()).toContain("not in the dashboard any more");
+    expect(await (await emailPageResponse(db, OWNER_ID, "slack:C1", "h1", opener(google))).text()).toContain("not in the dashboard any more");
+  });
+
+  it("leaves the written-out links out of the text an email row shows", () => {
+    expect(tidyEmailText("ENTER THE HOUSE <https://fiit.tv/x> NOW\nContact us <mailto:support@example.com?subject=Hi> | Blog <www.example.com/blog>")).toBe("ENTER THE HOUSE NOW\nContact us | Blog");
+    expect(readEmail(withHtml("<p>x</p>"), JEREMY_MAIL).text).toBe("Plain version");
   });
 });

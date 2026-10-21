@@ -12,9 +12,17 @@ export const metadata: Metadata = {
   description: "Messages, calls and tasks in one place.",
 };
 
+/** Applies the theme kept by the header's button (Shell.tsx, THEME_KEY). Nothing kept: the computer's own setting. */
+const THEME_SCRIPT = `try{var t=localStorage.getItem("cc-theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t}catch(e){}`;
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${display.variable} ${body.variable} ${mono.variable}`}>
+    // The theme chosen with the header's button is put on <html> before the page draws, so it
+    // never flashes the other one. React leaves that attribute alone.
+    <html lang="en" className={`${display.variable} ${body.variable} ${mono.variable}`} suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+      </head>
       <body>
         <Shell>{children}</Shell>
       </body>

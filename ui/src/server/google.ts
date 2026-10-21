@@ -10,7 +10,7 @@
 // Google stays off unless GOOGLE_HOSTED=true says this server is the one meant to hold it.
 import crypto from "node:crypto";
 import type { Db } from "./db";
-import type { GmailThread } from "./gmail";
+import type { GmailMessage, GmailThread } from "./gmail";
 import { seal, unseal } from "./secrets";
 import { RateLimited, type Fetch } from "./slack";
 
@@ -327,6 +327,8 @@ export interface GoogleApi {
   /** Threads matching a Gmail search, newest first. */
   threads(query: string, max: number): Promise<{ id: string; historyId?: string }[]>;
   thread(id: string): Promise<GmailThread>;
+  /** One email, whole, to show it as its sender laid it out. */
+  message(id: string): Promise<GmailMessage>;
   /** Events on the main calendar that overlap this window, in start order, repeating ones as single events. */
   events(from: number, to: number): Promise<{ timeZone: string; items: CalendarEvent[] }>;
   /** Sends an email written out by `rawEmail`, into a thread when one is given. */
@@ -409,6 +411,9 @@ export async function googleApi(db: Db, ownerId: string, email: string, fetchImp
     },
     async thread(id) {
       return (await get(`${GMAIL}/threads/${encodeURIComponent(id)}?format=full`)) as GmailThread;
+    },
+    async message(id) {
+      return (await get(`${GMAIL}/messages/${encodeURIComponent(id)}?format=full`)) as GmailMessage;
     },
     async events(from, to) {
       const items: CalendarEvent[] = [];

@@ -5,6 +5,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { DelegateForm } from "@/components/DelegateForm";
+import { tidyEmailText } from "@/core/email-text";
 import { EMAIL_TAG_NAME } from "@/core/email-tags";
 import { Avatar, MessageText, Pictures, Reactions } from "@/components/MessageText";
 import { PrioritySelect } from "@/components/bits";
@@ -24,8 +25,62 @@ import {
 const slackPicturesBlocked = (c: Conversation, app: App) => c.source === "slack" && app.state.slackFilesAllowed === false;
 
 /** One message in the conversation. */
+/**
+ * An email as its sender laid it out: its formatting, pictures and links. It comes from Gmail
+ * when it is opened, in a frame that can run nothing (see server/email-page.ts), and grows to
+ * fit the email.
+ */
+function EmailFrame({ c, b }: { c: Conversation; b: ThreadMessage }) {
+  const frame = useRef<HTMLIFrameElement>(null);
+  const [height, setHeight] = useState(180);
+  const fit = () => {
+    try {
+      const doc = frame.current?.contentDocument;
+      if (!doc?.body) return;
+      // The height of the email itself, not of the frame: a scroll height is never less than the frame.
+      const box = doc.body.getBoundingClientRect();
+      const style = doc.defaultView?.getComputedStyle(doc.body);
+      const tall = Math.ceil(box.height + parseFloat(style?.marginTop ?? "0") + parseFloat(style?.marginBottom ?? "0"));
+      if (tall) setHeight(Math.min(Math.max(tall + 2, 48), 1600));
+    } catch {
+      // The height cannot be read: it keeps the one it has, and scrolls inside.
+    }
+  };
+  return (
+    <iframe
+      ref={frame}
+      className="email-frame"
+      title={`Email from ${b.me ? "you" : (b.from ?? c.from)}`}
+      src={`/api/gmail/message?c=${encodeURIComponent(c.id)}&m=${encodeURIComponent(b.ts ?? "")}`}
+      sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+      referrerPolicy="no-referrer"
+      loading="lazy"
+      style={{ height }}
+      onLoad={() => {
+        fit();
+        // Late pictures and web fonts can still change its height.
+        setTimeout(fit, 900);
+      }}
+    />
+  );
+}
+
 function Bubble({ b, c, app }: { b: ThreadMessage; c: Conversation; app: App }) {
   const who = b.me ? app.state.owner.name : (b.from ?? c.from);
+  // An email that is in Gmail (it has Gmail's id) is shown formatted. A reply still waiting to go is shown as written.
+  if (c.source === "gmail" && b.ts && b.status !== "queued") {
+    return (
+      <div className={`brow email ${b.me ? "me" : ""}`}>
+        {!b.me && <Avatar name={who} src={app.state.avatars[who]} small />}
+        <div className="bubble email">
+          <EmailFrame c={c} b={b} />
+          <div className="bmeta">
+            {b.me ? "You" : who} · {stamp(b.at, app.now)}
+          </div>
+        </div>
+      </div>
+    );
+  }
   const pictures = b.attachments ?? [];
   // "(sent a photo)" stands in for a picture that is not here. Beside the picture itself it says nothing.
   const standIn = pictures.length > 0 && /^\(sent an? [^)]*\)$/.test(b.text);
@@ -374,7 +429,7 @@ export function MessageRow({ c, app, open, draft, onDraft, cleared }: { c: Conve
         </div>
         <p className="txt">
           {last?.me && <span className="muted">You: </span>}
-          {plainPreview(last?.me ? last.text : c.text)}
+          {plainPreview(c.source === "gmail" ? tidyEmailText(last?.me ? last.text : c.text) : last?.me ? last.text : c.text)}
         </p>
       </div>
       <div className="side">

@@ -1,6 +1,7 @@
 // Reading an email as Gmail hands it over: who wrote it, to whom, the subject, and the text
-// of the message without the quoted history underneath. And writing one out to send. Plain
-// logic, no network.
+// of the message without the quoted history underneath. Showing it formatted, as a safe page
+// of its own. And writing one out to send. Plain logic, no network.
+import { tidyEmailText } from "@/core/email-text";
 
 /** One part of a message, as the Gmail API returns it with format=full. Parts nest. */
 export interface GmailPart {
@@ -191,7 +192,7 @@ export function readEmail(message: GmailMessage, ownerEmail: string): Email {
   const p = message.payload;
   const from = parseAddress(header(p, "From") || "unknown");
   const labels = message.labelIds ?? [];
-  let text = withoutQuoted(bodyText(p)) || (message.snippet ?? "").trim();
+  let text = tidyEmailText(withoutQuoted(bodyText(p))) || (message.snippet ?? "").trim();
   if (text.length > MAX_TEXT) text = `${text.slice(0, MAX_TEXT).trimEnd()}…`;
   const files = attachmentNames(p);
   if (files.length) text = `${text}${text ? "\n\n" : ""}(attached: ${files.join(", ")})`;
@@ -211,6 +212,57 @@ export function readEmail(message: GmailMessage, ownerEmail: string): Email {
     messageId: header(p, "Message-ID").trim(),
     references: header(p, "References").trim(),
   };
+}
+
+// ---------- Showing one formatted ----------
+
+/** The HTML of a message, as its sender laid it out. Null when it only has plain text. */
+export function htmlOf(payload: GmailPart | undefined): string | null {
+  const html = find(payload, "text/html");
+  if (html?.body?.data) return decode(html.body.data);
+  if (payload?.mimeType === "text/html" && payload.body?.data) return decode(payload.body.data);
+  return null;
+}
+
+const escapeHtml = (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/**
+ * What an email's own HTML may not keep, even though the page it is shown in can run nothing:
+ * scripts, frames, forms, plugins, refreshes and base addresses, "on…" handlers, and
+ * javascript: links. The page is also served under a policy that forbids all of these.
+ */
+function stripActive(html: string): string {
+  return html
+    .replace(/<(script|iframe|frameset|object|embed|applet|form|noscript)\b[\s\S]*?<\/\1\s*>/gi, "")
+    .replace(/<(script|iframe|frame|object|embed|applet|form|input|button|textarea|select|base|link|meta)\b[^>]*>/gi, "")
+    .replace(/\s+on[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(/(href|src|action|formaction|xlink:href)\s*=\s*(["']?)\s*(javascript|vbscript|data:text\/html)[^"'>\s]*\2/gi, '$1="#"');
+}
+
+/** Hides the quoted history under a reply, as Gmail does: the earlier messages are in the thread already. */
+const QUOTES = ".gmail_quote, blockquote[type=cite], #divRplyFwdMsg, #divRplyFwdMsg ~ *, .yahoo_quoted, #appendonsend ~ * { display: none !important; }";
+
+/**
+ * A whole page showing one email: its own HTML when it has some, made safe, or else its text with
+ * the links made clickable. Links open in a new tab. It is drawn on white, as senders design for.
+ */
+export function emailPage(message: GmailMessage): string {
+  const html = htmlOf(message.payload);
+  const body = html
+    ? stripActive(html)
+    : `<pre class="cc-plain">${escapeHtml(bodyText(message.payload) || message.snippet || "").replace(/(https?:\/\/[^\s<>"]+)/g, '<a href="$1">$1</a>')}</pre>`;
+  const head = `<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base target="_blank"><style>
+html { background: #fff; color-scheme: light; }
+body { margin: 0; padding: 14px 16px; color: #202124; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; overflow-wrap: anywhere; }
+img { max-width: 100%; height: auto; }
+table { max-width: 100%; }
+.cc-plain { white-space: pre-wrap; font: inherit; margin: 0; }
+${QUOTES}
+</style>`;
+  // The dashboard's settings go first in the head, whether the email brought one or not.
+  if (/<head[^>]*>/i.test(body)) return body.replace(/<head[^>]*>/i, (h) => `${h}${head}`);
+  if (/<html[^>]*>/i.test(body)) return body.replace(/<html[^>]*>/i, (h) => `${h}<head>${head}</head>`);
+  return `<!doctype html><html><head>${head}</head><body>${body}</body></html>`;
 }
 
 // ---------- Writing one ----------

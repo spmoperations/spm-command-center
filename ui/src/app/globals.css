@@ -769,3 +769,21 @@ img.avatar { object-fit: cover; background: var(--surface-2); }
 .cal-confirm span { flex: 1 1 200px; }
 .btn.danger { background: var(--bad); color: var(--surface); border-color: var(--bad); }
 .cal-notes { white-space: pre-wrap; font-size: 13.5px; color: var(--muted); max-height: 140px; overflow-y: auto; }
+
+/* ---------- Emails shown formatted ---------- */
+.brow.email .bubble.email { max-width: 100%; width: 100%; padding: 0; overflow: hidden; background: #fff; border-color: var(--line); }
+.brow.email.me .bubble.email { border-color: var(--accent); }
+.email-frame { display: block; width: 100%; border: 0; background: #fff; }
+.bubble.email .bmeta { padding: 6px 12px; background: var(--surface-2); color: var(--muted); margin: 0; }
+
+/* ---------- Light or dark ---------- */
+.theme-btn { display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; }
+.theme-btn:hover { background: var(--surface-2); }
+.theme-btn svg { width: 16px; height: 16px; }
+.theme-btn .sun { display: none; }
+:root[data-theme="dark"] .theme-btn .sun { display: block; }
+:root[data-theme="dark"] .theme-btn .moon { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .theme-btn .sun { display: block; }
+  :root:not([data-theme="light"]) .theme-btn .moon { display: none; }
+}
