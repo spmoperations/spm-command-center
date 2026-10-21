@@ -218,7 +218,8 @@ export default function MeetingsPage() {
   const coming = state.calendar
     .filter((m) => !m.allDay && m.kind === "meeting" && m.end > app.now.getTime())
     .map((m) => ({ m, day: upcomingDay(m, app.now) }))
-    .filter((u): u is { m: CalendarItem; day: "Now" | "Today" | "Tomorrow" } => u.day !== null)
+    // Today's only, in the timezone of whoever is looking. Tomorrow's are on the Calendar tab.
+    .filter((u): u is { m: CalendarItem; day: "Now" | "Today" } => u.day === "Now" || u.day === "Today")
     .sort((a, b) => a.m.at - b.m.at);
   const google = state.connections.google;
 
@@ -228,7 +229,7 @@ export default function MeetingsPage() {
         <div>
           <h2>Meetings</h2>
           <div className="muted" style={{ fontSize: 14 }}>
-            {google.connected ? "What is on your calendar today and tomorrow, then every" : "Every"} recorded call with its notes, transcript and the tasks that came out of it. Click a call to open it.
+            {google.connected ? "What is on your calendar today, then every" : "Every"} recorded call with its notes, transcript and the tasks that came out of it. Click a call to open it.
           </div>
         </div>
       </div>
@@ -236,7 +237,7 @@ export default function MeetingsPage() {
       {(google.connected || coming.length > 0) && (
         <div className="mt-group">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, marginBottom: 8 }}>
-            <span className="label">Coming up: today and tomorrow</span>
+            <span className="label">Coming up today</span>
             <Link className="srclink" href="/calendar">
               Open the calendar
             </Link>
@@ -247,7 +248,7 @@ export default function MeetingsPage() {
             ))}
             {coming.length === 0 && (
               <p className="empty" style={{ padding: 18 }}>
-                {state.googleAllows.calendar ? "Nothing on your calendar for the rest of today or tomorrow." : "Calendar was not allowed when Google was connected. Connect Google again and tick Calendar to see your meetings here."}
+                {state.googleAllows.calendar ? "Nothing more on your calendar today." : "Calendar was not allowed when Google was connected. Connect Google again and tick Calendar to see your meetings here."}
               </p>
             )}
           </div>

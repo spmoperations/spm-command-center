@@ -369,7 +369,7 @@ export function MessageRow({ c, app, open, draft, onDraft, cleared }: { c: Conve
               {EMAIL_TAG_NAME[t]}
             </span>
           ))}
-          {cleared && c.autoCleared && <span className="chip">Nothing new for {INBOX_DAYS} days</span>}
+          {cleared && c.autoCleared && <span className="chip">{c.replied ? "You answered" : `Nothing new for ${INBOX_DAYS} days`}</span>}
           {c.mode === "professional" && c.line === "consulting" && <span className="chip biz">{LINE_NAME[c.line]}</span>}
         </div>
         <p className="txt">

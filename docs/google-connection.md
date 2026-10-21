@@ -5,7 +5,7 @@ What it does:
   is connected, comes into the Command Center inbox, one row per thread.
 - **Calendar tab:** shows the connected Google Calendars week by week, like Google Calendar,
   from last week to three weeks ahead.
-- **Meetings tab:** starts with the meetings for today and tomorrow, each with a Join link.
+- **Meetings tab:** starts with today's meetings, each with a Join link.
 
 More than one Google account can be connected. Emails can be answered and written, and events
 added, changed, deleted and answered, from the dashboard. Nothing is sent or changed unless the

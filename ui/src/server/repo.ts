@@ -453,6 +453,19 @@ export async function resortInbox(db: Db, ownerId: string): Promise<number> {
 }
 
 /**
+ * Clears the Slack and Telegram conversations the owner has answered: those whose latest
+ * message is theirs. It runs after every read, so an answer written in Slack or Telegram
+ * itself clears the chat too. Something new from someone else brings it back, as any cleared
+ * chat comes back. One the owner put back by hand after their answer stays. Returns how many.
+ */
+export async function clearAnswered(db: Db, ownerId: string): Promise<number> {
+  return db.run(
+    "update conversations set done = true, auto_done = true where owner_id = $1 and not done and replied and source in ('slack', 'telegram') and coalesce(restored_at, 0) < last_at",
+    [ownerId],
+  );
+}
+
+/**
  * Clears conversations with nothing new for `INBOX_DAYS` days, so the inbox holds what is
  * current. One the owner put back by hand counts from when they did. Returns how many.
  */

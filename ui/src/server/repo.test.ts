@@ -4,7 +4,7 @@ import { connect, secretFor } from "./connections";
 import fs from "node:fs";
 import type { Db } from "./db";
 import { databaseHome, describeDbError, migrate, openDb, openRemote, splitStatements } from "./db";
-import { ageOutInbox, applyAction, loadState, OWNER_ID } from "./repo";
+import { ageOutInbox, applyAction, clearAnswered, loadState, OWNER_ID } from "./repo";
 import { seal, unseal } from "./secrets";
 import { NOW, reset, seed, testDb } from "./testing";
 
@@ -730,5 +730,39 @@ describe("important channels, chats and people", () => {
   it("only takes what can be marked important", async () => {
     await expect(act("setImportant", "gmail", "chat", "x", "x", true)).rejects.toThrow("That is not something that can be marked important.");
     await expect(act("setImportant", "slack", "team", "x", "x", true)).rejects.toThrow("That is not something that can be marked important.");
+  });
+});
+
+describe("chats the owner has answered", () => {
+  const row = async (id: string) => (await state()).inbox.find((c) => c.id === id)!;
+  /** The owner's answer arrives, as a read from Slack would bring it. */
+  const answer = (id: string, at = NOW - 30_000) => db.run("update conversations set replied = true where id = $1", [id]).then(() => db.run("insert into messages (id, conversation_id, owner_id, external_id, sender_name, me, body, at) values ($1, $2, $3, '2.0', 'Jeremy Moser', true, 'On it', $4)", [`${id}:2.0`, id, OWNER_ID, at]));
+
+  it("clears a Slack or Telegram chat whose latest message is the owner's, after the next read", async () => {
+    await answer("slack:D1");
+    const { runJob } = await import("@/jobs/runner");
+    const run = await runJob(db, "inbox-rules", OWNER_ID, NOW);
+    expect(run.message).toMatch(/, 1 you answered cleared$/);
+    expect(await row("slack:D1")).toMatchObject({ done: true, autoCleared: true, replied: true });
+    expect((await row("slack:C1")).done).toBe(false);
+  });
+
+  it("brings it back when someone writes again", async () => {
+    await answer("slack:D1");
+    await clearAnswered(db, OWNER_ID);
+    await db.run("insert into messages (id, conversation_id, owner_id, external_id, sender_name, me, body, at) values ('slack:D1:3.0', 'slack:D1', $1, '3.0', 'Maya Chen', false, 'One more thing', $2)", [OWNER_ID, NOW]);
+    const { refreshConversation } = await import("@/jobs/slack");
+    await refreshConversation(db, "slack:D1", { kind: "im", partner: "Maya Chen" }, false);
+    expect(await row("slack:D1")).toMatchObject({ done: false, replied: false, text: "One more thing" });
+  });
+
+  it("leaves a chat the owner put back by hand, and emails", async () => {
+    await answer("slack:D1");
+    await clearAnswered(db, OWNER_ID);
+    await act("restoreConversation", "slack:D1");
+    expect(await clearAnswered(db, OWNER_ID)).toBe(0);
+    expect((await row("slack:D1")).done).toBe(false);
+    await db.run("insert into conversations (id, owner_id, source, external_id, from_name, ctx, direct, replied, last_text, last_at) values ('gmail:me@example.com:t1', $1, 'gmail', 'me@example.com:t1', 'Dana Whitfield', 'Thursday', true, true, 'Thanks', $2)", [OWNER_ID, NOW - 60_000]);
+    expect(await clearAnswered(db, OWNER_ID)).toBe(0);
   });
 });

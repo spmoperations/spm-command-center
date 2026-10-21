@@ -47,7 +47,7 @@ export default function InboxPage() {
         <div>
           <h2>Inbox</h2>
           <div className="muted" style={{ fontSize: 14 }}>
-            {PERSONAL_SIDE ? `${MODE_NAME[mode]} conversations` : "Conversations"} from {connected.length ? connected.map((s) => SOURCE_NAME[s]).join(" and ") : "Slack"}, sorted by priority. Reply without leaving the page. A chat with nothing new for {INBOX_DAYS} days is cleared by itself.
+            {PERSONAL_SIDE ? `${MODE_NAME[mode]} conversations` : "Conversations"} from {connected.length ? connected.map((s) => SOURCE_NAME[s]).join(" and ") : "Slack"}, sorted by priority. Reply without leaving the page. A chat you have answered is cleared after the next check, and one with nothing new for {INBOX_DAYS} days is cleared by itself.
           </div>
         </div>
         <div className="brand-meta">

@@ -7,7 +7,7 @@ import { aiConfigured } from "@/server/ai";
 import { secretFor } from "@/server/connections";
 import type { Db } from "@/server/db";
 import { googleAccounts, googleApi, googleAvailable, googleBlocked, googleCan, googleConnected } from "@/server/google";
-import { ageOutInbox, OWNER_ID, resortInbox, sendingEnabled } from "@/server/repo";
+import { ageOutInbox, clearAnswered, OWNER_ID, resortInbox, sendingEnabled } from "@/server/repo";
 import { RateLimited, slackClient } from "@/server/slack";
 import { telegramApi, telegramAvailable, telegramBlocked, telegramConnected } from "@/server/telegram";
 import { calendarPull } from "./calendar";
@@ -62,9 +62,13 @@ async function execute(jobId: JobId, ctx: JobContext): Promise<JobResult> {
     }
     case "inbox-rules": {
       const changed = await resortInbox(ctx.db, ctx.ownerId);
-      // Then what has had nothing new for a few days leaves the inbox.
+      // Then what has had nothing new for a few days leaves the inbox, and so does what the owner has answered.
       const aged = await ageOutInbox(ctx.db, ctx.ownerId, ctx.now);
-      return { items: changed + aged, message: `${changed} re-sorted${aged ? `, ${aged} older than ${INBOX_DAYS} days cleared` : ""}` };
+      const answered = await clearAnswered(ctx.db, ctx.ownerId);
+      return {
+        items: changed + aged + answered,
+        message: `${changed} re-sorted${aged ? `, ${aged} older than ${INBOX_DAYS} days cleared` : ""}${answered ? `, ${answered} you answered cleared` : ""}`,
+      };
     }
     case "request-finder":
       return requestFinder(ctx);
