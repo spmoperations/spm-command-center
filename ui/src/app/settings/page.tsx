@@ -8,10 +8,10 @@ import { ago } from "@/core/dates";
 import { describeInterval, jobById, liveJobs, type Connection } from "@/core/jobs";
 import { PROVIDER_NAME } from "@/core/providers";
 import { ruleHits } from "@/core/rules";
-import type { JobSetting, Line, Person, Priority, Rule, Source } from "@/core/types";
+import type { JobSetting, Line, Person, Priority, Rule, Source, TeamLogin } from "@/core/types";
 import {
-  addHandle, addPerson, addRule, clearManualPriorities, deleteRule, moveRule, removeHandle, removePerson, runJobNow,
-  setChannelSelected, setImportant, setJobEnabled, setJobInterval, syncNow, toast, togglePersonDept, useApp, type App, type RuleKind,
+  addHandle, addPerson, addRule, addTeamLogin, clearManualPriorities, deleteRule, moveRule, removeHandle, removePerson, runJobNow,
+  removeTeamLogin, setChannelSelected, setImportant, setJobEnabled, setJobInterval, setTeamPassword, syncNow, toast, togglePersonDept, turnOffTeamLogin, useApp, type App, type RuleKind,
 } from "@/store/store";
 
 function IntervalInput({ setting }: { setting: JobSetting }) {
@@ -272,6 +272,134 @@ function PersonRow({ p }: { p: Person }) {
   );
 }
 
+/** The shortest password a team login may have (as the server checks it). */
+const MIN_PASSWORD = 10;
+
+/** A password that is hard to guess and easy to read out: 16 letters and digits, no look-alikes. */
+function madePassword(): string {
+  const letters = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789";
+  return Array.from(crypto.getRandomValues(new Uint32Array(16)), (n) => letters[n % letters.length]).join("");
+}
+
+function LoginRow({ login }: { login: TeamLogin }) {
+  const [changing, setChanging] = useState(false);
+  const [password, setPassword] = useState("");
+  const save = async () => {
+    if (password.length < MIN_PASSWORD) return toast(`The password needs at least ${MIN_PASSWORD} characters`);
+    if (await setTeamPassword(login.id, login.name, password)) {
+      setChanging(false);
+      setPassword("");
+    }
+  };
+  return (
+    <tr>
+      <td>
+        <strong>{login.name}</strong>
+      </td>
+      <td>{login.email}</td>
+      <td>{login.active ? <span className="chip good">Can sign in</span> : <span className="chip">Turned off</span>}</td>
+      <td>
+        {changing ? (
+          <div className="login-pass-set">
+            <input className="f" type="text" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="New password" aria-label={`New password for ${login.name}`} autoComplete="off" spellCheck={false} />
+            <button className="linkbtn" onClick={() => setPassword(madePassword())}>
+              Make one
+            </button>
+            <button className="btn primary" onClick={() => void save()}>
+              Save
+            </button>
+            <button className="linkbtn" onClick={() => setChanging(false)}>
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <div className="login-acts">
+            <button className="linkbtn" onClick={() => setChanging(true)}>
+              {login.active ? "New password" : "Turn on with a new password"}
+            </button>
+            {login.active && (
+              <button className="linkbtn danger" onClick={() => turnOffTeamLogin(login.id, login.name)}>
+                Turn off
+              </button>
+            )}
+            <button
+              className="linkbtn danger"
+              onClick={() => {
+                if (window.confirm(`Remove ${login.name}'s login and everything of theirs: their connections, messages and tasks? Nothing of yours is touched.`)) removeTeamLogin(login.id, login.name);
+              }}
+            >
+              Remove
+            </button>
+          </div>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+/**
+ * Logins for the team, the owner's alone: each person gets a Command Center of their own and
+ * sees only what they connect themselves. Nothing of the owner's is shared or changed.
+ */
+function TeamLogins({ app }: { app: App }) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const add = async () => {
+    if (!name.trim() || !email.trim()) return toast("Write their name and email");
+    if (password.length < MIN_PASSWORD) return toast(`The password needs at least ${MIN_PASSWORD} characters`);
+    if (await addTeamLogin(name, email, password)) {
+      setName("");
+      setEmail("");
+      setPassword("");
+    }
+  };
+  return (
+    <div className="panel set-sec" id="logins">
+      <div className="panel-head">
+        <h3>Team logins</h3>
+      </div>
+      <p className="set-intro">
+        Give someone on the team a Command Center of their own. They sign in at this same address with the email and password below, connect their own Slack, Google, Telegram and Fathom on
+        their Connections page, and see only their own messages and tasks. Nothing of yours is shown to them, and your connections stay exactly as they are. Send them the email and password
+        yourself: the dashboard does not.
+      </p>
+      {app.state.logins.length > 0 && (
+        <div className="table-scroll">
+          <table className="set">
+            <thead>
+              <tr>
+                <th>Person</th>
+                <th>Signs in with</th>
+                <th>Status</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {app.state.logins.map((l) => (
+                <LoginRow key={l.id} login={l} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="login-add">
+        <input className="f" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name, such as Alex" aria-label="Their name" />
+        <input className="f" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Their email" aria-label="Their email" autoComplete="off" />
+        <div className="login-pass-set">
+          <input className="f" type="text" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={`Password, at least ${MIN_PASSWORD} characters`} aria-label="Their password" autoComplete="off" spellCheck={false} />
+          <button className="linkbtn" onClick={() => setPassword(madePassword())}>
+            Make one
+          </button>
+        </div>
+        <button className="btn primary" onClick={() => void add()}>
+          Add login
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Team({ app }: { app: App }) {
   const [name, setName] = useState("");
   const [role, setRole] = useState("");
@@ -491,6 +619,7 @@ export default function SettingsPage() {
         <a href="#important">Important</a>
         <a href="#channels">Channels</a>
         <a href="#team">Team</a>
+        {app.state.me.isOwner && <a href="#logins">Team logins</a>}
         <a href="#urgent">What is urgent</a>
         <a href="#labels">{PERSONAL_SIDE ? "Personal or Professional" : "Agency or Consulting"}</a>
       </nav>
@@ -499,6 +628,7 @@ export default function SettingsPage() {
       <Important app={app} />
       <Channels app={app} />
       <Team app={app} />
+      {app.state.me.isOwner && <TeamLogins app={app} />}
 
       <RuleList<Priority>
         app={app}

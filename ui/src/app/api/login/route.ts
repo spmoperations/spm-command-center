@@ -1,5 +1,7 @@
 import { failed, fromDashboard, refused, sameSite } from "@/server/http";
-import { checkLogin, clearFailures, createSession, isHttps, lockedFor, loginConfigured, recordFailure, sessionCookie } from "@/server/session";
+import { ready } from "@/server/boot";
+import { clearFailures, createSession, isHttps, lockedFor, loginConfigured, recordFailure, sessionCookie } from "@/server/session";
+import { signInAs } from "@/server/team";
 
 type Problem = "setup" | "locked" | "wrong";
 const PROBLEM: Record<Problem, [message: string, status: number]> = {
@@ -24,13 +26,15 @@ export async function POST(request: Request) {
   if (Math.max(lockedFor(caller), lockedFor("everyone")) > 0) return no("locked");
   try {
     const { email, password } = (plainForm ? Object.fromEntries(await request.formData()) : await request.json()) as { email?: unknown; password?: unknown };
-    if (typeof email !== "string" || typeof password !== "string" || !checkLogin(email, password)) {
+    // The owner's login (LOGIN_EMAIL) or a team member's.
+    const who = typeof email === "string" && typeof password === "string" ? await signInAs(ready, email, password) : null;
+    if (!who || typeof email !== "string") {
       recordFailure(caller);
       recordFailure("everyone");
       return no("wrong");
     }
     clearFailures(caller);
-    const cookie = { "Set-Cookie": sessionCookie(createSession(email.trim().toLowerCase()), isHttps(request)) };
+    const cookie = { "Set-Cookie": sessionCookie(createSession(email.trim().toLowerCase(), Date.now(), who.mark), isHttps(request)) };
     return plainForm ? new Response(null, { status: 303, headers: { Location: "/", ...cookie } }) : Response.json({ ok: true }, { headers: cookie });
   } catch (error) {
     return failed(error);

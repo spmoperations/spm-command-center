@@ -21,13 +21,13 @@ export async function requestFinder({ db, ownerId, now }: JobContext): Promise<J
   const settled = await db.run(
     `update suggestions s set status = 'dismissed'
      where s.owner_id = $1 and s.status = 'new' and s.dedupe_key like 'ask:%'
-       and exists (select 1 from conversations c where c.id = s.src_id and (c.replied or (c.done and not c.auto_done)))`,
+       and exists (select 1 from conversations c where c.owner_id = s.owner_id and c.id = s.src_id and (c.replied or (c.done and not c.auto_done)))`,
     [ownerId],
   );
 
   const fresh = await db.query<Fresh>(
     `select m.id, m.conversation_id, m.sender_name, m.body, m.at, c.direct, c.ctx, c.pri, c.mode, c.project, c.replied, c.done
-     from messages m join conversations c on c.id = m.conversation_id
+     from messages m join conversations c on c.owner_id = m.owner_id and c.id = m.conversation_id
      where m.owner_id = $1 and not m.asked and not m.me order by m.at limit $2`,
     [ownerId, MAX_MESSAGES],
   );
@@ -68,7 +68,7 @@ export async function requestFinder({ db, ownerId, now }: JobContext): Promise<J
       ],
     );
   }
-  await db.run("update messages set asked = true where id in (select jsonb_array_elements_text($1::jsonb))", [JSON.stringify(fresh.map((m) => m.id))]);
+  await db.run("update messages set asked = true where owner_id = $2 and id in (select jsonb_array_elements_text($1::jsonb))", [JSON.stringify(fresh.map((m) => m.id)), ownerId]);
 
   const found = `${added} ${added === 1 ? "request" : "requests"} found`;
   return { items: added, message: settled ? `${found}, ${settled} answered` : found };

@@ -77,6 +77,7 @@ section.view { padding-top: 22px; }
 .s-ok { background: var(--good-soft); color: var(--good); }
 .chip { font-size: 12px; padding: 1px 8px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
 .chip.biz { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+.chip.good { color: var(--good); background: var(--good-soft); border-color: transparent; font-weight: 600; }
 
 /* Source badge */
 .src { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; font: 600 11px var(--f-mono); color: var(--surface); flex: none; }
@@ -363,6 +364,13 @@ table.set tr:last-child td { border-bottom: 0; }
 .tagadd { display: inline-flex; gap: 4px; }
 .tagadd input { width: 130px; padding: 3px 8px; font-size: 12.5px; }
 .tagadd .btn { padding: 3px 8px; font-size: 12px; }
+/* Team logins */
+.login-add { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1.6fr) auto; gap: 8px; padding: 12px 16px 16px; border-top: 1px solid var(--line); align-items: center; }
+.login-pass-set { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.login-pass-set .f { flex: 1 1 180px; font-family: var(--f-mono); }
+.login-acts { display: flex; gap: 14px; flex-wrap: wrap; }
+.linkbtn.danger { color: var(--bad); }
+@media (max-width: 760px) { .login-add { grid-template-columns: minmax(0, 1fr); } }
 .set-add { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr) auto; gap: 8px; padding: 12px 16px 16px; border-top: 1px solid var(--line); }
 .rule-add { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(0, 1.3fr) auto; gap: 8px; padding: 12px 16px 16px; border-top: 1px solid var(--line); }
 .rules { list-style: none; margin: 0; padding: 0; counter-reset: r; }
@@ -796,6 +804,7 @@ img.avatar { object-fit: cover; background: var(--surface-2); }
 .email-frame { display: block; width: 100%; border: 0; background: #fff; }
 
 /* ---------- Light or dark ---------- */
+.signed-in { font-size: 13px; font-weight: 600; color: var(--muted); white-space: nowrap; }
 .theme-btn { display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; }
 .theme-btn:hover { background: var(--surface-2); }
 .theme-btn svg { width: 16px; height: 16px; }

@@ -46,6 +46,14 @@ export async function testDb(): Promise<Db> {
   };
 }
 
+/**
+ * The routes under test use this database: what `ready()` hands them. Without it a route
+ * that needs the database is refused (see getDb), so a test never reaches this machine's own.
+ */
+export function routesUse(db: Db): void {
+  (globalThis as unknown as { __commandCenterReady?: Promise<Db> }).__commandCenterReady = Promise.resolve(db);
+}
+
 /** Empties every table and sets the owner up again, as on a first start. */
 export async function reset(db: Db): Promise<void> {
   await db.run(`truncate ${TABLES.join(", ")} cascade`);

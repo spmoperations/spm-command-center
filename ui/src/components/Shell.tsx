@@ -167,6 +167,8 @@ function Chrome({ children }: { children: React.ReactNode }) {
                 </button>
               )}
               <ThemeToggle />
+              {/* A team member sees whose Command Center this is. The owner's header stays as it was. */}
+              {app && !app.state.me.isOwner && <span className="signed-in">{app.state.owner.name}</span>}
               <button className="linkbtn" onClick={() => void signOut()}>
                 Sign out
               </button>

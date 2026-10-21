@@ -1,13 +1,14 @@
 import { ready } from "@/server/boot";
-import { failed, signedIn, signInFirst } from "@/server/http";
-import { loadTranscript, OWNER_ID } from "@/server/repo";
+import { failed, signedInAs, signInFirst } from "@/server/http";
+import { loadTranscript } from "@/server/repo";
 
 /** A call's transcript. Loaded on its own because transcripts run to hundreds of lines. */
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  if (!signedIn(request)) return signInFirst();
+  const owner = await signedInAs(request);
+  if (!owner) return signInFirst(request);
   try {
     const { id } = await params;
-    return Response.json({ transcript: await loadTranscript(await ready(), OWNER_ID, decodeURIComponent(id)) });
+    return Response.json({ transcript: await loadTranscript(await ready(), owner, decodeURIComponent(id)) });
   } catch (error) {
     return failed(error, 500);
   }

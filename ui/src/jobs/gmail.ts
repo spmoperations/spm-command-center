@@ -120,7 +120,7 @@ export async function gmailPull({ db, ownerId, now, cursor }: JobContext, accoun
       const conversationId = gmailRowId(me, thread.id);
       await db.run(
         `insert into conversations (id, owner_id, source, external_id, from_name, ctx, direct, last_at) values ($1, $2, 'gmail', $3, $4, $5, $6, 0)
-         on conflict (id) do update set ctx = excluded.ctx, direct = excluded.direct`,
+         on conflict (owner_id, id) do update set ctx = excluded.ctx, direct = excluded.direct`,
         [conversationId, ownerId, `${me}:${thread.id}`, latest.from.name, subjectOf(emails), direct],
       );
       for (const e of emails) {
@@ -130,13 +130,13 @@ export async function gmailPull({ db, ownerId, now, cursor }: JobContext, accoun
         stored += await db.run(
           `insert into messages (id, conversation_id, owner_id, external_id, sender_name, sender_id, me, body, at, scanned, email)
            select $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb
-           where not exists (select 1 from messages where conversation_id = $2 and external_id = $4)
-           on conflict (id) do nothing`,
+           where not exists (select 1 from messages where owner_id = $3 and conversation_id = $2 and external_id = $4)
+           on conflict (owner_id, id) do nothing`,
           [`${conversationId}:${e.id}`, conversationId, ownerId, e.id, e.me ? ownerName : e.from.name, e.me ? null : e.from.email, e.me, e.text, e.at, e.me, JSON.stringify(details)],
         );
       }
       touched++;
-      await refreshConversation(db, conversationId, { kind: direct ? "im" : "mpim", partner: null }, false);
+      await refreshConversation(db, ownerId, conversationId, { kind: direct ? "im" : "mpim", partner: null }, false);
     }
     next[account.email] = { history, pending: later, at: now };
   }

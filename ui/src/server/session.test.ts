@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
 import { POST as login } from "@/app/api/login/route";
 import { POST as logout } from "@/app/api/logout/route";
@@ -7,11 +7,21 @@ import { fromDashboard, fromScheduler, signedIn } from "./http";
 import {
   checkLogin, clearedCookie, clearFailures, createSession, isHttps, lockedFor, loginConfigured, readSession, recordFailure, SESSION_COOKIE, sessionCookie, sessionOf,
 } from "./session";
+import type { Db } from "./db";
+import { reset, routesUse, testDb } from "./testing";
 
 const NOW = Date.parse("2026-10-12T09:00:00Z");
 const DAY = 86_400_000;
 
-beforeEach(() => {
+let db: Db;
+beforeAll(async () => {
+  db = await testDb();
+  routesUse(db);
+});
+afterAll(() => db.close());
+
+beforeEach(async () => {
+  await reset(db);
   process.env.SECRETS_KEY = Buffer.alloc(32, 7).toString("base64");
   process.env.LOGIN_EMAIL = "Jeremy@Example.com";
   process.env.LOGIN_PASSWORD = "correct horse battery";

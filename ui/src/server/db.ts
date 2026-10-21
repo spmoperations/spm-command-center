@@ -169,6 +169,10 @@ export async function openRemote(url: string, options: { max?: number } = {}): P
 const holder = globalThis as unknown as { __commandCenterDb?: Promise<Db> };
 
 export function getDb(): Promise<Db> {
+  // A test uses a database of its own (see testing.ts), never the one on this machine.
+  if (process.env.VITEST && !process.env.DATABASE_URL && !process.env.DATABASE_DIR) {
+    return Promise.reject(new Error("A test tried to open this computer's own database. Give it a test database instead."));
+  }
   if (!holder.__commandCenterDb) {
     const opening = process.env.DATABASE_URL
       ? openRemote(process.env.DATABASE_URL)

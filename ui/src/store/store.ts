@@ -382,6 +382,12 @@ export const saveTargets = (values: Record<string, number>) => void act("saveTar
 
 // ---------- Settings ----------
 
+// Team logins, the owner's alone. Each resolves to true once it is saved.
+export const addTeamLogin = (name: string, email: string, password: string) => act("addTeamLogin", [name, email, password], `${name.trim()} can sign in now`);
+export const setTeamPassword = (id: string, name: string, password: string) => act("setTeamPassword", [id, password], `New password saved. ${name} signs in with it from now on`);
+export const turnOffTeamLogin = (id: string, name: string) => void act("turnOffTeamLogin", [id], `${name} can no longer sign in`);
+export const removeTeamLogin = (id: string, name: string) => void act("removeTeamLogin", [id], `${name}'s login and everything of theirs are removed`);
+
 export const togglePersonDept = (personId: string, dept: string) => void act("togglePersonDept", [personId, dept]);
 export const addHandle = (personId: string, handle: string) => void act("addHandle", [personId, handle]);
 export const removeHandle = (personId: string, index: number) => void act("removeHandle", [personId, index]);

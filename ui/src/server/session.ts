@@ -1,6 +1,7 @@
-// Sign-in for the dashboard. For now there is one fixed login, set in `.env.local` as
-// LOGIN_EMAIL and LOGIN_PASSWORD. A person who signs in gets a signed cookie that lasts a
-// week; every page and every API route checks it. Nothing here depends on the database.
+// Sign-in for the dashboard. The owner's login is set in `.env.local` as LOGIN_EMAIL and
+// LOGIN_PASSWORD; team members' logins are in the database (see team.ts). A person who signs
+// in gets a signed cookie that lasts a week; every page and every API route checks it.
+// Nothing here depends on the database.
 import crypto from "node:crypto";
 
 export const SESSION_COOKIE = "cc_session";
@@ -32,13 +33,19 @@ export function checkLogin(email: string, password: string): boolean {
   return emailOk && passwordOk;
 }
 
-export function createSession(email: string, now = Date.now()): string {
-  const payload = Buffer.from(JSON.stringify({ email, exp: now + SESSION_MS })).toString("base64url");
+/** Who a session is for. A team member's carries a mark of their password (see team.ts); the owner's has none. */
+export interface Session {
+  email: string;
+  mark?: string;
+}
+
+export function createSession(email: string, now = Date.now(), mark?: string): string {
+  const payload = Buffer.from(JSON.stringify({ email, exp: now + SESSION_MS, ...(mark ? { mark } : {}) })).toString("base64url");
   return `${payload}.${sign(payload).toString("base64url")}`;
 }
 
 /** Who a session cookie belongs to, or null when it is missing, forged or expired. */
-export function readSession(token: string | null | undefined, now = Date.now()): { email: string } | null {
+export function readSession(token: string | null | undefined, now = Date.now()): Session | null {
   if (!token) return null;
   const [payload, signature, extra] = token.split(".");
   if (!payload || !signature || extra !== undefined) return null;
@@ -46,16 +53,16 @@ export function readSession(token: string | null | undefined, now = Date.now()):
     const given = Buffer.from(signature, "base64url");
     const expected = sign(payload);
     if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return null;
-    const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { email?: unknown; exp?: unknown };
+    const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { email?: unknown; exp?: unknown; mark?: unknown };
     if (typeof data.email !== "string" || typeof data.exp !== "number" || data.exp <= now) return null;
-    return { email: data.email };
+    return typeof data.mark === "string" ? { email: data.email, mark: data.mark } : { email: data.email };
   } catch {
     return null;
   }
 }
 
 /** Reads the session from a request's Cookie header. */
-export function sessionOf(request: Request, now = Date.now()): { email: string } | null {
+export function sessionOf(request: Request, now = Date.now()): Session | null {
   const header = request.headers.get("cookie") ?? "";
   for (const part of header.split(";")) {
     const at = part.indexOf("=");

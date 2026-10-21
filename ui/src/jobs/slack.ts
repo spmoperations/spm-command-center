@@ -199,11 +199,11 @@ async function storeMessage(db: Db, ownerId: string, conversationId: string, loo
   const id = `${conversationId}:${m.ts}`;
   const added = await db.run(
     `insert into messages (id, conversation_id, owner_id, external_id, sender_name, sender_id, me, body, at, scanned, thread_ts, attachments, reactions)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb) on conflict (id) do nothing`,
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb) on conflict (owner_id, id) do nothing`,
     [id, conversationId, ownerId, m.ts, sender, m.user ?? null, me, text, slackTsToMs(m.ts), me, thread, JSON.stringify(pictures), JSON.stringify(slackReactions(m.reactions, look.myId))],
   );
   // A message stored before its thread was known is put in its thread now.
-  if (!added && thread) await db.run("update messages set thread_ts = $1 where id = $2 and thread_ts is null", [thread, id]);
+  if (!added && thread) await db.run("update messages set thread_ts = $1 where owner_id = $3 and id = $2 and thread_ts is null", [thread, id, ownerId]);
   return added > 0;
 }
 
@@ -212,7 +212,7 @@ async function storeMessage(db: Db, ownerId: string, conversationId: string, loo
  * now: a reaction is often added long after the message was read, and the search the hourly
  * check uses carries neither. One statement for the whole list. Returns how many changed.
  */
-async function saveExtras(db: Db, conversationId: string, myId: string, messages: HistoryMessage[]): Promise<number> {
+async function saveExtras(db: Db, ownerId: string, conversationId: string, myId: string, messages: HistoryMessage[]): Promise<number> {
   const rows = messages
     .filter((m) => !m.subtype || m.subtype === "thread_broadcast")
     .map((m) => ({ id: `${conversationId}:${m.ts}`, attachments: slackPictures(m.files), reactions: slackReactions(m.reactions, myId) }));
@@ -220,8 +220,8 @@ async function saveExtras(db: Db, conversationId: string, myId: string, messages
   return db.run(
     `update messages m set attachments = r.attachments, reactions = r.reactions
      from jsonb_to_recordset($2::jsonb) as r(id text, attachments jsonb, reactions jsonb)
-     where m.conversation_id = $1 and m.id = r.id and (m.attachments <> r.attachments or m.reactions <> r.reactions)`,
-    [conversationId, JSON.stringify(rows)],
+     where m.owner_id = $3 and m.conversation_id = $1 and m.id = r.id and (m.attachments <> r.attachments or m.reactions <> r.reactions)`,
+    [conversationId, JSON.stringify(rows), ownerId],
   );
 }
 
@@ -229,15 +229,15 @@ async function saveExtras(db: Db, conversationId: string, myId: string, messages
  * Brings a conversation's summary in line with its messages: who it is from, the latest
  * message, whether the owner has answered, and whether they are tagged since they last spoke.
  */
-export async function refreshConversation(db: Db, conversationId: string, look: { kind: SlackKind; partner: string | null }, rawTagged: boolean): Promise<void> {
-  const messages = await db.query<{ sender_name: string; me: boolean; body: string; at: number }>("select sender_name, me, body, at from messages where conversation_id = $1 order by at desc limit 40", [conversationId]);
+export async function refreshConversation(db: Db, ownerId: string, conversationId: string, look: { kind: SlackKind; partner: string | null }, rawTagged: boolean): Promise<void> {
+  const messages = await db.query<{ sender_name: string; me: boolean; body: string; at: number }>("select sender_name, me, body, at from messages where owner_id = $2 and conversation_id = $1 order by at desc limit 40", [conversationId, ownerId]);
   if (!messages.length) return;
   const last = messages[0];
   const lastIncoming = messages.find((m) => !m.me);
-  const [before] = await db.query<{ last_at: number; done: boolean; tagged: boolean }>("select last_at, done, tagged from conversations where id = $1", [conversationId]);
+  const [before] = await db.query<{ last_at: number; done: boolean; tagged: boolean }>("select last_at, done, tagged from conversations where owner_id = $2 and id = $1", [conversationId, ownerId]);
   const newIncoming = Boolean(lastIncoming && Number(lastIncoming.at) > Number(before?.last_at ?? 0));
   await db.run(
-    `update conversations set from_name = $1, last_text = $2, last_at = $3, replied = $4, tagged = $5, done = $6, auto_done = auto_done and $6 where id = $7`,
+    `update conversations set from_name = $1, last_text = $2, last_at = $3, replied = $4, tagged = $5, done = $6, auto_done = auto_done and $6 where owner_id = $8 and id = $7`,
     [
       look.kind === "im" ? (look.partner ?? lastIncoming?.sender_name ?? "Someone") : (lastIncoming?.sender_name ?? last.sender_name),
       (lastIncoming ?? last).body,
@@ -248,6 +248,7 @@ export async function refreshConversation(db: Db, conversationId: string, look: 
       // Something new from someone else reopens a cleared conversation.
       newIncoming ? false : Boolean(before?.done),
       conversationId,
+      ownerId,
     ],
   );
 }
@@ -285,21 +286,21 @@ export async function slackReadThreads({ db, ownerId }: Pick<JobContext, "db" | 
       // A message nobody has answered is not in a thread yet. Once it has replies it is the first of one.
       if (await storeMessage(db, ownerId, conversationId, look, reply, res.messages.length > 1 ? conversation.thread_ts : null)) added++;
     }
-    const changed = (await saveExtras(db, conversationId, look.myId, res.messages)) + (await noteScopes(db, ownerId, slack));
+    const changed = (await saveExtras(db, ownerId, conversationId, look.myId, res.messages)) + (await noteScopes(db, ownerId, slack));
     if (added) {
       const fresh = res.messages.filter((m) => m.user !== look.myId).some((m) => mentionsUser(m.text ?? "", look.myId));
-      await refreshConversation(db, conversationId, { kind: look.channels.get(conversation.external_id)?.kind ?? "public", partner: null }, fresh);
+      await refreshConversation(db, ownerId, conversationId, { kind: look.channels.get(conversation.external_id)?.kind ?? "public", partner: null }, fresh);
     }
     return { added, changed };
   }
   // The messages that could have a thread under them, with how many replies are here already.
   const onScreen = await db.query<{ external_id: string; replies: number }>(
     `select m.external_id,
-            (select count(*)::int from messages r where r.conversation_id = m.conversation_id and r.thread_ts = m.external_id and r.external_id <> m.external_id) as replies
+            (select count(*)::int from messages r where r.owner_id = m.owner_id and r.conversation_id = m.conversation_id and r.thread_ts = m.external_id and r.external_id <> m.external_id) as replies
      from messages m
-     where m.conversation_id = $1 and m.external_id is not null and (m.thread_ts is null or m.thread_ts = m.external_id)
+     where m.owner_id = $3 and m.conversation_id = $1 and m.external_id is not null and (m.thread_ts is null or m.thread_ts = m.external_id)
      order by m.at desc limit $2`,
-    [conversationId, CHECKED_MESSAGES],
+    [conversationId, CHECKED_MESSAGES, ownerId],
   );
   if (!onScreen.length) return { added: 0, changed: 0 };
 
@@ -307,7 +308,7 @@ export async function slackReadThreads({ db, ownerId }: Pick<JobContext, "db" | 
   const history = await slack.call<{ messages: HistoryMessage[] }>("conversations.history", { channel: conversation.external_id, oldest, inclusive: true, limit: 200 });
   const [owner] = await db.query<{ slack_user_id: string | null }>("select slack_user_id from users where id = $1", [ownerId]);
   const myId = owner?.slack_user_id ?? "";
-  let changed = (await saveExtras(db, conversationId, myId, history.messages)) + (await noteScopes(db, ownerId, slack));
+  let changed = (await saveExtras(db, ownerId, conversationId, myId, history.messages)) + (await noteScopes(db, ownerId, slack));
 
   const inSlack = new Map(history.messages.map((m) => [m.ts, m.reply_count ?? 0]));
   const behind = onScreen.filter((m) => (inSlack.get(m.external_id) ?? 0) > m.replies).map((m) => m.external_id);
@@ -329,12 +330,12 @@ export async function slackReadThreads({ db, ownerId }: Pick<JobContext, "db" | 
       for (const id of [reply.user, ...mentionedIds(reply.text ?? "")]) await learnName(db, ownerId, look, slack, id);
       if (await storeMessage(db, ownerId, conversationId, look, reply, thread)) added++;
     }
-    changed += await saveExtras(db, conversationId, myId, res.messages);
+    changed += await saveExtras(db, ownerId, conversationId, myId, res.messages);
   }
   if (added) {
     const known = look.channels.get(conversation.external_id);
     const kind = known?.kind ?? "public";
-    await refreshConversation(db, conversationId, { kind, partner: kind === "im" ? (look.names.get(known?.userId ?? "") ?? null) : null }, false);
+    await refreshConversation(db, ownerId, conversationId, { kind, partner: kind === "im" ? (look.names.get(known?.userId ?? "") ?? null) : null }, false);
   }
   return { added, changed };
 }
@@ -373,8 +374,8 @@ export async function splitChannelThreads(db: Db, ownerId: string, look: Lookup)
     const groups = await db.query<{ root: string; threaded: boolean; tagged: boolean; newest: number }>(
       `select coalesce(thread_ts, external_id) as root, bool_or(thread_ts is not null) as threaded,
               bool_or(not me and length($2) > 1 and position($2 in body) > 0) as tagged, max(at) as newest
-       from messages where conversation_id = $1 and external_id is not null group by 1 order by max(at)`,
-      [row.id, tag],
+       from messages where owner_id = $3 and conversation_id = $1 and external_id is not null group by 1 order by max(at)`,
+      [row.id, tag, ownerId],
     );
     // In a channel the owner follows, a thread nobody tagged them in is part of the channel's own flow.
     const own = groups.filter((g) => g.tagged || (g.threaded && !channel?.selected));
@@ -383,27 +384,27 @@ export async function splitChannelThreads(db: Db, ownerId: string, look: Lookup)
       const id = threadItem(row.external_id, g.root);
       await db.run(
         `insert into conversations (id, owner_id, source, external_id, thread_ts, from_name, ctx, direct, last_at, pri, line, mode, project, done, manual_pri, manual_mode)
-         select $1, owner_id, source, external_id, $2, from_name, ctx, false, 0, pri, line, mode, project, done, manual_pri, manual_mode from conversations where id = $3
-         on conflict (id) do nothing`,
-        [id, g.root, row.id],
+         select $1, owner_id, source, external_id, $2, from_name, ctx, false, 0, pri, line, mode, project, done, manual_pri, manual_mode from conversations where owner_id = $4 and id = $3
+         on conflict (owner_id, id) do nothing`,
+        [id, g.root, row.id, ownerId],
       );
       // What Slack sent is filed under the new row, and is named after it like everything read from now on.
-      await db.run("update messages set conversation_id = $1, id = $1 || ':' || external_id where conversation_id = $2 and external_id is not null and coalesce(thread_ts, external_id) = $3", [id, row.id, g.root]);
+      await db.run("update messages set conversation_id = $1, id = $1 || ':' || external_id where owner_id = $4 and conversation_id = $2 and external_id is not null and coalesce(thread_ts, external_id) = $3", [id, row.id, g.root, ownerId]);
       // Replies written in the dashboard into this thread go with it.
-      await db.run("update messages set conversation_id = $1 where conversation_id = $2 and external_id is null and thread_ts = $3", [id, row.id, g.root]);
-      await refreshConversation(db, id, { kind, partner: null }, g.tagged);
+      await db.run("update messages set conversation_id = $1 where owner_id = $4 and conversation_id = $2 and external_id is null and thread_ts = $3", [id, row.id, g.root, ownerId]);
+      await refreshConversation(db, ownerId, id, { kind, partner: null }, g.tagged);
       // Splitting is not news: a row that was cleared stays cleared.
-      await db.run("update conversations set done = $1 where id = $2", [row.done, id]);
+      await db.run("update conversations set done = $1 where owner_id = $3 and id = $2", [row.done, id, ownerId]);
       latest = id;
       made++;
     }
     if (!latest) continue;
     await repoint(db, ownerId, row.id, latest);
-    const [{ left }] = await db.query<{ left: number }>("select count(*)::int as left from messages where conversation_id = $1", [row.id]);
-    if (!left) await db.run("delete from conversations where id = $1", [row.id]);
+    const [{ left }] = await db.query<{ left: number }>("select count(*)::int as left from messages where owner_id = $2 and conversation_id = $1", [row.id, ownerId]);
+    if (!left) await db.run("delete from conversations where owner_id = $2 and id = $1", [row.id, ownerId]);
     else {
-      await refreshConversation(db, row.id, { kind, partner: null }, false);
-      await db.run("update conversations set tagged = false, done = $1 where id = $2", [row.done || !channel?.selected, row.id]);
+      await refreshConversation(db, ownerId, row.id, { kind, partner: null }, false);
+      await db.run("update conversations set tagged = false, done = $1 where owner_id = $3 and id = $2", [row.done || !channel?.selected, row.id, ownerId]);
     }
   }
   return made;
@@ -469,7 +470,7 @@ export async function slackPull({ db, ownerId, now, cursor }: JobContext, slack:
       if (!entry) {
         const created = await db.run(
           `insert into conversations (id, owner_id, source, external_id, thread_ts, from_name, ctx, direct, last_at) values ($1, $2, 'slack', $3, $4, $5, $6, $7, 0)
-           on conflict (id) do nothing`,
+           on conflict (owner_id, id) do nothing`,
           [conversationId, ownerId, m.channel.id, own ? root : null, partner ?? "Someone", fromApp ? "App notification" : contextLabel(kind, known?.name ?? m.channel.name ?? "channel"), !fromApp && (kind === "im" || kind === "mpim")],
         );
         entry = { kind, partner, tagged: false, isNew: created > 0, firstTs: m.ts, channelId: m.channel.id, root: own ? root : null };
@@ -497,18 +498,18 @@ export async function slackPull({ db, ownerId, now, cursor }: JobContext, slack:
       if (await storeMessage(db, ownerId, conversationId, look, m, thread)) stored++;
     }
     // The search that found these carries no reactions and only some pictures. The thread does.
-    await saveExtras(db, conversationId, look.myId, res.messages);
+    await saveExtras(db, ownerId, conversationId, look.myId, res.messages);
     // The thread has a row of its own now. Its earlier messages, filed under the channel
     // before anyone tagged the owner in it, are here already and leave the channel's row.
-    if (own && (await db.run("delete from messages where conversation_id = $1 and (thread_ts = $2 or external_id = $2)", [channelRow(channelId), thread]))) emptied.set(channelRow(channelId), conversationId);
+    if (own && (await db.run("delete from messages where owner_id = $3 and conversation_id = $1 and (thread_ts = $2 or external_id = $2)", [channelRow(channelId), thread, ownerId]))) emptied.set(channelRow(channelId), conversationId);
   }
   for (const [general, item] of emptied) {
     if (touched.has(general)) continue;
-    const [{ left }] = await db.query<{ left: number }>("select count(*)::int as left from messages where conversation_id = $1", [general]);
-    if (left) await refreshConversation(db, general, { kind: look.channels.get(general.slice("slack:".length))?.kind ?? "public", partner: null }, false);
+    const [{ left }] = await db.query<{ left: number }>("select count(*)::int as left from messages where owner_id = $2 and conversation_id = $1", [general, ownerId]);
+    if (left) await refreshConversation(db, ownerId, general, { kind: look.channels.get(general.slice("slack:".length))?.kind ?? "public", partner: null }, false);
     else {
       await repoint(db, ownerId, general, item);
-      await db.run("delete from conversations where id = $1", [general]);
+      await db.run("delete from conversations where owner_id = $2 and id = $1", [general, ownerId]);
     }
   }
 
@@ -522,10 +523,10 @@ export async function slackPull({ db, ownerId, now, cursor }: JobContext, slack:
         for (const id of [m.user, ...mentionedIds(m.text ?? "")]) await learnName(db, ownerId, look, slack, id);
         await storeMessage(db, ownerId, conversationId, look, m);
         // Earlier context is background, not something to search for tasks.
-        await db.run("update messages set scanned = true where id = $1", [`${conversationId}:${m.ts}`]);
+        await db.run("update messages set scanned = true where owner_id = $2 and id = $1", [`${conversationId}:${m.ts}`, ownerId]);
       }
     }
-    await refreshConversation(db, conversationId, entry, entry.tagged);
+    await refreshConversation(db, ownerId, conversationId, entry, entry.tagged);
   }
 
   return {

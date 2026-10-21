@@ -25,7 +25,7 @@ export async function taskSuggest({ db, ownerId, now }: JobContext, finder: Find
   // Pre-filter in plain code: unread messages from others, in conversations that are a direct
   // message, tag the owner, or that the rules rated above Low.
   const fresh = await db.query<{ conversation_id: string }>(
-    `select m.conversation_id, max(m.at) as latest from messages m join conversations c on c.id = m.conversation_id
+    `select m.conversation_id, max(m.at) as latest from messages m join conversations c on c.owner_id = m.owner_id and c.id = m.conversation_id
      where m.owner_id = $1 and not m.scanned and not m.me and length(m.body) >= $2
        and not c.done and (c.direct or c.tagged or c.pri in ('high', 'mid'))
      group by m.conversation_id order by latest desc limit $3`,
@@ -40,8 +40,8 @@ export async function taskSuggest({ db, ownerId, now }: JobContext, finder: Find
   // A list of ids travels as JSON text, which every Postgres driver sends the same way.
   const idList = JSON.stringify(ids);
   const [owner] = await db.query<{ name: string }>("select name from users where id = $1", [ownerId]);
-  const conversations = await db.query<{ id: string; source: string; ctx: string; from_name: string }>("select id, source, ctx, from_name from conversations where id in (select jsonb_array_elements_text($1::jsonb))", [idList]);
-  const lines = await db.query<{ conversation_id: string; sender_name: string; me: boolean; body: string }>("select conversation_id, sender_name, me, body from messages where conversation_id in (select jsonb_array_elements_text($1::jsonb)) order by at", [idList]);
+  const conversations = await db.query<{ id: string; source: string; ctx: string; from_name: string }>("select id, source, ctx, from_name from conversations where owner_id = $2 and id in (select jsonb_array_elements_text($1::jsonb))", [idList, ownerId]);
+  const lines = await db.query<{ conversation_id: string; sender_name: string; me: boolean; body: string }>("select conversation_id, sender_name, me, body from messages where owner_id = $2 and conversation_id in (select jsonb_array_elements_text($1::jsonb)) order by at", [idList, ownerId]);
   const known = [
     ...(await db.query<{ title: string }>("select title from tasks where owner_id = $1 and (not done or done_at > $2)", [ownerId, now - 7 * 86_400_000])),
     ...(await db.query<{ title: string }>("select title from suggestions where owner_id = $1 and created_at > $2", [ownerId, now - 14 * 86_400_000])),

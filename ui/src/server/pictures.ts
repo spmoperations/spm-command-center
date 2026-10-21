@@ -48,7 +48,7 @@ export async function pictureResponse(db: Db, ownerId: string, query: URLSearchP
   const n = Number(query.get("n") ?? 0);
   if (!id || !Number.isInteger(n) || n < 0) return none("Which picture?", 400);
   const [row] = await db.query<{ attachments: StoredPicture[] | null; source: string; chat: string }>(
-    "select m.attachments, c.source, c.external_id as chat from messages m join conversations c on c.id = m.conversation_id where m.owner_id = $1 and m.id = $2",
+    "select m.attachments, c.source, c.external_id as chat from messages m join conversations c on c.owner_id = m.owner_id and c.id = m.conversation_id where m.owner_id = $1 and m.id = $2",
     [ownerId, id],
   );
   const found = row?.attachments?.[n];

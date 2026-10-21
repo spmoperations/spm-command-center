@@ -62,7 +62,7 @@ async function storeChat(
   for (const m of messages) {
     const added = await db.run(
       `insert into messages (id, conversation_id, owner_id, external_id, sender_name, sender_id, me, body, at, scanned, reactions)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb) on conflict (id) do nothing`,
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb) on conflict (owner_id, id) do nothing`,
       [`${conversationId}:${m.id}`, conversationId, ownerId, String(m.id), m.out ? ownerName : m.sender, senderOf(m), m.out, m.text, m.at, m.out, JSON.stringify(m.reactions)],
     );
     if (added) fresh.push(m);
@@ -70,8 +70,8 @@ async function storeChat(
   let changed = await db.run(
     `update messages m set reactions = r.reactions, sender_id = coalesce(r.sender_id, m.sender_id)
      from jsonb_to_recordset($2::jsonb) as r(id text, reactions jsonb, sender_id text)
-     where m.conversation_id = $1 and m.id = r.id and (m.reactions <> r.reactions or (r.sender_id is not null and m.sender_id is distinct from r.sender_id))`,
-    [conversationId, JSON.stringify(messages.map((m) => ({ id: `${conversationId}:${m.id}`, reactions: m.reactions, sender_id: senderOf(m) })))],
+     where m.owner_id = $3 and m.conversation_id = $1 and m.id = r.id and (m.reactions <> r.reactions or (r.sender_id is not null and m.sender_id is distinct from r.sender_id))`,
+    [conversationId, JSON.stringify(messages.map((m) => ({ id: `${conversationId}:${m.id}`, reactions: m.reactions, sender_id: senderOf(m) }))), ownerId],
   );
 
   // Pictures and stickers, newest first, for the messages that do not have theirs yet.
@@ -80,8 +80,8 @@ async function storeChat(
     const missing = new Set(
       (await db.query<{ external_id: string }>(
         // "Without a key" covers pictures an earlier version saved as files: they are fetched again.
-        "select external_id from messages where conversation_id = $1 and (attachments = '[]'::jsonb or not jsonb_exists(attachments -> 0, 'key')) and external_id in (select jsonb_array_elements_text($2::jsonb))",
-        [conversationId, JSON.stringify(withMedia.map((m) => String(m.id)))],
+        "select external_id from messages where owner_id = $3 and conversation_id = $1 and (attachments = '[]'::jsonb or not jsonb_exists(attachments -> 0, 'key')) and external_id in (select jsonb_array_elements_text($2::jsonb))",
+        [conversationId, JSON.stringify(withMedia.map((m) => String(m.id))), ownerId],
       )).map((r) => r.external_id),
     );
     for (const m of withMedia.filter((x) => missing.has(String(x.id))).reverse()) {
@@ -91,7 +91,7 @@ async function storeChat(
       const key = bytes && (await saveTelegramPicture(db, ownerId, chat.id, m.id, bytes, now));
       if (!key) continue;
       const picture: StoredPicture = { kind: m.media!.kind, name: m.media!.name, w: m.media!.w, h: m.media!.h, key };
-      changed += await db.run("update messages set attachments = $1::jsonb where id = $2", [JSON.stringify([picture]), `${conversationId}:${m.id}`]);
+      changed += await db.run("update messages set attachments = $1::jsonb where owner_id = $3 and id = $2", [JSON.stringify([picture]), `${conversationId}:${m.id}`, ownerId]);
     }
   }
 
@@ -165,12 +165,12 @@ export async function telegramPull({ db, ownerId, now, cursor }: JobContext, tel
     const conversationId = `telegram:${chat.id}`;
     await db.run(
       `insert into conversations (id, owner_id, source, external_id, from_name, ctx, direct, last_at) values ($1, $2, 'telegram', $3, $4, $5, $6, 0)
-       on conflict (id) do nothing`,
+       on conflict (owner_id, id) do nothing`,
       [conversationId, ownerId, chat.id, chat.name, direct ? "Direct message" : chat.name, direct],
     );
     stored += (await storeChat({ db, ownerId, now }, telegram, { id: chat.id, direct }, fresh, owner?.name ?? "You", budget)).fresh.length;
     touched++;
-    await refreshConversation(db, conversationId, { kind: direct ? "im" : "mpim", partner: direct ? chat.name : null }, tagged);
+    await refreshConversation(db, ownerId, conversationId, { kind: direct ? "im" : "mpim", partner: direct ? chat.name : null }, tagged);
   }
 
   return {
@@ -188,7 +188,7 @@ export async function telegramPull({ db, ownerId, now, cursor }: JobContext, tel
  */
 export async function telegramRefresh({ db, ownerId, now }: Pick<JobContext, "db" | "ownerId" | "now">, telegram: TelegramApi, conversationId: string): Promise<{ added: number; changed: number }> {
   const [chat] = await db.query<{ external_id: string; from_name: string; direct: boolean; oldest: number | null }>(
-    "select c.external_id, c.from_name, c.direct, (select min(m.at) from messages m where m.conversation_id = c.id and m.external_id is not null) as oldest from conversations c where c.owner_id = $1 and c.id = $2 and c.source = 'telegram'",
+    "select c.external_id, c.from_name, c.direct, (select min(m.at) from messages m where m.owner_id = c.owner_id and m.conversation_id = c.id and m.external_id is not null) as oldest from conversations c where c.owner_id = $1 and c.id = $2 and c.source = 'telegram'",
     [ownerId, conversationId],
   );
   if (!chat) return { added: 0, changed: 0 };
@@ -197,6 +197,6 @@ export async function telegramRefresh({ db, ownerId, now }: Pick<JobContext, "db
   const latest = (await telegram.messages(chat.external_id, { afterId: 0, limit: MESSAGES_PER_CHAT })).filter((m) => m.at >= Number(chat.oldest ?? 0));
   // Enough for every message read here, so one look at a chat brings in all of its pictures.
   const { fresh, changed } = await storeChat({ db, ownerId, now }, telegram, { id: chat.external_id, direct: chat.direct }, latest, owner?.name ?? "You", { pictures: MESSAGES_PER_CHAT, avatars: 10 });
-  if (fresh.length) await refreshConversation(db, conversationId, { kind: chat.direct ? "im" : "mpim", partner: chat.direct ? chat.from_name : null }, fresh.some((m) => !m.out && m.mentioned));
+  if (fresh.length) await refreshConversation(db, ownerId, conversationId, { kind: chat.direct ? "im" : "mpim", partner: chat.direct ? chat.from_name : null }, fresh.some((m) => !m.out && m.mentioned));
   return { added: fresh.length, changed };
 }

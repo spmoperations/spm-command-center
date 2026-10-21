@@ -285,16 +285,16 @@ describe("connecting Google", () => {
   /** The whole trip: the Connect button, Google's page, and the way back. */
   async function connect(email: string, session = signedIn()) {
     withKeys();
-    const start = googleLoginRedirect(visit("/api/google/start", [session]), NOW);
+    const start = await googleLoginRedirect(visit("/api/google/start", [session]), NOW, db);
     const asked = new URL(start.headers.get("location")!).searchParams;
     const google = googleFor(email);
     const back = await googleCallback(visit(`/api/google/callback?state=${asked.get("state")}&code=good-code&scope=x`, [session, `cc_google_login=${loginCookieOf(start)}`], "cross-site"), { db, fetchImpl: google.fetchImpl, now: NOW + MINUTE, firstRead: false });
     return { start, asked, google, back };
   }
 
-  it("sends the person to Google's own page, asking for a lasting, read-only login and the account chooser", () => {
+  it("sends the person to Google's own page, asking for a lasting, read-only login and the account chooser", async () => {
     withKeys();
-    const res = googleLoginRedirect(visit("/api/google/start", [signedIn()]), NOW);
+    const res = await googleLoginRedirect(visit("/api/google/start", [signedIn()]), NOW, db);
     expect(res.status).toBe(302);
     const to = new URL(res.headers.get("location")!);
     expect(`${to.origin}${to.pathname}`).toBe("https://accounts.google.com/o/oauth2/v2/auth");
@@ -305,21 +305,21 @@ describe("connecting Google", () => {
     expect(res.headers.get("set-cookie")).toMatch(/^cc_google_login=[^;]+; Path=\/api\/google; HttpOnly; SameSite=Lax; Max-Age=600$/);
   });
 
-  it("asks Google to send the person back to the https address of the live site, even when the request reaches the app as http", () => {
+  it("asks Google to send the person back to the https address of the live site, even when the request reaches the app as http", async () => {
     withKeys();
     const request = new Request("http://spm-command-center.vercel.app/api/google/start", { headers: { host: "spm-command-center.vercel.app", cookie: signedIn(), "sec-fetch-site": "same-origin", "x-forwarded-proto": "https" } });
-    const res = googleLoginRedirect(request, NOW);
+    const res = await googleLoginRedirect(request, NOW, db);
     expect(new URL(res.headers.get("location")!).searchParams.get("redirect_uri")).toBe("https://spm-command-center.vercel.app/api/google/callback");
     expect(res.headers.get("set-cookie")).toMatch(/; Secure$/);
   });
 
-  it("starts only from the dashboard's own button, for someone signed in, on a server that may use Google", () => {
+  it("starts only from the dashboard's own button, for someone signed in, on a server that may use Google", async () => {
     withKeys();
     const back = (res: Response) => [res.status, new URL(res.headers.get("location")!).searchParams.get("google_error")];
-    expect(back(googleLoginRedirect(visit("/api/google/start", [signedIn()], "cross-site")))).toEqual([302, "Click Connect Google on this page to connect."]);
-    expect(back(googleLoginRedirect(visit("/api/google/start", [])))).toEqual([302, "Please sign in, then click Connect Google again."]);
+    expect(back(await googleLoginRedirect(visit("/api/google/start", [signedIn()], "cross-site"), NOW, db))).toEqual([302, "Click Connect Google on this page to connect."]);
+    expect(back(await googleLoginRedirect(visit("/api/google/start", []), NOW, db))).toEqual([302, "Please sign in, then click Connect Google again."]);
     process.env.DATABASE_URL = HOSTED;
-    expect(back(googleLoginRedirect(visit("/api/google/start", [signedIn()])))).toEqual([302, GOOGLE_OFF_HERE]);
+    expect(back(await googleLoginRedirect(visit("/api/google/start", [signedIn()]), NOW, db))).toEqual([302, GOOGLE_OFF_HERE]);
   });
 
   it("swaps Google's code for a lasting login, keeps it sealed with where the mailbox stood, and goes back to Connections", async () => {
@@ -355,7 +355,7 @@ describe("connecting Google", () => {
   it("will not take an answer that did not start here, is too old, or was refused", async () => {
     withKeys();
     const session = signedIn();
-    const start = googleLoginRedirect(visit("/api/google/start", [session]), NOW);
+    const start = await googleLoginRedirect(visit("/api/google/start", [session]), NOW, db);
     const state = new URL(start.headers.get("location")!).searchParams.get("state");
     const cookie = `cc_google_login=${loginCookieOf(start)}`;
     const google = googleFor(JEREMY_MAIL);

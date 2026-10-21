@@ -59,7 +59,7 @@ export async function fathomPull({ db, ownerId, now, cursor }: JobContext, apiKe
       await db.run(
         `insert into meetings (id, owner_id, external_id, title, started_at, duration_min, who, place, url, summary, transcript, action_items)
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-         on conflict (id) do update set title = excluded.title, summary = excluded.summary, transcript = excluded.transcript, action_items = excluded.action_items, who = excluded.who, duration_min = excluded.duration_min`,
+         on conflict (owner_id, id) do update set title = excluded.title, summary = excluded.summary, transcript = excluded.transcript, action_items = excluded.action_items, who = excluded.who, duration_min = excluded.duration_min`,
         [id, ownerId, m.externalId, m.title, m.startedAt, m.durationMin, m.who, m.place, m.url, m.summary, JSON.stringify(m.transcript), JSON.stringify(m.actionItems)],
       );
       calls++;

@@ -26,14 +26,21 @@ Checks: `npm test`, `npm run test:hosted`, `npm run typecheck`, `npm run lint`, 
 
 ## Sign-in
 
-There is one fixed login for now: `LOGIN_EMAIL` and `LOGIN_PASSWORD` in `ui/.env.local`. They are not in the code, because this repository is public.
+The owner's login is `LOGIN_EMAIL` and `LOGIN_PASSWORD` in `ui/.env.local`. They are not in the code, because this repository is public.
 
 - A visitor who is not signed in is sent to `/login` by `ui/src/proxy.ts`. Every API route checks the session again itself.
 - Signing in sets a signed cookie that lasts 7 days. Scripts cannot read it, and it is sent only over https once the site is on https.
 - Eight wrong passwords in a row lock sign-in for ten minutes.
-- To change the password, edit `LOGIN_PASSWORD` and restart. Changing `SECRETS_KEY` signs everyone out.
+- To change the owner's password, edit `LOGIN_PASSWORD` and restart. Changing `SECRETS_KEY` signs everyone out.
 
-A login per person (Supabase sign-in) replaces this when more people use the dashboard.
+### Team logins
+
+The owner can give someone on the team a Command Center of their own: **Settings → Team logins**, with their name, email and a password (at least 10 characters; **Make one** writes one). The dashboard does not send it; the owner does.
+
+- A team member signs in at the same address, connects their own Slack, Google, Telegram and Fathom on their Connections page, and sees only their own messages, emails, calls and tasks. The owner's data, connections and login are not shown to them and do not change.
+- Every query is limited to the signed-in person (`owner_id`), and a test fails if one is not. Two people in the same Slack chat or on the same call each have their own row under the same id.
+- **New password** ends that person's sessions. **Turn off** stops their sign-in and their checks, and keeps their data. **Remove** deletes their login and everything of theirs.
+- Only the owner sees Team logins. The scheduled checks run for the owner first, then for each team member who can sign in (`ui/src/server/team.ts`).
 
 ## Switched off for now
 
@@ -155,7 +162,7 @@ To move to the hosted database: put the string in `ui/.env.local`, run `npm run 
 2. **One script per function, each with its own timer.**
 3. **Hide what does not work yet.**
 4. **Separate from the tracker.** This repository shares nothing with `spm-hook-generator`.
-5. **Built for one person, ready for more.** Every row belongs to one owner.
+5. **One Command Center per person.** Every row belongs to one person, and every query names whose rows it reads.
 
 ## Not done yet
 
@@ -167,6 +174,6 @@ To move to the hosted database: put the string in `ui/.env.local`, run `npm run 
 | Pictures from Slack | The `files:read` permission on the Slack app (User Token Scopes), then a reinstall. A workspace's own custom emoji show by name; their pictures would need `emoji:read`. |
 | Google, proven | Built and tested against a pretend Google, on branch `google-connection` only. It needs an OAuth client in Google Cloud (see `docs/google-connection.md`), a real login on a developer's machine, then `GOOGLE_HOSTED=true` and the client's keys on the host. |
 | Replying to emails | The `gmail.send` permission, and a sender in the outbox. Until then an email opens in Gmail to be answered. |
-| A login per person | Supabase sign-in, in place of the one fixed login. The hosted database is in use already (see Database). |
+| Team members on the live site | Built and tested on a developer's machine (see Team logins). Each person connects their own accounts; Slack asks each of them to install the app for themselves. A shared view of the whole team's tasks comes next. |
 | Personal: Payments, Goals, Health | The tabs from the prototype's Personal side that are not built. |
 | Hosting | Deploying it. The route for the host's scheduler and `vercel.json` are in place (see Automatic sync); it has been tested on this machine, not on Vercel. |

@@ -49,6 +49,16 @@ export interface ThreadMessage {
   avatar?: string;
 }
 
+/** A team member's login, as the owner sees it in Settings. */
+export interface TeamLogin {
+  id: string;
+  name: string;
+  email: string;
+  /** False once the owner turned it off: their data stays, and they can no longer sign in. */
+  active: boolean;
+  createdAt: number;
+}
+
 /** One change made to many conversations at once, picked on screen. */
 export interface ConversationChange {
   /** true marks them done, false puts them back in the inbox. */
@@ -377,6 +387,10 @@ export interface AppState {
   /** Profile picture addresses by the name a person's messages carry. A name with no entry gets initials. */
   avatars: Record<string, string>;
   owner: { name: string };
+  /** Who is signed in: the owner, or a team member with a Command Center of their own. */
+  me: { id: string; isOwner: boolean };
+  /** For the owner only: the team members' logins. Empty for everyone else. */
+  logins: TeamLogin[];
   /** False while replies are held in the outbox and not sent. */
   sendingEnabled: boolean;
   /**

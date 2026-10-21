@@ -30,7 +30,7 @@ const note = (text: string) => page(`<!doctype html><meta charset="utf-8"><body 
 /** The email `messageId` of the email row `conversationId`, if both are the owner's. */
 export async function emailPageResponse(db: Db, ownerId: string, conversationId: string, messageId: string, open: (email: string) => Promise<GoogleApi> = (email) => googleApi(db, ownerId, email)): Promise<Response> {
   const [row] = await db.query<{ external_id: string }>(
-    "select c.external_id from conversations c join messages m on m.conversation_id = c.id where c.owner_id = $1 and c.id = $2 and c.source = 'gmail' and m.external_id = $3",
+    "select c.external_id from conversations c join messages m on m.owner_id = c.owner_id and m.conversation_id = c.id where c.owner_id = $1 and c.id = $2 and c.source = 'gmail' and m.external_id = $3",
     [ownerId, conversationId, messageId],
   );
   if (!row) return note("This email is not in the dashboard any more.");

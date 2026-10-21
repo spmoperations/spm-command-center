@@ -1,6 +1,6 @@
 import { ready } from "@/server/boot";
-import { failed, fromDashboard, refused, signedIn, signInFirst } from "@/server/http";
-import { forgetGoogle, loadState, OWNER_ID } from "@/server/repo";
+import { failed, fromDashboard, refused, signedInAs, signInFirst } from "@/server/http";
+import { forgetGoogle, loadState } from "@/server/repo";
 
 /**
  * Disconnects one Google account, named by `email`. With `forget`, the emails read from it
@@ -8,14 +8,15 @@ import { forgetGoogle, loadState, OWNER_ID } from "@/server/repo";
  */
 export async function POST(request: Request) {
   if (!fromDashboard(request)) return refused();
-  if (!signedIn(request)) return signInFirst();
+  const owner = await signedInAs(request);
+  if (!owner) return signInFirst(request);
   try {
     const body = (await request.json()) as { step?: unknown; email?: unknown; forget?: unknown };
     if (body.step !== "disconnect") return failed(new Error("Unknown step."));
     if (typeof body.email !== "string" || !body.email.includes("@")) return failed(new Error("Which Google account?"));
     const db = await ready();
-    await forgetGoogle(db, OWNER_ID, body.email, body.forget === true);
-    return Response.json({ disconnected: true, state: await loadState(db) });
+    await forgetGoogle(db, owner, body.email, body.forget === true);
+    return Response.json({ disconnected: true, state: await loadState(db, owner) });
   } catch (error) {
     return failed(error);
   }

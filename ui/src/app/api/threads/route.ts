@@ -2,8 +2,8 @@ import { slackReadThreads } from "@/jobs/slack";
 import { telegramRefresh } from "@/jobs/telegram";
 import { ready } from "@/server/boot";
 import { secretFor } from "@/server/connections";
-import { failed, fromDashboard, refused, signedIn, signInFirst } from "@/server/http";
-import { loadState, OWNER_ID } from "@/server/repo";
+import { failed, fromDashboard, refused, signedInAs, signInFirst } from "@/server/http";
+import { loadState } from "@/server/repo";
 import { RateLimited, slackClient } from "@/server/slack";
 import { telegramApi, telegramConnected } from "@/server/telegram";
 
@@ -17,7 +17,8 @@ export const maxDuration = 60;
  */
 export async function POST(request: Request) {
   if (!fromDashboard(request)) return refused();
-  if (!signedIn(request)) return signInFirst();
+  const owner = await signedInAs(request);
+  if (!owner) return signInFirst(request);
   try {
     const { id } = (await request.json()) as { id?: unknown };
     if (typeof id !== "string") return failed(new Error("Which conversation?"));
@@ -25,19 +26,19 @@ export async function POST(request: Request) {
     // An email is read whole by the Gmail check: there is nothing more to fetch when it is opened.
     if (id.startsWith("gmail:")) return Response.json({ added: 0 });
     if (id.startsWith("telegram:")) {
-      if (!(await telegramConnected(db, OWNER_ID))) return Response.json({ added: 0 });
-      const telegram = await telegramApi(db, OWNER_ID);
+      if (!(await telegramConnected(db, owner))) return Response.json({ added: 0 });
+      const telegram = await telegramApi(db, owner);
       try {
-        const { added, changed } = await telegramRefresh({ db, ownerId: OWNER_ID, now: Date.now() }, telegram, id);
-        return Response.json(added || changed ? { added, state: await loadState(db) } : { added });
+        const { added, changed } = await telegramRefresh({ db, ownerId: owner, now: Date.now() }, telegram, id);
+        return Response.json(added || changed ? { added, state: await loadState(db, owner) } : { added });
       } finally {
         await telegram.close();
       }
     }
-    const token = await secretFor(db, OWNER_ID, "slack");
+    const token = await secretFor(db, owner, "slack");
     if (!token) return Response.json({ added: 0 });
-    const { added, changed } = await slackReadThreads({ db, ownerId: OWNER_ID }, slackClient(token), id);
-    return Response.json(added || changed ? { added, state: await loadState(db) } : { added });
+    const { added, changed } = await slackReadThreads({ db, ownerId: owner }, slackClient(token), id);
+    return Response.json(added || changed ? { added, state: await loadState(db, owner) } : { added });
   } catch (error) {
     // Slack asking for a pause is not worth an error on screen: the threads come next time.
     if (error instanceof RateLimited) return Response.json({ added: 0 });

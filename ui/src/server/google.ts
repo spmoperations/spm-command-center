@@ -128,7 +128,7 @@ const b64url = (bytes: Buffer) => bytes.toString("base64url");
  * sends them back. `site` is the address the dashboard was opened at: Google sends them back
  * to the same one, which must be listed in the OAuth client in Google Cloud.
  */
-export function startGoogleLogin(site: string, secure: boolean, now = Date.now()): { url: string; cookie: string } {
+export function startGoogleLogin(site: string, secure: boolean, now = Date.now(), ownerId?: string): { url: string; cookie: string } {
   const blocked = googleBlocked();
   if (blocked) throw new GoogleSaid(blocked);
   const state = b64url(crypto.randomBytes(24));
@@ -151,7 +151,7 @@ export function startGoogleLogin(site: string, secure: boolean, now = Date.now()
   }).toString();
   // Lax, not Strict: the way back from Google is a link from another site, and a Strict
   // cookie would not come with it.
-  const cookie = `${GOOGLE_LOGIN_COOKIE}=${seal(JSON.stringify({ v: 1, state, verifier, redirect, at: now }))}; Path=/api/google; HttpOnly; SameSite=Lax; Max-Age=${LOGIN_MINUTES * 60}${secure ? "; Secure" : ""}`;
+  const cookie = `${GOOGLE_LOGIN_COOKIE}=${seal(JSON.stringify({ v: 1, state, verifier, redirect, at: now, ...(ownerId ? { owner: ownerId } : {}) }))}; Path=/api/google; HttpOnly; SameSite=Lax; Max-Age=${LOGIN_MINUTES * 60}${secure ? "; Secure" : ""}`;
   return { url: url.toString(), cookie };
 }
 
@@ -179,13 +179,15 @@ export async function finishGoogleLogin(
   const blocked = googleBlocked();
   if (blocked) throw new GoogleSaid(blocked);
   const again = "That Google login has timed out or did not start here. Click Connect Google again.";
-  let pending: { v: number; state: string; verifier: string; redirect: string; at: number };
+  let pending: { v: number; state: string; verifier: string; redirect: string; at: number; owner?: string };
   try {
     pending = JSON.parse(unseal(cookie ?? ""));
   } catch {
     throw new GoogleSaid(again);
   }
   if (pending.v !== 1 || now - pending.at > LOGIN_MINUTES * 60_000 || now < pending.at) throw new GoogleSaid(again);
+  // Started by someone else signed in on this browser: it would connect the account to the wrong person.
+  if (pending.owner !== undefined && pending.owner !== ownerId) throw new GoogleSaid(again);
   const state = answer.get("state") ?? "";
   if (state.length !== pending.state.length || !crypto.timingSafeEqual(Buffer.from(state), Buffer.from(pending.state))) throw new GoogleSaid(again);
   const refused = answer.get("error");

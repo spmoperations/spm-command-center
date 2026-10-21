@@ -1,8 +1,7 @@
 import { connection } from "next/server";
 import { ready } from "@/server/boot";
-import { failed, signedIn, signInFirst } from "@/server/http";
+import { failed, signedInAs, signInFirst } from "@/server/http";
 import { pictureResponse } from "@/server/pictures";
-import { OWNER_ID } from "@/server/repo";
 
 export const maxDuration = 30;
 
@@ -12,9 +11,10 @@ export const maxDuration = 30;
  */
 export async function GET(request: Request) {
   await connection();
-  if (!signedIn(request)) return signInFirst();
+  const owner = await signedInAs(request);
+  if (!owner) return signInFirst(request);
   try {
-    return await pictureResponse(await ready(), OWNER_ID, new URL(request.url).searchParams);
+    return await pictureResponse(await ready(), owner, new URL(request.url).searchParams);
   } catch (error) {
     return failed(error, 500);
   }

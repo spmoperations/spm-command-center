@@ -16,11 +16,13 @@ import { isEmailAddress, parseAddress, type Address } from "./gmail";
 import { disconnectGoogle, googleAccounts, googleAvailable, googleBlocked, googleCan } from "./google";
 import { telegramAvatarIds, type StoredPicture } from "./media";
 import { SLACK_FILES_SCOPE, type Fetch } from "./slack";
+import { hashPassword, MIN_PASSWORD, teamLogins } from "./team";
 import { telegramAvailable, telegramBlocked } from "./telegram";
 import type { Db } from "./db";
+import { OWNER_ID } from "./owner";
 
 /** Phase 1 has one person. Every table already carries the owner, so more can be added later. */
-export const OWNER_ID = "owner";
+export { OWNER_ID };
 
 export const uid = (prefix: string) => `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
 export const sendingEnabled = () => process.env.SENDING_ENABLED === "true";
@@ -122,7 +124,7 @@ export async function importantConversations(db: Db, ownerId: string): Promise<S
        or exists (select 1 from important i where i.owner_id = $1 and i.source = c.source and i.kind = 'person' and (
          (c.direct and i.external_id = c.external_id)
          or i.external_id = (select s.user_id from slack_channels s where s.owner_id = $1 and s.id = c.external_id and s.kind = 'im')
-         or i.external_id = (select m.sender_id from messages m where m.conversation_id = c.id and not m.me and m.sender_id is not null order by m.at desc limit 1)
+         or i.external_id = (select m.sender_id from messages m where m.owner_id = c.owner_id and m.conversation_id = c.id and not m.me and m.sender_id is not null order by m.at desc limit 1)
        ))
      )`,
     [ownerId],
@@ -135,12 +137,12 @@ async function loadConversations(db: Db, ownerId: string): Promise<Conversation[
   // channel can hold thousands of messages. A thread counts as one group and is kept whole
   // (its first message and its newest replies), so a reply never shows without what it answers.
   const [rows, messages, important] = await Promise.all([
-    db.query<ConversationRow>(`select * from conversations where id in (${SHOWN})`, [ownerId]),
+    db.query<ConversationRow>(`select * from conversations where owner_id = $1 and id in (${SHOWN})`, [ownerId]),
     db.query<MessageRow>(
       `with grouped as (
          select m.*, coalesce(m.thread_ts, m.external_id, m.id) as grp,
                 max(m.at) over (partition by m.conversation_id, coalesce(m.thread_ts, m.external_id, m.id)) as grp_at
-         from messages m where m.conversation_id in (${SHOWN})
+         from messages m where m.owner_id = $1 and m.conversation_id in (${SHOWN})
        ), ranked as (
          select g.*,
                 dense_rank() over (partition by conversation_id order by grp_at desc, grp desc) as grp_rank,
@@ -358,7 +360,7 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
           `select distinct on (id) id, name from (
              select c.external_id as id, c.from_name as name, c.last_at as at from conversations c where c.owner_id = $1 and c.source = 'telegram' and c.direct
              union all
-             select m.sender_id, m.sender_name, m.at from messages m join conversations c on c.id = m.conversation_id
+             select m.sender_id, m.sender_name, m.at from messages m join conversations c on c.owner_id = m.owner_id and c.id = m.conversation_id
              where c.owner_id = $1 and c.source = 'telegram' and not m.me and m.sender_id is not null
            ) p order by id, at desc`,
           [ownerId],
@@ -419,6 +421,8 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     telegramPeople: telegramPeople.sort((a, b) => a.name.localeCompare(b.name)),
     avatars: Object.fromEntries(pictures.map((p) => [p.name, p.image])),
     owner: { name: owner?.name ?? "You" },
+    me: { id: ownerId, isOwner: ownerId === OWNER_ID },
+    logins: ownerId === OWNER_ID ? await teamLogins(db) : [],
     sendingEnabled: sendingEnabled(),
     slackFilesAllowed: slackScopes ? slackScopes.split(",").includes(SLACK_FILES_SCOPE) : null,
     telegramAvailable: telegramAvailable(),
@@ -444,7 +448,7 @@ export async function resortInbox(db: Db, ownerId: string): Promise<number> {
   let changed = 0;
   for (const [k, c] of after.entries()) {
     if (c.pri === before[k].pri && c.line === before[k].line && c.mode === before[k].mode) continue;
-    await db.run("update conversations set pri = $1, line = $2, mode = $3 where id = $4", [c.pri, c.line, c.mode, c.id]);
+    await db.run("update conversations set pri = $1, line = $2, mode = $3 where owner_id = $5 and id = $4", [c.pri, c.line, c.mode, c.id, ownerId]);
     // A suggestion waiting on this chat moves to the same side as the chat.
     await db.run("update suggestions set mode = $1 where owner_id = $2 and src_type = 'message' and src_id = $3 and status = 'new'", [c.mode, ownerId, c.id]);
     changed++;
@@ -587,8 +591,8 @@ async function delegate(c: ActionContext, taskId: string, personId: string, note
       messageId = uid("m");
       // In the dashboard the tag reads as a name; Slack needs the person's id to notify them.
       await c.db.run("insert into messages (id, conversation_id, owner_id, sender_name, me, body, at, status, scanned, asked, thread_ts) values ($1, $2, $3, $4, true, $5, $6, 'queued', true, true, $7)", [messageId, place.conversationId, c.ownerId, owner?.name ?? "You", text(person ? `@${person.name}` : ""), now, place.thread ?? null]);
-      if (place.thread) await c.db.run("update messages set thread_ts = $1 where conversation_id = $2 and external_id = $1 and thread_ts is null", [place.thread, place.conversationId]);
-      await c.db.run("update conversations set replied = true where id = $1", [place.conversationId]);
+      if (place.thread) await c.db.run("update messages set thread_ts = $1 where owner_id = $3 and conversation_id = $2 and external_id = $1 and thread_ts is null", [place.thread, place.conversationId, c.ownerId]);
+      await c.db.run("update conversations set replied = true where owner_id = $2 and id = $1", [place.conversationId, c.ownerId]);
     }
     const first = uid("o");
     await c.db.run(
@@ -598,7 +602,7 @@ async function delegate(c: ActionContext, taskId: string, personId: string, note
     // In a thread that exists already it goes into that same thread, right after the message.
     await thenDescription(first, place.target, holder.name, place.label, place.thread ?? null);
   }
-  await c.db.run("update tasks set due = $1, delegated_to = $2, delegated_name = $3, delegated_role = $4, delegated_note = $5, delegated_at = $6 where id = $7", [due, holder!.id, holder!.name, holder!.role, note, now, taskId]);
+  await c.db.run("update tasks set due = $1, delegated_to = $2, delegated_name = $3, delegated_role = $4, delegated_note = $5, delegated_at = $6 where owner_id = $8 and id = $7", [due, holder!.id, holder!.name, holder!.role, note, now, taskId, c.ownerId]);
 }
 
 /** The task still open for a conversation, if there is one. One is enough. */
@@ -663,8 +667,8 @@ async function replyByEmail(c: ActionContext, conv: ConversationRow & { external
   await mustSendFrom(c, account);
   if (!text.trim()) throw new Error("Write a reply first.");
   const [last] = await c.db.query<{ sender_name: string; sender_id: string | null; email: { to?: Address[]; cc?: Address[]; messageId?: string; references?: string } | null }>(
-    "select sender_name, sender_id, email from messages where conversation_id = $1 and not me and sender_id is not null order by at desc limit 1",
-    [conv.id],
+    "select sender_name, sender_id, email from messages where owner_id = $2 and conversation_id = $1 and not me and sender_id is not null order by at desc limit 1",
+    [conv.id, c.ownerId],
   );
   if (!last?.sender_id) throw new Error("There is no email from someone else here to answer.");
   const to: Address[] = [{ name: last.sender_name, email: last.sender_id }];
@@ -683,7 +687,7 @@ async function replyByEmail(c: ActionContext, conv: ConversationRow & { external
     "insert into messages (id, conversation_id, owner_id, sender_name, me, body, at, status, scanned, asked, email) values ($1, $2, $3, $4, true, $5, $6, 'queued', true, true, $7::jsonb)",
     [messageRow, conv.id, c.ownerId, owner?.name ?? "You", text, c.now.getTime(), JSON.stringify({ to, cc })],
   );
-  await c.db.run("update conversations set replied = true, done = done or $1, auto_done = auto_done and not $1 where id = $2", [markDone, conv.id]);
+  await c.db.run("update conversations set replied = true, done = done or $1, auto_done = auto_done and not $1 where owner_id = $3 and id = $2", [markDone, conv.id, c.ownerId]);
   await c.db.run(
     "insert into outbox (id, owner_id, source, target, to_name, ctx, body, conversation_id, message_id, created_at, details) values ($1, $2, 'gmail', $3, $4, $5, $6, $7, $8, $9, $10::jsonb)",
     [uid("o"), c.ownerId, conv.external_id, `${last.sender_name}${cc.length ? ` and ${cc.length} more` : ""}`, conv.ctx, text, conv.id, messageRow, c.now.getTime(), JSON.stringify(details)],
@@ -694,6 +698,11 @@ async function conversation(c: ActionContext, id: string) {
   const [row] = await c.db.query<ConversationRow & { external_id: string }>("select * from conversations where owner_id = $1 and id = $2 for update", [c.ownerId, id]);
   if (!row) throw new Error("That conversation no longer exists.");
   return row;
+}
+
+/** Changes to team logins are the owner's alone. */
+function onlyOwner(c: ActionContext): void {
+  if (c.ownerId !== OWNER_ID) throw new Error("Only the owner can change team logins.");
 }
 
 /** The most conversations one change made on screen may touch. */
@@ -722,15 +731,15 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
     thread = conv.thread_ts ?? thread;
     if (thread) {
       // Only a thread that really is in this conversation.
-      const [known] = await c.db.query<{ n: number }>("select count(*)::int as n from messages where conversation_id = $1 and (external_id = $2 or thread_ts = $2)", [id, thread]);
+      const [known] = await c.db.query<{ n: number }>("select count(*)::int as n from messages where owner_id = $3 and conversation_id = $1 and (external_id = $2 or thread_ts = $2)", [id, thread, c.ownerId]);
       if (!known?.n) throw new Error("That thread is no longer in this conversation.");
       threadTs = thread;
       // The message being answered now starts a thread, if it did not before.
-      await c.db.run("update messages set thread_ts = $1 where conversation_id = $2 and external_id = $1 and thread_ts is null", [thread, id]);
+      await c.db.run("update messages set thread_ts = $1 where owner_id = $3 and conversation_id = $2 and external_id = $1 and thread_ts is null", [thread, id, c.ownerId]);
     }
     const messageId = uid("m");
     await c.db.run("insert into messages (id, conversation_id, owner_id, sender_name, me, body, at, status, scanned, asked, thread_ts) values ($1, $2, $3, $4, true, $5, $6, 'queued', true, true, $7)", [messageId, id, c.ownerId, owner?.name ?? "You", text, c.now.getTime(), threadTs]);
-    await c.db.run("update conversations set replied = true, done = done or $1, auto_done = auto_done and not $1 where id = $2", [markDone, id]);
+    await c.db.run("update conversations set replied = true, done = done or $1, auto_done = auto_done and not $1 where owner_id = $3 and id = $2", [markDone, id, c.ownerId]);
     await c.db.run(
       "insert into outbox (id, owner_id, source, target, to_name, ctx, body, conversation_id, message_id, thread_ts, created_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
       [uid("o"), c.ownerId, conv.source, conv.external_id, conv.from_name, conv.ctx, text, id, messageId, threadTs, c.now.getTime()],
@@ -773,13 +782,12 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
     if (!list.length) return;
     if (list.length > BULK_MOST) throw new Error(`Pick at most ${BULK_MOST} at a time.`);
     if (change.pri !== undefined && !PRIORITIES.includes(change.pri)) throw new Error("That priority does not exist.");
-    const picked = "owner_id = $1 and id in (select jsonb_array_elements_text($2::jsonb))";
     const args = [c.ownerId, JSON.stringify(list)];
-    if (change.done === true) await c.db.run(`update conversations set done = true, auto_done = false where ${picked}`, args);
-    if (change.done === false) await c.db.run(`update conversations set done = false, auto_done = false, restored_at = $3 where ${picked}`, [...args, c.now.getTime()]);
-    if (change.pri) await c.db.run(`update conversations set pri = $3, manual_pri = true where ${picked}`, [...args, change.pri]);
+    if (change.done === true) await c.db.run(`update conversations set done = true, auto_done = false where owner_id = $1 and id in (select jsonb_array_elements_text($2::jsonb))`, args);
+    if (change.done === false) await c.db.run(`update conversations set done = false, auto_done = false, restored_at = $3 where owner_id = $1 and id in (select jsonb_array_elements_text($2::jsonb))`, [...args, c.now.getTime()]);
+    if (change.pri) await c.db.run(`update conversations set pri = $3, manual_pri = true where owner_id = $1 and id in (select jsonb_array_elements_text($2::jsonb))`, [...args, change.pri]);
     if (change.mode) {
-      await c.db.run(`update conversations set mode = $3, manual_mode = true where ${picked}`, [...args, asMode(change.mode)]);
+      await c.db.run(`update conversations set mode = $3, manual_mode = true where owner_id = $1 and id in (select jsonb_array_elements_text($2::jsonb))`, [...args, asMode(change.mode)]);
       await c.db.run("update suggestions set mode = $3 where owner_id = $1 and src_type = 'message' and status = 'new' and src_id in (select jsonb_array_elements_text($2::jsonb))", [...args, asMode(change.mode)]);
     }
   },
@@ -789,7 +797,7 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
     if (!(await openTaskFor(c, id))) {
       await insertTask(c, { title: await replyTitle(c, `Reply to ${conv.from_name}`, conv.last_text), dept: "Operations", project: conv.project, pri: conv.pri, due: today, mode: conv.mode, src: { type: "message", id } });
     }
-    await c.db.run("update conversations set done = true, auto_done = false where id = $1", [id]);
+    await c.db.run("update conversations set done = true, auto_done = false where owner_id = $2 and id = $1", [id, c.ownerId]);
   },
   async delegateConversation(c, id: string, personId: string, note: string, due: string, where: AssignWhere = "dm") {
     const conv = await conversation(c, id);
@@ -801,7 +809,7 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
     const [team] = person ? await c.db.query<{ depts: string[] }>("select depts from team_members where owner_id = $1 and id = $2", [c.ownerId, person.id]) : [];
     const taskId = existing?.id ?? (await insertTask(c, { title: await replyTitle(c, `From ${conv.from_name}`, conv.last_text), dept: team?.depts?.[0] ?? "Operations", project: conv.project, pri: conv.pri, due, src: { type: "message", id } }));
     await delegate(c, taskId, person?.id ?? "", note, due, where);
-    await c.db.run("update conversations set done = true, auto_done = false where id = $1", [id]);
+    await c.db.run("update conversations set done = true, auto_done = false where owner_id = $2 and id = $1", [id, c.ownerId]);
   },
 
   // Tasks
@@ -842,8 +850,8 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
     const unsent = await c.db.query<{ message_id: string | null; conversation_id: string | null }>("delete from outbox where owner_id = $1 and task_id = $2 and status = 'queued' returning message_id, conversation_id", [c.ownerId, id]);
     for (const row of unsent) {
       if (!row.message_id || !row.conversation_id) continue;
-      await c.db.run("delete from messages where id = $1", [row.message_id]);
-      await c.db.run("update conversations set replied = coalesce((select me from messages where conversation_id = $1 order by at desc, id desc limit 1), false) where id = $1", [row.conversation_id]);
+      await c.db.run("delete from messages where owner_id = $2 and id = $1", [row.message_id, c.ownerId]);
+      await c.db.run("update conversations set replied = coalesce((select me from messages where owner_id = $2 and conversation_id = $1 order by at desc, id desc limit 1), false) where owner_id = $2 and id = $1", [row.conversation_id, c.ownerId]);
     }
   },
 
@@ -857,7 +865,7 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
     if (!g) return;
     const today = isoDay(c.now);
     await insertTask(c, { title: g.title, dept: g.dept, project: g.project, pri: g.pri, due: g.due < today ? today : g.due, mode: g.mode, src: g.src_type && g.src_id ? { type: g.src_type, id: g.src_id } : null, delegable: g.delegable });
-    await c.db.run("update suggestions set status = 'accepted' where id = $1", [id]);
+    await c.db.run("update suggestions set status = 'accepted' where owner_id = $2 and id = $1", [id, c.ownerId]);
   },
   async dismissSuggestion(c, id: string) {
     await c.db.run("update suggestions set status = 'dismissed' where owner_id = $1 and id = $2", [c.ownerId, id]);
@@ -895,22 +903,60 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
     await c.db.run("update metrics m set target = (select coalesce(sum(k.target), 0) from metrics k where k.owner_id = m.owner_id and k.parent = m.id) where m.owner_id = $1 and m.is_sum", [c.ownerId]);
   },
 
+  // Settings: team logins. Only the owner adds, changes and turns them off; nothing here touches the owner's own login.
+  async addTeamLogin(c, name: unknown, email: unknown, password: unknown) {
+    onlyOwner(c);
+    const who = String(name ?? "").trim();
+    const address = String(email ?? "").trim().toLowerCase();
+    const secret = String(password ?? "");
+    if (!who) throw new Error("Write their name.");
+    if (!isEmailAddress(address)) throw new Error("That email address does not look right.");
+    if (secret.length < MIN_PASSWORD) throw new Error(`The password needs at least ${MIN_PASSWORD} characters.`);
+    if (address === (process.env.LOGIN_EMAIL ?? "").trim().toLowerCase()) throw new Error("That is your own login.");
+    const [taken] = await c.db.query<{ id: string }>("select id from users where lower(login_email) = $1", [address]);
+    if (taken) throw new Error("Someone already signs in with that email.");
+    const id = uid("u");
+    await c.db.run("insert into users (id, name, email, login_email, password_hash, created_at) values ($1, $2, $3, $3, $4, $5)", [id, who, address, hashPassword(secret), c.now.getTime()]);
+    // Their own checks, timers and starting rules, as the owner had on their first start.
+    await ensureOwner(c.db, id);
+  },
+  /** A new password. Every session made with the old one ends. It also turns a login that was off back on. */
+  async setTeamPassword(c, id: string, password: unknown) {
+    onlyOwner(c);
+    const secret = String(password ?? "");
+    if (secret.length < MIN_PASSWORD) throw new Error(`The password needs at least ${MIN_PASSWORD} characters.`);
+    const changed = await c.db.run("update users set password_hash = $1 where id = $2 and id <> $3 and login_email is not null", [hashPassword(secret), id, OWNER_ID]);
+    if (!changed) throw new Error("That login no longer exists.");
+  },
+  /** Removes a team member's login and everything of theirs: their connections, messages and tasks. Never the owner's. */
+  async removeTeamLogin(c, id: string) {
+    onlyOwner(c);
+    if (id === OWNER_ID) throw new Error("That is your own login.");
+    // Every table of theirs goes with them (on delete cascade).
+    await c.db.run("delete from users where id = $1 and id <> $2 and login_email is not null", [id, OWNER_ID]);
+  },
+  /** They can no longer sign in, and their checks stop. What they had stays, for when it is turned on again. */
+  async turnOffTeamLogin(c, id: string) {
+    onlyOwner(c);
+    await c.db.run("update users set password_hash = null where id = $1 and id <> $2 and login_email is not null", [id, OWNER_ID]);
+  },
+
   // Settings: team
   async togglePersonDept(c, id: string, dept: string) {
     const [p] = await c.db.query<{ depts: string[] }>("select depts from team_members where owner_id = $1 and id = $2", [c.ownerId, id]);
     if (!p) return;
     const depts = p.depts.includes(dept) ? p.depts.filter((d) => d !== dept) : [...p.depts, dept];
-    await c.db.run("update team_members set depts = $1 where id = $2", [JSON.stringify(depts), id]);
+    await c.db.run("update team_members set depts = $1 where owner_id = $3 and id = $2", [JSON.stringify(depts), id, c.ownerId]);
   },
   async addHandle(c, id: string, handle: string) {
     const [p] = await c.db.query<{ handles: string[] }>("select handles from team_members where owner_id = $1 and id = $2", [c.ownerId, id]);
     if (!p || p.handles.some((h) => h.toLowerCase() === handle.toLowerCase())) return;
-    await c.db.run("update team_members set handles = $1 where id = $2", [JSON.stringify([...p.handles, handle]), id]);
+    await c.db.run("update team_members set handles = $1 where owner_id = $3 and id = $2", [JSON.stringify([...p.handles, handle]), id, c.ownerId]);
   },
   async removeHandle(c, id: string, index: number) {
     const [p] = await c.db.query<{ handles: string[] }>("select handles from team_members where owner_id = $1 and id = $2", [c.ownerId, id]);
     if (!p) return;
-    await c.db.run("update team_members set handles = $1 where id = $2", [JSON.stringify(p.handles.filter((_, k) => k !== index)), id]);
+    await c.db.run("update team_members set handles = $1 where owner_id = $3 and id = $2", [JSON.stringify(p.handles.filter((_, k) => k !== index)), id, c.ownerId]);
   },
   async addPerson(c, input: { name: string; role: string; depts: string[]; handles: string[]; slackUserId?: string | null }) {
     await c.db.run("insert into team_members (id, owner_id, name, role, depts, handles, slack_user_id, position) values ($1, $2, $3, $4, $5, $6, $7, $8)", [uid("u"), c.ownerId, input.name, input.role, JSON.stringify(input.depts), JSON.stringify(input.handles), input.slackUserId || null, Math.floor(c.now.getTime() / 1000)]);
@@ -931,7 +977,7 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
     const to = from + direction;
     if (from < 0 || to < 0 || to >= rows.length) return;
     [rows[from], rows[to]] = [rows[to], rows[from]];
-    for (const [position, r] of rows.entries()) await c.db.run("update rules set position = $1 where id = $2", [position, r.id]);
+    for (const [position, r] of rows.entries()) await c.db.run("update rules set position = $1 where owner_id = $3 and id = $2", [position, r.id, c.ownerId]);
     await resortInbox(c.db, c.ownerId);
   },
   async deleteRule(c, _kind: RuleKind, id: string) {

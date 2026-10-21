@@ -2,9 +2,9 @@ import { after } from "next/server";
 import { normalizePhone } from "@/core/providers";
 import { runNow } from "@/jobs/runner";
 import { ready } from "@/server/boot";
-import { failed, fromDashboard, refused, signedIn, signInFirst } from "@/server/http";
+import { failed, fromDashboard, refused, signedInAs, signInFirst } from "@/server/http";
 import { forgetTelegramMedia } from "@/server/media";
-import { loadState, OWNER_ID } from "@/server/repo";
+import { loadState } from "@/server/repo";
 import { isHttps } from "@/server/session";
 import { disconnectTelegram, giveTelegramCode, giveTelegramPassword, mustHaveLoginInProgress, startTelegramLogin, telegramBlocked, type LoginTurn } from "@/server/telegram";
 
@@ -40,7 +40,8 @@ function pendingOf(request: Request): string | null {
  */
 export async function POST(request: Request) {
   if (!fromDashboard(request)) return refused();
-  if (!signedIn(request)) return signInFirst();
+  const owner = await signedInAs(request);
+  if (!owner) return signInFirst(request);
   const blocked = telegramBlocked();
   if (blocked) return failed(new Error(blocked));
   const answer = (body: unknown, pending: string | null) => Response.json(body, { headers: { "set-cookie": loginCookie(request, pending) } });
@@ -54,23 +55,23 @@ export async function POST(request: Request) {
       turn = await startTelegramLogin(phone);
     } else if (body.step === "code") {
       mustHaveLoginInProgress(pendingOf(request));
-      turn = await giveTelegramCode(await ready(), OWNER_ID, pendingOf(request), String(body.code ?? ""));
+      turn = await giveTelegramCode(await ready(), owner, pendingOf(request), String(body.code ?? ""));
     } else if (body.step === "password") {
       mustHaveLoginInProgress(pendingOf(request));
-      turn = await giveTelegramPassword(await ready(), OWNER_ID, pendingOf(request), String(body.password ?? ""));
+      turn = await giveTelegramPassword(await ready(), owner, pendingOf(request), String(body.password ?? ""));
     } else if (body.step === "cancel") {
       return answer({ cancelled: true }, null);
     } else if (body.step === "disconnect") {
       const db = await ready();
-      await disconnectTelegram(db, OWNER_ID);
+      await disconnectTelegram(db, owner);
       // "forget" also removes the chats that were read and their pictures, so nothing of the account is left here.
       if (body.forget === true) {
-        await db.run("delete from conversations where owner_id = $1 and source = 'telegram'", [OWNER_ID]);
-        await db.run("delete from telegram_chats where owner_id = $1", [OWNER_ID]);
-        await forgetTelegramMedia(db, OWNER_ID);
+        await db.run("delete from conversations where owner_id = $1 and source = 'telegram'", [owner]);
+        await db.run("delete from telegram_chats where owner_id = $1", [owner]);
+        await forgetTelegramMedia(db, owner);
       }
-      await db.run("update jobs set cursor = '{}', last_run_at = null where owner_id = $1 and job_id = 'telegram-pull'", [OWNER_ID]);
-      return answer({ disconnected: true, state: await loadState(db) }, null);
+      await db.run("update jobs set cursor = '{}', last_run_at = null where owner_id = $1 and job_id = 'telegram-pull'", [owner]);
+      return answer({ disconnected: true, state: await loadState(db, owner) }, null);
     } else {
       return failed(new Error("Unknown step."));
     }
@@ -79,8 +80,8 @@ export async function POST(request: Request) {
     const db = await ready();
     // Fill the inbox once the answer has gone out, so the person is not left waiting on this
     // request. `after` keeps a host's server awake until the read is done.
-    after(() => runNow(db, "telegram-pull").catch((error) => console.error("[command-center] first Telegram read failed:", (error as Error).message)));
-    return answer({ ...turn.step, state: await loadState(db) }, null);
+    after(() => runNow(db, "telegram-pull", owner).catch((error) => console.error("[command-center] first Telegram read failed:", (error as Error).message)));
+    return answer({ ...turn.step, state: await loadState(db, owner) }, null);
   } catch (error) {
     return failed(error);
   }

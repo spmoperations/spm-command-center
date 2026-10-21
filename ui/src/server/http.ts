@@ -1,6 +1,9 @@
 // Shared pieces for the API routes.
 import crypto from "node:crypto";
-import { sessionOf } from "./session";
+import { ready } from "./boot";
+import type { Db } from "./db";
+import { clearedCookie, isHttps, sessionOf } from "./session";
+import { ownerOfSession } from "./team";
 
 /**
  * Requests that change something must come from the dashboard itself. This stops another
@@ -20,10 +23,26 @@ export function sameSite(request: Request): boolean {
 
 export const refused = () => Response.json({ error: "This request did not come from the dashboard." }, { status: 403 });
 
-/** Every route that reads or changes data checks this first: the data is one person's. */
+/** True when the request carries a signed session that has not run out. Who it is for is `signedInAs`. */
 export const signedIn = (request: Request) => sessionOf(request) !== null;
 
-export const signInFirst = () => Response.json({ error: "Please sign in." }, { status: 401 });
+/**
+ * Whose data this request reads and changes: the owner, or a team member. Null when nobody is
+ * signed in, or the session's login has been turned off or given a new password since.
+ * Every route that reads or changes data asks this first, and uses only that person's rows.
+ */
+export async function signedInAs(request: Request, db?: Db): Promise<string | null> {
+  const session = sessionOf(request);
+  if (!session) return null;
+  return ownerOfSession(() => (db ? Promise.resolve(db) : ready()), session);
+}
+
+/**
+ * Not signed in, or the session no longer belongs to anyone (a team login turned off, given a
+ * new password, or removed). The cookie is cleared as well, so the login page is shown and stays.
+ */
+export const signInFirst = (request?: Request) =>
+  Response.json({ error: "Please sign in." }, { status: 401, headers: request ? { "Set-Cookie": clearedCookie(isHttps(request)) } : undefined });
 
 /**
  * True when the request carries the host scheduler's secret (CRON_SECRET), which Vercel sends
