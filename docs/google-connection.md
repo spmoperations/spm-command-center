@@ -69,10 +69,11 @@ project you made in step 1.
      add `spm-command-center.vercel.app` under **Branding → Authorized domains**.
    - Copy the **Client ID** and the **Client secret** straight away: newer projects show the
      secret in full only this once.
-7. **Give them to the app.** On the Connections page, under **App keys**, click **Use my own
-   keys** next to Google, paste both and click **Save keys**. They are checked with Google, then
-   stored encrypted in the database. Don't paste them into a chat. (Put in `ui/.env.local` as
-   `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, they are copied in on the next start instead.)
+7. **Give them to the app.** On the Connections page, the Google card asks for them while the
+   site has none: paste both and click **Save the keys**. They are checked with Google, then
+   stored encrypted in the database, and everyone on the team connects with them. Don't paste
+   them into a chat. (Put in `ui/.env.local` as `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`,
+   they are copied in on the next start instead.)
 
 ## 2. Connect and try it
 
@@ -201,8 +202,7 @@ Then Shruti does section 1 again in SPM's project, with two differences:
 - The keys went on Vercel (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, with `GOOGLE_HOSTED=true`).
   Since team logins, the live site copies them into the database on its first start, as the
   owner's (the team's) keys, and his accounts go on using exactly them. After that the two
-  keys can be removed from Vercel; `GOOGLE_HOSTED=true` stays. New keys are saved under
-  Connections → App keys.
+  keys can be removed from Vercel; `GOOGLE_HOSTED=true` stays.
 
 **Jeremy's part:** Connections → **Connect Google** → his SPM account → **Allow**. Any other
 SPM account of his: **Add another Google account**.

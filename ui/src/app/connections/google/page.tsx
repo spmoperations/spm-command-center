@@ -2,121 +2,16 @@
 
 import Link from "next/link";
 import { GOOGLE_PERMISSIONS } from "@/core/providers";
-import { toast, useApp } from "@/store/store";
+import { Copy, GuidePart as Part, Open, Sketch } from "@/components/Guide";
+import { useApp } from "@/store/store";
 
 // The guide for setting Google up, for the person whose Google account it is. Step 1 happens
-// in Google Cloud, once, and ends with the two keys saved under App keys on the Connections
+// in Google Cloud, once, and ends with the two keys saved in the Google card on the Connections
 // page. Step 2, connecting the account, then appears here by itself. Someone whose team has
 // keys already skips Step 1.
 
 const PERMISSIONS = GOOGLE_PERMISSIONS;
 const SCOPES = PERMISSIONS.map(([scope]) => scope);
-
-/** One part of a screen sketch. `hi` outlines it as the thing to fill in or click. */
-type Part =
-  | { t: "topbar"; project: string; hi?: boolean }
-  | { t: "title"; text: string }
-  | { t: "text"; text: string }
-  | { t: "field"; label: string; value: string; hi?: boolean }
-  | { t: "radio"; options: string[]; picked: number; hi?: boolean }
-  | { t: "check"; label: string; hi?: boolean }
-  | { t: "code"; lines: string[]; hi?: boolean }
-  | { t: "buttons"; items: { label: string; primary?: boolean; hi?: boolean }[] };
-
-/** A simple drawing of a Google Cloud screen, with what to do on it outlined. */
-function Sketch({ url, parts, caption }: { url: string; parts: Part[]; caption: string }) {
-  return (
-    <figure className="sk">
-      <div className="sk-frame" role="img" aria-label={caption}>
-        <div className="sk-bar">
-          <span className="sk-dots" aria-hidden="true">
-            <i />
-            <i />
-            <i />
-          </span>
-          <span className="sk-url">{url}</span>
-        </div>
-        <div className="sk-body">
-          {parts.map((p, k) => {
-            if (p.t === "topbar")
-              return (
-                <div key={k} className="sk-top">
-                  <b>Google Cloud</b>
-                  <span className={`sk-project ${p.hi ? "hi" : ""}`}>● {p.project} ▾</span>
-                  <span className="sk-search">Search</span>
-                </div>
-              );
-            if (p.t === "title") return <div key={k} className="sk-title">{p.text}</div>;
-            if (p.t === "text") return <div key={k} className="sk-text">{p.text}</div>;
-            if (p.t === "field")
-              return (
-                <div key={k} className={`sk-field ${p.hi ? "hi" : ""}`}>
-                  <span>{p.label}</span>
-                  <b>{p.value}</b>
-                </div>
-              );
-            if (p.t === "radio")
-              return (
-                <div key={k} className={`sk-radio ${p.hi ? "hi" : ""}`}>
-                  {p.options.map((o, n) => (
-                    <span key={o} className={n === p.picked ? "on" : ""}>
-                      <i aria-hidden="true" />
-                      {o}
-                    </span>
-                  ))}
-                </div>
-              );
-            if (p.t === "check")
-              return (
-                <div key={k} className={`sk-check ${p.hi ? "hi" : ""}`}>
-                  <i aria-hidden="true">✓</i>
-                  {p.label}
-                </div>
-              );
-            if (p.t === "code")
-              return (
-                <pre key={k} className={`sk-code ${p.hi ? "hi" : ""}`}>
-                  {p.lines.join("\n")}
-                </pre>
-              );
-            return (
-              <div key={k} className="sk-buttons">
-                {p.items.map((b) => (
-                  <span key={b.label} className={`sk-btn ${b.primary ? "primary" : ""} ${b.hi ? "hi" : ""}`}>
-                    {b.label}
-                  </span>
-                ))}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-      <figcaption>{caption}</figcaption>
-    </figure>
-  );
-}
-
-function Copy({ text, label = "Copy" }: { text: string; label?: string }) {
-  return (
-    <button
-      className="btn"
-      onClick={() => {
-        void navigator.clipboard?.writeText(text).then(
-          () => toast("Copied"),
-          () => toast("Select it and copy it by hand"),
-        );
-      }}
-    >
-      {label}
-    </button>
-  );
-}
-
-const Open = ({ href, children }: { href: string; children: React.ReactNode }) => (
-  <a className="btn primary extlink" href={href} target="_blank" rel="noopener noreferrer">
-    {children} ↗
-  </a>
-);
 
 const PROJECT = "SPM Command Center";
 
@@ -131,21 +26,6 @@ function ProjectCheck() {
         <strong>First, look at the top of the page:</strong> the project must say <strong>{PROJECT}</strong>. If it shows another name, or &quot;Select a project&quot;, click it and pick <strong>{PROJECT}</strong> in the list.
       </p>
     </div>
-  );
-}
-
-/** One numbered part of Step 1. */
-function Part({ n, title, children }: { n: string; title: string; children: React.ReactNode }) {
-  return (
-    <li className="gs-part">
-      <div className="gs-n" aria-hidden="true">
-        {n}
-      </div>
-      <div className="gs-body">
-        <h4>{title}</h4>
-        {children}
-      </div>
-    </li>
   );
 }
 
@@ -323,7 +203,7 @@ export default function GoogleSetupPage() {
                 </Part>
                 <Part n="7" title="Save them in the Command Center">
                   <p>
-                    On the <Link href="/connections#app-keys">Connections page, under App keys</Link>, click <strong>Use my own keys</strong> next to Google, paste the <strong>Client ID</strong> and the <strong>Client secret</strong>, and click <strong>Save keys</strong>. They are checked with Google, then stored encrypted. That&apos;s the end of Step 1: Step 2 turns on here by itself.
+                    On the <Link href="/connections#google">Connections page, in the Google card</Link>, paste the <strong>Client ID</strong> and the <strong>Client secret</strong> and click <strong>Save the keys</strong>. They are checked with Google, then stored encrypted, and everyone on the team connects with them. That&apos;s the end of Step 1: Step 2 turns on here by itself.
                   </p>
                 </Part>
               </ol>

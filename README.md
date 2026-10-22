@@ -41,10 +41,11 @@ The owner can give someone on the team a Command Center of their own: **Settings
 - Every query is limited to the signed-in person (`owner_id`), and a test fails if one is not. Two people in the same Slack chat or on the same call each have their own row under the same id.
 - **New password** ends that person's sessions. **Turn off** stops their sign-in and their checks, and keeps their data. **Remove** deletes their login and everything of theirs.
 - Only the owner sees Team logins. The scheduled checks run for the owner first, then for each team member who can sign in (`ui/src/server/team.ts`).
+- Each service has a step-by-step guide with drawings of the screens, linked from its card on the Connections page: `/connections/slack`, `/connections/fathom`, `/connections/telegram` and `/connections/google`.
 
 ### App keys
 
-The keys of the apps the dashboard connects through are kept in the database, encrypted, for each person: Google's OAuth client (Client ID and secret), Telegram's app (api_id and api_hash) and the AI key. Anyone saves their own under **Connections → App keys**; Google's and the AI's are checked with the service before they are kept. Someone with none of their own uses the owner's, the team's keys.
+The keys of the apps the dashboard connects through are kept in the database, encrypted, for each person: Google's OAuth client (Client ID and secret), Telegram's app (api_id and api_hash) and the AI key. Everyone connects with the owner's, the team's keys; there is no screen for them. Only where there are none at all yet does the Google or Telegram card on the Connections page ask for them, and Google's are checked with Google before they are kept. Each person can also have keys of their own (`/api/keys`), for later.
 
 - **A connection keeps the keys it was made with.** Saving new keys, for yourself or as the owner, changes only what new connections use; every account connected before goes on working with its own (`ui/src/server/app-keys.ts`).
 - **From the settings, once.** On first start, keys in the settings (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID`) are copied in as the owner's keys: into a local database, or into the hosted one from the live site only (Vercel, or `GOOGLE_HOSTED`/`TELEGRAM_HOSTED` set). Accounts connected before were made with exactly these. After that the settings can be removed.
