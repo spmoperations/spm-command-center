@@ -5,8 +5,9 @@ import { GOOGLE_PERMISSIONS } from "@/core/providers";
 import { toast, useApp } from "@/store/store";
 
 // The guide for setting Google up, for the person whose Google account it is. Step 1 happens
-// in Google Cloud, once, and ends with the two keys posted to Shruti in #spm-development. She
-// adds them to the live site, and Step 2, connecting the account, appears here by itself.
+// in Google Cloud, once, and ends with the two keys saved under App keys on the Connections
+// page. Step 2, connecting the account, then appears here by itself. Someone whose team has
+// keys already skips Step 1.
 
 const PERMISSIONS = GOOGLE_PERMISSIONS;
 const SCOPES = PERMISSIONS.map(([scope]) => scope);
@@ -174,10 +175,10 @@ export default function GoogleSetupPage() {
         <li className={`panel gs-step ${keysIn ? "done" : "now"}`}>
           <div className="gs-step-head">
             <span className="gs-badge">{keysIn ? "Done" : "Step 1"}</span>
-            <h3>Set up Google Cloud, and send Shruti the two keys</h3>
+            <h3>Set up Google Cloud, and save the two keys</h3>
           </div>
           {keysIn ? (
-            <p className="st-help">The keys are in place on this site. Go on to Step 2.</p>
+            <p className="st-help">Keys are in place for you: your own, or the team&apos;s. Go on to Step 2.</p>
           ) : (
             <>
               <p className="st-help">
@@ -320,9 +321,9 @@ export default function GoogleSetupPage() {
                     ]}
                   />
                 </Part>
-                <Part n="7" title="Send them to Shruti in #spm-development">
+                <Part n="7" title="Save them in the Command Center">
                   <p>
-                    In Slack, post the <strong>Client ID</strong> and the <strong>Client secret</strong> in <strong>#spm-development</strong> (a private channel), in one message. That&apos;s the end of Step 1. Shruti adds them to the Command Center and tells you there. Step 2 then turns on here by itself.
+                    On the <Link href="/connections#app-keys">Connections page, under App keys</Link>, click <strong>Use my own keys</strong> next to Google, paste the <strong>Client ID</strong> and the <strong>Client secret</strong>, and click <strong>Save keys</strong>. They are checked with Google, then stored encrypted. That&apos;s the end of Step 1: Step 2 turns on here by itself.
                   </p>
                 </Part>
               </ol>
@@ -336,7 +337,7 @@ export default function GoogleSetupPage() {
             <h3>Connect your Google account</h3>
           </div>
           {!keysIn ? (
-            <p className="st-help">This turns on once Shruti has added the keys from Step 1. Nothing to do until she tells you.</p>
+            <p className="st-help">This turns on as soon as the keys from Step 1 are saved.</p>
           ) : (
             <>
               <p className="st-help">

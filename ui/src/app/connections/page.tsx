@@ -7,8 +7,8 @@ import { ago } from "@/core/dates";
 import {
   checkFathomKey, checkPhone, checkSlackToken, checkTelegramCode, FATHOM_API_ACCESS_URL, PROVIDER_ABOUT, PROVIDER_NAME, PROVIDERS, SLACK_CREATE_APP_URL, SLACK_USER_SCOPES,
 } from "@/core/providers";
-import type { JobId, Provider } from "@/core/types";
-import { connectProvider, disconnectGoogle, disconnectProvider, disconnectTelegram, refresh, telegramStep, toast, useApp, type App, type TelegramReply } from "@/store/store";
+import type { AppKeysOnScreen, JobId, Provider } from "@/core/types";
+import { connectProvider, disconnectGoogle, disconnectProvider, disconnectTelegram, refresh, saveAppKeys, telegramStep, toast, useApp, type App, type TelegramReply } from "@/store/store";
 
 const BADGE: Record<Provider, string> = { slack: "SL", telegram: "TG", fathom: "FA", google: "GO" };
 // The check that reads each service, shown on its card.
@@ -338,19 +338,22 @@ function GoogleConnected({ app, lastChecked }: { app: App; lastChecked: string }
 }
 
 /** Google before it is switched on for this site, said the way Telegram says it. */
-function GoogleNotReady({ why }: { why: string | null }) {
+function GoogleNotReady({ why, noKeys }: { why: string | null; noKeys: boolean }) {
+  if (!noKeys) return <div className="st-help">{why}</div>;
   return (
     <>
       <ol className="steps">
-        <Step
-          title="Set up Google Cloud, and send Shruti the two keys"
-          help="About 10 minutes in your Google account, once. The guide shows every click, with pictures. It ends with two keys to post in #spm-development."
-        >
+        <Step title="Set up Google Cloud" help="About 10 minutes in your Google account, once. The guide shows every click, with pictures. It ends with two keys: a Client ID and a Client secret.">
           <Link className="btn primary" href="/connections/google">
             Open the step-by-step guide
           </Link>
         </Step>
-        <Step title="Connect your Google account" help="Turns on here by itself once Shruti has added the keys." />
+        <Step title="Save the two keys" help="Under App keys at the bottom of this page. They are checked with Google, then stored encrypted.">
+          <a className="btn" href="#app-keys">
+            Go to App keys
+          </a>
+        </Step>
+        <Step title="Connect your Google account" help="The Connect Google button appears here as soon as the keys are saved." />
       </ol>
       {why && (
         <details className="fallback">
@@ -406,11 +409,13 @@ const TURN_OFF: Record<Provider, string> = {
  * Telegram before it is switched on for this site. A person looking for the login is told it
  * is on its way. Whoever sets the server up is told exactly what is missing.
  */
-function TelegramNotReady({ why }: { why: string | null }) {
+function TelegramNotReady({ why, noKeys }: { why: string | null; noKeys: boolean }) {
+  if (!noKeys) return <div className="st-help">{why}</div>;
   return (
     <>
       <div className="st-help">
-        <strong>Telegram is not switched on for this site yet.</strong> It needs its app keys in place first. As soon as they are, the login appears here: your phone number, then the code Telegram sends you.
+        <strong>Telegram needs its app keys first.</strong> Get an api_id and api_hash at my.telegram.org and save them under <a href="#app-keys">App keys</a> at the bottom of this page. As soon as
+        they are saved, the login appears here: your phone number, then the code Telegram sends you.
       </div>
       {why && (
         <details className="fallback">
@@ -486,11 +491,173 @@ function ProviderCard({ provider, app }: { provider: Provider; app: App }) {
           </>
         ) : (
           notReady ? (
-            provider === "google" ? <GoogleNotReady why={app.state.googleBlocked} /> : <TelegramNotReady why={app.state.telegramBlocked} />
+            provider === "google" ? (
+              <GoogleNotReady why={app.state.googleBlocked} noKeys={app.state.appKeys.google.using === null} />
+            ) : (
+              <TelegramNotReady why={app.state.telegramBlocked} noKeys={app.state.appKeys.telegram.using === null} />
+            )
           ) : (
             <Steps local={app.state.localData} />
           )
         )}
+      </div>
+    </div>
+  );
+}
+
+type KeyApp = "google" | "telegram" | "anthropic";
+
+/** What each app's keys are, where they come from, and the fields to type them in. */
+const KEY_APPS: { app: KeyApp; name: string; where: React.ReactNode; fields: { key: string; label: string; placeholder: string; secret: boolean }[] }[] = [
+  {
+    app: "google",
+    name: "Google",
+    where: (
+      <>
+        The OAuth client&apos;s Client ID and Client secret, from Google Cloud. <Link href="/connections/google">The step-by-step guide</Link> shows where they are.
+      </>
+    ),
+    fields: [
+      { key: "clientId", label: "Client ID", placeholder: "…apps.googleusercontent.com", secret: false },
+      { key: "clientSecret", label: "Client secret", placeholder: "GOCSPX-…", secret: true },
+    ],
+  },
+  {
+    app: "telegram",
+    name: "Telegram",
+    where: (
+      <>
+        The App api_id and api_hash, from <ExternalLink href="https://my.telegram.org/apps">my.telegram.org</ExternalLink>, under API development tools.
+      </>
+    ),
+    fields: [
+      { key: "apiId", label: "api_id", placeholder: "Digits only", secret: false },
+      { key: "apiHash", label: "api_hash", placeholder: "32 letters and digits", secret: true },
+    ],
+  },
+  {
+    app: "anthropic",
+    name: "AI (Anthropic)",
+    where: (
+      <>
+        An API key from <ExternalLink href="https://console.anthropic.com/settings/keys">the Anthropic console</ExternalLink>, for finding tasks in messages.
+      </>
+    ),
+    fields: [
+      { key: "apiKey", label: "API key", placeholder: "sk-ant-…", secret: true },
+      { key: "workspaceId", label: "Workspace ID (if the key needs one)", placeholder: "Optional", secret: false },
+    ],
+  },
+];
+
+/** Which keys a new connection uses now, in words. */
+function keysNow(k: AppKeysOnScreen, isOwner: boolean): string {
+  if (k.using === "own") return isOwner ? `Your own keys (${k.label}). They are the team's keys too: everyone without keys of their own connects with them.` : `Your own keys (${k.label}).`;
+  if (k.using === "team") return `The team's keys (${k.label}), saved by the owner. Save your own below to use those instead.`;
+  if (k.using === "settings") return `The keys in the server's settings (${k.label}). They are copied in here the next time the app starts.`;
+  return "No keys yet. Save some below to connect.";
+}
+
+function KeyRow({ entry, keys, isOwner }: { entry: (typeof KEY_APPS)[number]; keys: AppKeysOnScreen; isOwner: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    const refused = await saveAppKeys(entry.app, values);
+    setBusy(false);
+    setError(refused);
+    if (!refused) {
+      setValues({});
+      setOpen(false);
+    }
+  };
+  return (
+    <div className="key-app">
+      <div className="key-app-head">
+        <div className="grow">
+          <div style={{ fontWeight: 600 }}>{entry.name}</div>
+          <div className="st-help">{entry.where}</div>
+          <div className="st-help">
+            <strong>New connections use:</strong> {keysNow(keys, isOwner)}
+          </div>
+        </div>
+        <div className="key-app-acts">
+          <button className="btn" aria-expanded={open} onClick={() => setOpen(!open)}>
+            {keys.own ? "Change my keys" : "Use my own keys"}
+          </button>
+          {/* The owner's keys are everyone's default, so they are changed, not stopped. */}
+          {keys.own && !isOwner && (
+            <button className="linkbtn" onClick={() => void saveAppKeys(entry.app, null)}>
+              Go back to the team&apos;s keys
+            </button>
+          )}
+        </div>
+      </div>
+      {open && (
+        <form className="key-form" onSubmit={(e) => void save(e)}>
+          {entry.fields.map((f) => (
+            <label key={f.key} className="key-field">
+              <span className="label">{f.label}</span>
+              <input
+                className="f"
+                type={f.secret ? "password" : "text"}
+                autoComplete="off"
+                spellCheck={false}
+                value={values[f.key] ?? ""}
+                placeholder={f.placeholder}
+                onChange={(e) => {
+                  setValues({ ...values, [f.key]: e.target.value });
+                  setError(null);
+                }}
+              />
+            </label>
+          ))}
+          <div className="key-form-acts">
+            <button className="btn primary" type="submit" disabled={busy}>
+              {busy ? "Checking…" : "Save keys"}
+            </button>
+            <button className="linkbtn" type="button" onClick={() => setOpen(false)}>
+              Cancel
+            </button>
+          </div>
+          {error && (
+            <div className="field-error" role="alert">
+              {error}
+            </div>
+          )}
+        </form>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The keys of each app every login through it needs, kept encrypted in the database for each
+ * person. Accounts already connected keep the keys they were connected with, so saving new
+ * ones never disconnects anything.
+ */
+function AppKeys({ app }: { app: App }) {
+  return (
+    <div className="panel prov" id="app-keys">
+      <div className="prov-head">
+        <span className="src src-keys" aria-hidden="true">
+          KEY
+        </span>
+        <div className="grow">
+          <h3>App keys</h3>
+          <div className="about">
+            The keys of the Google, Telegram and AI apps the dashboard connects through. They are checked where they can be, stored encrypted, and never shown again. Accounts already connected
+            keep the keys they were connected with, so saving new ones never disconnects anything.
+          </div>
+        </div>
+      </div>
+      <div className="prov-body">
+        {KEY_APPS.map((entry) => (
+          <KeyRow key={entry.app} entry={entry} keys={app.state.appKeys[entry.app]} isOwner={app.state.me.isOwner} />
+        ))}
       </div>
     </div>
   );
@@ -516,6 +683,7 @@ export default function ConnectionsPage() {
         {PROVIDERS.map((p) => (
           <ProviderCard key={p} provider={p} app={app} />
         ))}
+        <AppKeys app={app} />
       </div>
       <p className="muted" style={{ fontSize: 13.5, marginTop: 16 }}>
         Coming later: WhatsApp.

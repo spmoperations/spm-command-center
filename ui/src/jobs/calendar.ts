@@ -7,7 +7,8 @@
 // markers. All-day events, focus time and out of office are kept, as Google Calendar shows them.
 import type { Db } from "@/server/db";
 import { isEmailAddress } from "@/server/gmail";
-import { googleAvailable, googleCan, GoogleSaid, type CalendarEvent, type GoogleAccount, type GoogleApi, type InviteAnswer, type NewEvent } from "@/server/google";
+import { hostedProblem } from "@/server/app-keys";
+import { googleCan, GoogleSaid, type CalendarEvent, type GoogleAccount, type GoogleApi, type InviteAnswer, type NewEvent } from "@/server/google";
 import { sendingEnabled } from "@/server/repo";
 import { PLACES } from "./fathom";
 import type { JobContext, JobResult } from "./runner";
@@ -119,7 +120,7 @@ const validZone = (zone: string) => {
  */
 async function mayChange(db: Db, ownerId: string, account: string): Promise<void> {
   if (!sendingEnabled()) throw new GoogleSaid("Sending is switched off (SENDING_ENABLED), so nothing is changed in Google Calendar and nobody is told.");
-  const [row] = googleAvailable() ? await db.query<{ scopes: string }>("select scopes from google_accounts where owner_id = $1 and email = $2", [ownerId, account]) : [];
+  const [row] = !hostedProblem("google") ? await db.query<{ scopes: string }>("select scopes from google_accounts where owner_id = $1 and email = $2", [ownerId, account]) : [];
   if (!row) throw new GoogleSaid(`${account} is not connected. Connect it on the Connections tab.`);
   if (!googleCan(row.scopes.split(",")).addEvents) throw new GoogleSaid(`Changing events was not allowed for ${account}. Connect it again on the Connections tab and allow it.`);
 }

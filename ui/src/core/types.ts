@@ -49,6 +49,13 @@ export interface ThreadMessage {
   avatar?: string;
 }
 
+/** App keys as the screens show them: whose a new connection uses, and the person's own. Never a secret. */
+export interface AppKeysOnScreen {
+  using: "own" | "team" | "settings" | null;
+  label: string | null;
+  own: string | null;
+}
+
 /** A team member's login, as the owner sees it in Settings. */
 export interface TeamLogin {
   id: string;
@@ -413,4 +420,9 @@ export interface AppState {
   localData: boolean;
   /** False until the AI key is set and has credit to run. */
   aiConfigured: boolean;
+  /**
+   * The app keys a new Google or Telegram connection by this person uses: their own, the team's
+   * (the owner's), or the server's settings; and their own, when they saved some. Never a secret.
+   */
+  appKeys: Record<"google" | "telegram" | "anthropic", AppKeysOnScreen>;
 }

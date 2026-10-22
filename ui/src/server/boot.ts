@@ -1,4 +1,5 @@
 // What every request needs first: the database opened and migrated, and the owner set up.
+import { adoptSettingsKeys } from "./app-keys";
 import { connectFromEnv } from "./connections";
 import { describeDbError, getDb, type Db } from "./db";
 import { ensureOwner, OWNER_ID } from "./repo";
@@ -12,6 +13,8 @@ export function ready(): Promise<Db> {
       try {
         const db = await getDb();
         await ensureOwner(db);
+        // The app keys in the settings are kept in the database, once, as the owner's (see app-keys.ts).
+        for (const note of await adoptSettingsKeys(db)) console.log(`[command-center] ${note}`);
         if (await adoptTelegramFile(db, OWNER_ID)) console.log("[command-center] telegram: the saved login was moved into the local database");
         for (const note of await connectFromEnv(db, OWNER_ID)) console.log(`[command-center] ${note}`);
         return db;

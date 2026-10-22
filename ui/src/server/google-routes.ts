@@ -33,7 +33,7 @@ export async function googleLoginRedirect(request: Request, now = Date.now(), gi
   // Only the dashboard's own button starts a login.
   if (!sameSite(request)) return backToConnections(request, { error: "Click Connect Google on this page to connect." });
   try {
-    const { url, cookie } = startGoogleLogin(siteOf(request), isHttps(request), now, owner);
+    const { url, cookie } = await startGoogleLogin(given ?? (await ready()), owner, siteOf(request), isHttps(request), now);
     return new Response(null, { status: 302, headers: { location: url, "set-cookie": cookie, "cache-control": "no-store" } });
   } catch (error) {
     return backToConnections(request, { error: said(error) });

@@ -42,6 +42,14 @@ The owner can give someone on the team a Command Center of their own: **Settings
 - **New password** ends that person's sessions. **Turn off** stops their sign-in and their checks, and keeps their data. **Remove** deletes their login and everything of theirs.
 - Only the owner sees Team logins. The scheduled checks run for the owner first, then for each team member who can sign in (`ui/src/server/team.ts`).
 
+### App keys
+
+The keys of the apps the dashboard connects through are kept in the database, encrypted, for each person: Google's OAuth client (Client ID and secret), Telegram's app (api_id and api_hash) and the AI key. Anyone saves their own under **Connections → App keys**; Google's and the AI's are checked with the service before they are kept. Someone with none of their own uses the owner's, the team's keys.
+
+- **A connection keeps the keys it was made with.** Saving new keys, for yourself or as the owner, changes only what new connections use; every account connected before goes on working with its own (`ui/src/server/app-keys.ts`).
+- **From the settings, once.** On first start, keys in the settings (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID`) are copied in as the owner's keys: into a local database, or into the hosted one from the live site only (Vercel, or `GOOGLE_HOSTED`/`TELEGRAM_HOSTED` set). Accounts connected before were made with exactly these. After that the settings can be removed.
+- **What stays in the settings:** what the whole site needs: `DATABASE_URL`, `SECRETS_KEY` (it unlocks every stored key and login: never change it), `LOGIN_EMAIL` and `LOGIN_PASSWORD`, `CRON_SECRET`, `SENDING_ENABLED`, `GOOGLE_HOSTED`, `TELEGRAM_HOSTED` and the limits.
+
 ## Switched off for now
 
 These are built or planned but left off the screens for now. Each has one line to change.
@@ -52,7 +60,7 @@ These are built or planned but left off the screens for now. Each has one line t
 | Departments (the tab, and the department on tasks and team members) | Nothing yet says which department a task or person belongs to | `DEPARTMENTS = true` in `ui/src/core/config.ts` |
 | Targets (the tab, and the month's pace on Today) | The numbers are the prototype's examples; nothing fills them in yet | `TARGETS = true` in `ui/src/core/config.ts` |
 | Finding tasks with AI | The Claude account has no credit, so every run fails | `live: true` on `task-suggest` in `ui/src/core/jobs.ts` |
-| Telegram | It needs its two app keys (`TELEGRAM_API_ID` and `TELEGRAM_API_HASH`, from my.telegram.org). With the hosted database it also needs `TELEGRAM_HOSTED=true`, which only the live site sets, so a developer's own account can never end up in the hosted database | Set the keys (and on the live site the switch). The Connections tab then shows the Telegram login. On your own machine use `npm run dev:local`, which keeps the data on your computer |
+| Telegram | It needs its two app keys (api_id and api_hash, from my.telegram.org) under Connections → App keys, or in the settings for the first start. With the hosted database it also needs `TELEGRAM_HOSTED=true`, which only the live site sets, so a developer's own account can never end up in the hosted database | Set the keys (and on the live site the switch). The Connections tab then shows the Telegram login. On your own machine use `npm run dev:local`, which keeps the data on your computer |
 
 While the Personal side is off, everything shows as Professional, including anything that was moved to Personal earlier.
 

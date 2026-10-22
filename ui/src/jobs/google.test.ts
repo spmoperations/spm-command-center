@@ -242,17 +242,17 @@ describe("the setup guide", () => {
 });
 
 describe("where Google may be used", () => {
-  it("needs its app keys, and with a hosted database also the server's say-so", () => {
-    expect(googleBlocked()).toMatch(/GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET/);
+  it("needs its app keys, and with a hosted database also the server's say-so", async () => {
+    expect(await googleBlocked(db, OWNER_ID)).toMatch(/GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET/);
     process.env.GOOGLE_CLIENT_ID = "not-a-client-id";
     process.env.GOOGLE_CLIENT_SECRET = "x";
-    expect(googleBlocked()).toMatch(/ends with \.apps\.googleusercontent\.com/);
+    expect(await googleBlocked(db, OWNER_ID)).toMatch(/ends with \.apps\.googleusercontent\.com/);
     withKeys();
-    expect(googleBlocked()).toBeNull();
+    expect(await googleBlocked(db, OWNER_ID)).toBeNull();
     process.env.DATABASE_URL = HOSTED;
-    expect(googleBlocked()).toBe(GOOGLE_OFF_HERE);
+    expect(await googleBlocked(db, OWNER_ID)).toBe(GOOGLE_OFF_HERE);
     process.env.GOOGLE_HOSTED = " 'true' ";
-    expect(googleBlocked()).toBeNull();
+    expect(await googleBlocked(db, OWNER_ID)).toBeNull();
   });
 
   it("takes no notice of saved logins on a server that may not use Google", async () => {
@@ -374,15 +374,15 @@ describe("connecting Google", () => {
 
   it("keeps what was allowed when only one box was ticked, and keeps nothing when neither was", async () => {
     withKeys();
-    const pending = (now: number) => {
-      const { url, cookie } = startGoogleLogin(SITE, false, now);
+    const pending = async (now: number) => {
+      const { url, cookie } = await startGoogleLogin(db, OWNER_ID, SITE, false, now);
       return { state: new URL(url).searchParams.get("state")!, cookie: /cc_google_login=([^;]*)/.exec(cookie)![1] };
     };
     const onlyCalendar = googleSays({
       [TOKEN]: () => [200, { access_token: "a", refresh_token: "r", scope: CALENDAR_SCOPE }],
       [EVENTS]: () => [200, { summary: JEREMY_MAIL, items: [] }],
     });
-    const one = pending(NOW);
+    const one = await pending(NOW);
     expect(await finishGoogleLogin(db, OWNER_ID, new URLSearchParams({ state: one.state, code: "c" }), one.cookie, onlyCalendar.fetchImpl, NOW)).toEqual({ email: JEREMY_MAIL, scopes: [CALENDAR_SCOPE] });
     expect((await loadState(db, OWNER_ID, new Date(NOW))).googleAllows).toEqual({ gmail: false, send: false, calendar: true, addEvents: false });
     // Gmail's check says why it does not run, without asking Google anything.
@@ -390,7 +390,7 @@ describe("connecting Google", () => {
     expect([run.ok, run.message]).toEqual([false, "Gmail was not allowed for any connected Google account. Connect the account again and tick Gmail."]);
 
     const nothing = googleSays({ [TOKEN]: () => [200, { access_token: "a", refresh_token: "r2", scope: "openid" }], [REVOKE]: () => [200, {}] });
-    const two = pending(NOW);
+    const two = await pending(NOW);
     await expect(finishGoogleLogin(db, OWNER_ID, new URLSearchParams({ state: two.state, code: "c" }), two.cookie, nothing.fetchImpl, NOW)).rejects.toThrow("Neither Gmail nor Calendar was allowed");
     // The login Google handed over is ended straight away.
     expect(nothing.calls.find((c) => c.url === REVOKE)!.body.get("token")).toBe("r2");
@@ -398,7 +398,7 @@ describe("connecting Google", () => {
 
   it("says which API is not switched on in the Google Cloud project, and keeps nothing", async () => {
     withKeys();
-    const { url, cookie } = startGoogleLogin(SITE, false, NOW);
+    const { url, cookie } = await startGoogleLogin(db, OWNER_ID, SITE, false, NOW);
     const google = googleSays({
       [TOKEN]: () => [200, { access_token: "a", refresh_token: "r3", scope: `${GMAIL_SCOPE} ${CALENDAR_EDIT_SCOPE}` }],
       [PROFILE]: () => [403, { error: { message: "Gmail API has not been used in project 1234 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/gmail.googleapis.com/overview?project=1234 then retry.", errors: [{ reason: "accessNotConfigured" }] } }],
@@ -428,7 +428,7 @@ describe("connecting Google", () => {
   it("says plainly when the address or the keys are not the ones set up in Google Cloud", async () => {
     withKeys();
     for (const [error, said] of [["redirect_uri_mismatch", `Add ${SITE}/api/google/callback to the OAuth client's Authorized redirect URIs`], ["invalid_client", "Google did not accept the app keys"]]) {
-      const { url, cookie } = startGoogleLogin(SITE, false, NOW);
+      const { url, cookie } = await startGoogleLogin(db, OWNER_ID, SITE, false, NOW);
       const google = googleSays({ [TOKEN]: () => [400, { error }] });
       const sealed = /cc_google_login=([^;]*)/.exec(cookie)![1];
       await expect(finishGoogleLogin(db, OWNER_ID, new URLSearchParams({ state: new URL(url).searchParams.get("state")!, code: "c" }), sealed, google.fetchImpl, NOW)).rejects.toThrow(said);

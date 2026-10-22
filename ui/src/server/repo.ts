@@ -13,11 +13,12 @@ import type {
 import { aiConfigured } from "./ai";
 import { emailTags, type TaggedEmail } from "@/core/email-tags";
 import { isEmailAddress, parseAddress, type Address } from "./gmail";
-import { disconnectGoogle, googleAccounts, googleAvailable, googleBlocked, googleCan } from "./google";
+import { hostedProblem, keysOnScreen } from "./app-keys";
+import { disconnectGoogle, googleAccounts, googleBlocked, googleCan } from "./google";
 import { telegramAvatarIds, type StoredPicture } from "./media";
 import { SLACK_FILES_SCOPE, type Fetch } from "./slack";
 import { hashPassword, MIN_PASSWORD, teamLogins } from "./team";
-import { telegramAvailable, telegramBlocked } from "./telegram";
+import { telegramBlocked } from "./telegram";
 import type { Db } from "./db";
 import { OWNER_ID } from "./owner";
 
@@ -246,7 +247,7 @@ const KIND: Record<string, CalendarItem["kind"]> = { focusTime: "focus", outOfOf
  * calendars, with the same id and start, is one item that names both.
  */
 async function loadCalendar(db: Db, ownerId: string): Promise<CalendarItem[]> {
-  if (!googleAvailable()) return [];
+  if (hostedProblem("google")) return [];
   const rows = await db.query<{
     account: string; id: string; title: string; start_at: number; end_at: number; all_day: boolean; kind: string; location: string | null; link: string | null;
     html_link: string | null; organizer: string | null; attendees: { name: string; email: string }[]; response: string | null; mine: boolean; description: string | null; recurring: boolean;
@@ -295,6 +296,8 @@ async function loadJobStatus(db: Db, ownerId: string): Promise<AppState["jobStat
 export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): Promise<AppState> {
   const month = monthKey(now);
   const today = isoDay(now);
+  // Telegram may be used on this server at all (each login has the keys it was made with).
+  const telegramHere = !hostedProblem("telegram");
   // Every read is independent, so they go out together: one wait instead of twenty.
   const [
     [owner],
@@ -353,8 +356,8 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     loadCalendar(db, ownerId),
     googleAccounts(db, ownerId),
     db.query<{ source: "slack" | "telegram"; kind: "chat" | "person"; external_id: string; name: string }>("select source, kind, external_id, name from important where owner_id = $1 order by lower(name)", [ownerId]),
-    telegramAvailable() ? db.query<{ id: string; name: string; kind: "group" | "channel" }>("select id, name, kind from telegram_chats where owner_id = $1 order by lower(name)", [ownerId]) : Promise.resolve([]),
-    telegramAvailable()
+    telegramHere ? db.query<{ id: string; name: string; kind: "group" | "channel" }>("select id, name, kind from telegram_chats where owner_id = $1 order by lower(name)", [ownerId]) : Promise.resolve([]),
+    telegramHere
       ? db.query<{ id: string; name: string }>(
           // The people of the one-to-one chats, and whoever wrote in a group, each once under their latest name.
           `select distinct on (id) id, name from (
@@ -376,6 +379,16 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
   for (const f of focusRows) (focus[f.mode][f.scope][f.period] ??= []).push({ id: f.id, text: f.body, done: f.done });
   const slackScopes = connections.find((c) => c.provider === "slack")?.scopes;
   const allows = (what: keyof ReturnType<typeof googleCan>) => google.some((a) => googleCan(a.scopes)[what]);
+  // Why this person cannot connect Telegram or Google now. A login already here keeps its own keys.
+  const telegramIn = telegramHere && connections.some((c) => c.provider === "telegram");
+  const [telegramNow, googleNow, telegramKeys, googleKeys, aiKeys, ai] = await Promise.all([
+    telegramIn ? Promise.resolve(null) : telegramBlocked(db, ownerId),
+    google.length ? Promise.resolve(hostedProblem("google")) : googleBlocked(db, ownerId),
+    keysOnScreen(db, ownerId, "telegram"),
+    keysOnScreen(db, ownerId, "google"),
+    keysOnScreen(db, ownerId, "anthropic"),
+    aiConfigured(db, ownerId),
+  ]);
   const connection = (p: Provider) => {
     const row = connections.find((c) => c.provider === p);
     return row ? { connected: true, connectedAt: Number(row.connected_at), label: row.label ?? undefined } : { connected: false };
@@ -408,7 +421,7 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     // A Telegram or Google login counts only on a server that may use it (see `telegramAvailable`).
     connections: {
       slack: connection("slack"),
-      telegram: telegramAvailable() ? connection("telegram") : { connected: false },
+      telegram: telegramHere ? connection("telegram") : { connected: false },
       fathom: connection("fathom"),
       // Google's accounts are kept apart (see `google_accounts`): connected when there is at least one.
       google: google.length ? { connected: true, connectedAt: google[0].connectedAt, label: google.length === 1 ? google[0].email : `${google.length} accounts` } : { connected: false },
@@ -425,14 +438,15 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     logins: ownerId === OWNER_ID ? await teamLogins(db) : [],
     sendingEnabled: sendingEnabled(),
     slackFilesAllowed: slackScopes ? slackScopes.split(",").includes(SLACK_FILES_SCOPE) : null,
-    telegramAvailable: telegramAvailable(),
-    telegramBlocked: telegramBlocked(),
-    googleAvailable: googleAvailable(),
-    googleBlocked: googleBlocked(),
+    telegramAvailable: telegramNow === null,
+    telegramBlocked: telegramNow,
+    googleAvailable: googleNow === null,
+    googleBlocked: googleNow,
+    appKeys: { google: googleKeys, telegram: telegramKeys, anthropic: aiKeys },
     googleAccounts: google.map((a) => ({ email: a.email, connectedAt: a.connectedAt, ...googleCan(a.scopes) })),
     googleAllows: { gmail: allows("gmail"), send: allows("send"), calendar: allows("calendar"), addEvents: allows("addEvents") },
     localData: !process.env.DATABASE_URL,
-    aiConfigured: aiConfigured(),
+    aiConfigured: ai,
   };
 }
 
@@ -637,7 +651,7 @@ function emailPlace(externalId: string): { account: string; threadId: string } {
 
 /** Sending needs the account connected here, and allowed to send on Google's page. */
 async function mustSendFrom(c: ActionContext, account: string): Promise<void> {
-  const [row] = googleAvailable() ? await c.db.query<{ scopes: string }>("select scopes from google_accounts where owner_id = $1 and email = $2", [c.ownerId, account]) : [];
+  const [row] = !hostedProblem("google") ? await c.db.query<{ scopes: string }>("select scopes from google_accounts where owner_id = $1 and email = $2", [c.ownerId, account]) : [];
   if (!row) throw new Error(`${account} is not connected. Connect it on the Connections tab.`);
   if (!googleCan(row.scopes.split(",")).send) throw new Error(`Sending was not allowed for ${account}. Connect it again on the Connections tab and allow sending.`);
 }

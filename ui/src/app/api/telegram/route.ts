@@ -6,7 +6,8 @@ import { failed, fromDashboard, refused, signedInAs, signInFirst } from "@/serve
 import { forgetTelegramMedia } from "@/server/media";
 import { loadState } from "@/server/repo";
 import { isHttps } from "@/server/session";
-import { disconnectTelegram, giveTelegramCode, giveTelegramPassword, mustHaveLoginInProgress, startTelegramLogin, telegramBlocked, type LoginTurn } from "@/server/telegram";
+import { hostedProblem } from "@/server/app-keys";
+import { disconnectTelegram, giveTelegramCode, giveTelegramPassword, mustHaveLoginInProgress, startTelegramLogin, type LoginTurn } from "@/server/telegram";
 
 // Waiting for Telegram to send a code can take a few seconds.
 export const maxDuration = 60;
@@ -42,8 +43,9 @@ export async function POST(request: Request) {
   if (!fromDashboard(request)) return refused();
   const owner = await signedInAs(request);
   if (!owner) return signInFirst(request);
-  const blocked = telegramBlocked();
-  if (blocked) return failed(new Error(blocked));
+  // Refused before anything is sent to Telegram on a server that may not hold a Telegram login.
+  const hosted = hostedProblem("telegram");
+  if (hosted) return failed(new Error(hosted));
   const answer = (body: unknown, pending: string | null) => Response.json(body, { headers: { "set-cookie": loginCookie(request, pending) } });
   try {
     const body = (await request.json()) as Body;
@@ -52,7 +54,7 @@ export async function POST(request: Request) {
     if (body.step === "start") {
       const phone = normalizePhone(String(body.phone ?? ""));
       if (!phone) return failed(new Error("Type the number with its country code, for example +44 7700 900123."));
-      turn = await startTelegramLogin(phone);
+      turn = await startTelegramLogin(await ready(), owner, phone);
     } else if (body.step === "code") {
       mustHaveLoginInProgress(pendingOf(request));
       turn = await giveTelegramCode(await ready(), owner, pendingOf(request), String(body.code ?? ""));

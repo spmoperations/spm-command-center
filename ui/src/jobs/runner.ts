@@ -6,10 +6,11 @@ import type { JobId, JobSetting } from "@/core/types";
 import { aiConfigured } from "@/server/ai";
 import { secretFor } from "@/server/connections";
 import type { Db } from "@/server/db";
-import { googleAccounts, googleApi, googleAvailable, googleBlocked, googleCan, googleConnected } from "@/server/google";
+import { hostedProblem } from "@/server/app-keys";
+import { googleAccounts, googleApi, googleCan, googleConnected } from "@/server/google";
 import { ageOutInbox, clearAnswered, OWNER_ID, resortInbox, sendingEnabled } from "@/server/repo";
 import { RateLimited, slackClient } from "@/server/slack";
-import { telegramApi, telegramAvailable, telegramBlocked, telegramConnected } from "@/server/telegram";
+import { telegramApi, telegramConnected } from "@/server/telegram";
 import { calendarPull } from "./calendar";
 import { fathomPull } from "./fathom";
 import { gmailPull } from "./gmail";
@@ -73,7 +74,7 @@ async function execute(jobId: JobId, ctx: JobContext): Promise<JobResult> {
     case "request-finder":
       return requestFinder(ctx);
     case "task-suggest":
-      if (!aiConfigured()) throw new NotReady("The AI key is not set");
+      if (!(await aiConfigured(ctx.db, ctx.ownerId))) throw new NotReady("The AI key is not set");
       return taskSuggest(ctx);
     case "outbox-retry": {
       const token = await secretFor(ctx.db, ctx.ownerId, "slack");
@@ -86,8 +87,9 @@ async function execute(jobId: JobId, ctx: JobContext): Promise<JobResult> {
       );
     }
     case "telegram-pull": {
-      const blocked = telegramBlocked();
-      if (blocked) throw new NotReady(blocked);
+      // A login that is here keeps the keys it was made with (see app-keys.ts).
+      const hosted = hostedProblem("telegram");
+      if (hosted) throw new NotReady(hosted);
       if (!(await telegramConnected(ctx.db, ctx.ownerId))) throw new NotReady("Telegram is not connected");
       const telegram = await telegramApi(ctx.db, ctx.ownerId);
       try {
@@ -98,8 +100,8 @@ async function execute(jobId: JobId, ctx: JobContext): Promise<JobResult> {
     }
     case "gmail-pull":
     case "calendar-pull": {
-      const blocked = googleBlocked();
-      if (blocked) throw new NotReady(blocked);
+      const hosted = hostedProblem("google");
+      if (hosted) throw new NotReady(hosted);
       const accounts = await googleAccounts(ctx.db, ctx.ownerId);
       if (!accounts.length) throw new NotReady("Google is not connected");
       // The person may have allowed only one of the two on Google's page.
@@ -114,7 +116,7 @@ async function execute(jobId: JobId, ctx: JobContext): Promise<JobResult> {
 /** The services that are connected. A Telegram or Google login counts only on a server that may use it. */
 async function connectedTo(db: Db, ownerId: string): Promise<Set<string>> {
   const connected = new Set((await db.query<{ provider: string }>("select provider from connections where owner_id = $1", [ownerId])).map((r) => r.provider));
-  if (!telegramAvailable()) connected.delete("telegram");
+  if (hostedProblem("telegram")) connected.delete("telegram");
   // Google's accounts are kept in a table of their own (see `google_accounts`).
   if (await googleConnected(db, ownerId)) connected.add("google");
   return connected;
@@ -168,7 +170,9 @@ export async function runJob(db: Db, jobId: JobId, ownerId = OWNER_ID, now = Dat
 export async function tick(db: Db, ownerId = OWNER_ID, now = Date.now()): Promise<JobRun[]> {
   const rows = await db.query<{ job_id: JobId; interval_min: number; enabled: boolean; last_run_at: number | null; not_before: number | null }>("select job_id, interval_min, enabled, last_run_at, not_before from jobs where owner_id = $1", [ownerId]);
   const connected = await connectedTo(db, ownerId);
-  const live = new Set(liveJobs(telegramAvailable(), googleAvailable()).map((j) => j.id));
+  // Which checks this server may run at all. Each one still needs its account connected.
+  const live = new Set(liveJobs(!hostedProblem("telegram"), !hostedProblem("google")).map((j) => j.id));
+  const ai = await aiConfigured(db, ownerId);
   const runs: JobRun[] = [];
   // In the order they are defined: the people and channel list before messages, messages before tasks.
   for (const def of [...JOBS].sort((a, b) => Number(b.id === "slack-directory-sync") - Number(a.id === "slack-directory-sync"))) {
@@ -176,7 +180,7 @@ export async function tick(db: Db, ownerId = OWNER_ID, now = Date.now()): Promis
     // A check that cannot work yet is not run on a timer. It can still be run by hand.
     if (!row || def.follows || !live.has(def.id)) continue;
     // A job whose source is not connected is skipped quietly, not logged as a failure every minute.
-    if (def.needs && (def.needs === "ai" ? !aiConfigured() : !connected.has(def.needs))) continue;
+    if (def.needs && (def.needs === "ai" ? !ai : !connected.has(def.needs))) continue;
     const setting: JobSetting = { id: def.id, intervalMin: row.interval_min, enabled: row.enabled };
     if (!isDue(setting, row.last_run_at == null ? null : Number(row.last_run_at), now, row.not_before == null ? null : Number(row.not_before))) continue;
     const run = await runJob(db, def.id, ownerId, now);
@@ -193,11 +197,13 @@ export async function tick(db: Db, ownerId = OWNER_ID, now = Date.now()): Promis
  */
 export async function syncAll(db: Db, ownerId = OWNER_ID): Promise<JobRun[]> {
   const connected = await connectedTo(db, ownerId);
-  const live = new Set(liveJobs(telegramAvailable(), googleAvailable()).map((j) => j.id));
+  // Which checks this server may run at all. Each one still needs its account connected.
+  const live = new Set(liveJobs(!hostedProblem("telegram"), !hostedProblem("google")).map((j) => j.id));
+  const ai = await aiConfigured(db, ownerId);
   const runs: JobRun[] = [];
   for (const def of [...JOBS].sort((a, b) => Number(b.id === "slack-directory-sync") - Number(a.id === "slack-directory-sync"))) {
     if (!live.has(def.id) || def.follows) continue;
-    if (def.needs && (def.needs === "ai" ? !aiConfigured() : !connected.has(def.needs))) continue;
+    if (def.needs && (def.needs === "ai" ? !ai : !connected.has(def.needs))) continue;
     // Nothing leaves the outbox while sending is switched off.
     if (def.id === "outbox-retry" && !sendingEnabled()) continue;
     runs.push(...(await runNow(db, def.id, ownerId)));

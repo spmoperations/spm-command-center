@@ -7,13 +7,17 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { DEPTS } from "@/core/config";
 import { FIELDS, message, SYSTEM, type TaskSearch } from "@/prompts/task-finder";
+import { keysForNew, type AnthropicKeys } from "./app-keys";
+import type { Db } from "./db";
 
 export type { TaskSearch };
 
 // Development default: the cheapest current model. Set ANTHROPIC_MODEL to change it.
 export const AI_MODEL = process.env.ANTHROPIC_MODEL ?? "claude-haiku-4-5";
 
-export const aiConfigured = () => Boolean(process.env.ANTHROPIC_API_KEY);
+/** The AI key this person's checks use: their own, else the team's, else the server's settings (see app-keys.ts). */
+export const aiKeys = async (db: Db, ownerId: string): Promise<AnthropicKeys | null> => (await keysForNew(db, ownerId, "anthropic"))?.keys ?? null;
+export const aiConfigured = async (db: Db, ownerId: string) => (await aiKeys(db, ownerId)) !== null;
 
 const FoundTasks = z.object({
   tasks: z.array(
@@ -31,16 +35,18 @@ const FoundTasks = z.object({
 
 export type FoundTask = z.infer<typeof FoundTasks>["tasks"][number];
 
-let client: Anthropic | null = null;
-function anthropic(): Anthropic {
+const clients = new Map<string, Anthropic>();
+function anthropic(keys: AnthropicKeys): Anthropic {
   // A key that is not tied to one workspace must name the workspace on every request.
-  const workspace = process.env.ANTHROPIC_WORKSPACE_ID;
-  return (client ??= new Anthropic({ defaultHeaders: workspace ? { "anthropic-workspace-id": workspace } : undefined }));
+  const key = `${keys.apiKey}:${keys.workspaceId ?? ""}`;
+  let client = clients.get(key);
+  if (!client) clients.set(key, (client = new Anthropic({ apiKey: keys.apiKey, defaultHeaders: keys.workspaceId ? { "anthropic-workspace-id": keys.workspaceId } : undefined })));
+  return client;
 }
 
 /** Asks the model for tasks. Throws the SDK's typed errors; the job turns them into a readable message. */
-export async function findTasks(input: TaskSearch): Promise<FoundTask[]> {
-  const response = await anthropic().messages.parse({
+export async function findTasks(input: TaskSearch, keys: AnthropicKeys): Promise<FoundTask[]> {
+  const response = await anthropic(keys).messages.parse({
     model: AI_MODEL,
     max_tokens: 4000,
     system: SYSTEM,
@@ -52,9 +58,18 @@ export async function findTasks(input: TaskSearch): Promise<FoundTask[]> {
   return response.parsed_output.tasks;
 }
 
+/** Checks an AI key before it is saved: asking which models it may use costs nothing. */
+export async function checkAiKey(keys: AnthropicKeys): Promise<void> {
+  try {
+    await anthropic(keys).models.list({ limit: 1 });
+  } catch (error) {
+    throw new Error(error instanceof Anthropic.AuthenticationError ? "Anthropic does not accept that key." : describeAiError(error));
+  }
+}
+
 /** Turns an SDK error into one line a person can act on. */
 export function describeAiError(error: unknown): string {
-  if (error instanceof Anthropic.AuthenticationError) return "The AI key was rejected. Check ANTHROPIC_API_KEY.";
+  if (error instanceof Anthropic.AuthenticationError) return "The AI key was rejected. Check it in the app keys.";
   if (error instanceof Anthropic.PermissionDeniedError) return "The AI key is not allowed to use this model.";
   if (error instanceof Anthropic.RateLimitError) return "The AI service is rate limited right now. It will try again on the next run.";
   if (error instanceof Anthropic.APIConnectionError) return "Could not reach the AI service.";

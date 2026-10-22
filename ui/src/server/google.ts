@@ -11,6 +11,7 @@
 import crypto from "node:crypto";
 import type { Db } from "./db";
 import type { GmailMessage, GmailThread } from "./gmail";
+import { hostedProblem, keysById, keysForNew, offHere, settingsProblem, type GoogleKeys } from "./app-keys";
 import { seal, unseal } from "./secrets";
 import { RateLimited, type Fetch } from "./slack";
 
@@ -45,29 +46,41 @@ export const GOOGLE_LOGIN_COOKIE = "cc_google_login";
 /** How long the person has on Google's page. */
 const LOGIN_MINUTES = 10;
 
-/** A setting as it was meant: a value pasted with quotes or spaces around it still counts. */
-const setting = (name: string) => (process.env[name] ?? "").trim().replace(/^["']+|["']+$/g, "").trim();
-
-/** What is wrong with the app keys from Google Cloud, or null when both are in place. */
-function keysProblem(): string | null {
-  const id = setting("GOOGLE_CLIENT_ID");
-  const secret = setting("GOOGLE_CLIENT_SECRET");
-  const where = "Add them to the environment. On a host that means for Production, followed by a redeploy.";
-  if (!id && !secret) return `Google's app keys are not set: GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET. ${where}`;
-  if (!id) return `GOOGLE_CLIENT_ID is not set. GOOGLE_CLIENT_SECRET is. ${where}`;
-  if (!secret) return `GOOGLE_CLIENT_SECRET is not set. GOOGLE_CLIENT_ID is. ${where}`;
-  if (!id.endsWith(".apps.googleusercontent.com")) return "GOOGLE_CLIENT_ID does not look right. It is the Client ID of the OAuth client in Google Cloud, and ends with .apps.googleusercontent.com.";
-  return null;
+/**
+ * Why this person cannot connect a Google account here, in words for them, or null when they
+ * can: Google may not be used on this server, or there are no app keys anywhere (their own, the
+ * team's, or the server's settings). See app-keys.ts.
+ */
+export async function googleBlocked(db: Db, ownerId: string): Promise<string | null> {
+  const hosted = hostedProblem("google");
+  if (hosted) return hosted;
+  if (await keysForNew(db, ownerId, "google")) return null;
+  return `Google's app keys are not in place yet. Save a Client ID and Client secret from Google Cloud on the Connections page, under Google, App keys. ${settingsProblem("google") ?? ""}`.trim();
 }
 
-export const GOOGLE_OFF_HERE =
-  "The app keys are in place, but Google is switched off while the app uses the hosted database. The live site turns it on with GOOGLE_HOSTED=true (on a host: for Production, followed by a redeploy). On your own machine, start the app with: npm run dev:local";
+export const googleAvailable = async (db: Db, ownerId: string) => (await googleBlocked(db, ownerId)) === null;
 
-/** Why Google cannot be used here, in words for the person, or null when it can. */
-export const googleBlocked = (): string | null =>
-  keysProblem() ?? (process.env.DATABASE_URL && setting("GOOGLE_HOSTED").toLowerCase() !== "true" ? GOOGLE_OFF_HERE : null);
+export const GOOGLE_OFF_HERE = offHere("google");
 
-export const googleAvailable = () => googleBlocked() === null;
+/**
+ * Checks app keys with Google before they are saved: a made-up code is swapped at Google's
+ * token address. Google answers that the code is wrong when the keys are right, and that the
+ * client is unknown when they are not. Nothing is connected and nothing is kept on Google's side.
+ */
+export async function checkGoogleKeys(keys: GoogleKeys, redirect: string, fetchImpl: Fetch = fetch): Promise<void> {
+  let answer: { status: number; body: Record<string, unknown> };
+  try {
+    answer = await form(fetchImpl, TOKEN_URL, { code: "command-center-key-check", client_id: keys.clientId, client_secret: keys.clientSecret, redirect_uri: redirect, grant_type: "authorization_code" });
+  } catch {
+    throw new GoogleSaid("Google could not be reached to check the keys. Try again in a minute.");
+  }
+  if (answer.body.error === "invalid_client" || answer.body.error === "unauthorized_client") {
+    throw new GoogleSaid("Google does not know these keys. Copy the Client ID and Client secret again from the OAuth client in Google Cloud.");
+  }
+}
+
+/** Google may be used on this server at all. The accounts already connected each have their own keys. */
+const mayUseGoogle = () => hostedProblem("google") === null;
 
 /** Something already put in words for the person. It is shown as it is. */
 export class GoogleSaid extends Error {}
@@ -96,13 +109,13 @@ interface Saved {
   refresh: string;
 }
 
-type AccountRow = { email: string; secret: string; scopes: string; start_history: string | null; connected_at: number };
+type AccountRow = { email: string; secret: string; scopes: string; start_history: string | null; connected_at: number; app_key_id: string | null };
 const toAccount = (r: AccountRow): GoogleAccount => ({ email: r.email, scopes: r.scopes.split(",").filter(Boolean), connectedAt: Number(r.connected_at), startHistory: r.start_history });
 
 /** The Google accounts connected here, in the order they were connected. None on a server that may not use Google. */
 export async function googleAccounts(db: Db, ownerId: string): Promise<GoogleAccount[]> {
-  if (!googleAvailable()) return [];
-  const rows = await db.query<AccountRow>("select email, secret, scopes, start_history, connected_at from google_accounts where owner_id = $1 order by connected_at, email", [ownerId]);
+  if (!mayUseGoogle()) return [];
+  const rows = await db.query<AccountRow>("select email, secret, scopes, start_history, connected_at, app_key_id from google_accounts where owner_id = $1 order by connected_at, email", [ownerId]);
   return rows.map(toAccount);
 }
 
@@ -111,10 +124,10 @@ export async function googleConnected(db: Db, ownerId: string): Promise<boolean>
   return (await googleAccounts(db, ownerId)).length > 0;
 }
 
-async function savedLogin(db: Db, ownerId: string, email: string): Promise<(GoogleAccount & { login: Saved }) | null> {
-  if (!googleAvailable()) return null;
-  const [row] = await db.query<AccountRow>("select email, secret, scopes, start_history, connected_at from google_accounts where owner_id = $1 and email = $2", [ownerId, email]);
-  return row ? { ...toAccount(row), login: JSON.parse(unseal(row.secret)) as Saved } : null;
+async function savedLogin(db: Db, ownerId: string, email: string): Promise<(GoogleAccount & { login: Saved; keyId: string | null }) | null> {
+  if (!mayUseGoogle()) return null;
+  const [row] = await db.query<AccountRow>("select email, secret, scopes, start_history, connected_at, app_key_id from google_accounts where owner_id = $1 and email = $2", [ownerId, email]);
+  return row ? { ...toAccount(row), login: JSON.parse(unseal(row.secret)) as Saved, keyId: row.app_key_id } : null;
 }
 
 const forgetLogin = (db: Db, ownerId: string, email: string) => db.run("delete from google_accounts where owner_id = $1 and email = $2", [ownerId, email]);
@@ -128,15 +141,17 @@ const b64url = (bytes: Buffer) => bytes.toString("base64url");
  * sends them back. `site` is the address the dashboard was opened at: Google sends them back
  * to the same one, which must be listed in the OAuth client in Google Cloud.
  */
-export function startGoogleLogin(site: string, secure: boolean, now = Date.now(), ownerId?: string): { url: string; cookie: string } {
-  const blocked = googleBlocked();
+export async function startGoogleLogin(db: Db, ownerId: string, site: string, secure: boolean, now = Date.now()): Promise<{ url: string; cookie: string }> {
+  const blocked = await googleBlocked(db, ownerId);
   if (blocked) throw new GoogleSaid(blocked);
+  // The keys this login is made with: the person's own, else the team's. The account keeps them.
+  const keys = (await keysForNew(db, ownerId, "google"))!;
   const state = b64url(crypto.randomBytes(24));
   const verifier = b64url(crypto.randomBytes(48));
   const redirect = `${site}/api/google/callback`;
   const url = new URL(AUTH_URL);
   url.search = new URLSearchParams({
-    client_id: setting("GOOGLE_CLIENT_ID"),
+    client_id: keys.keys.clientId,
     redirect_uri: redirect,
     response_type: "code",
     scope: GOOGLE_SCOPES.join(" "),
@@ -151,7 +166,7 @@ export function startGoogleLogin(site: string, secure: boolean, now = Date.now()
   }).toString();
   // Lax, not Strict: the way back from Google is a link from another site, and a Strict
   // cookie would not come with it.
-  const cookie = `${GOOGLE_LOGIN_COOKIE}=${seal(JSON.stringify({ v: 1, state, verifier, redirect, at: now, ...(ownerId ? { owner: ownerId } : {}) }))}; Path=/api/google; HttpOnly; SameSite=Lax; Max-Age=${LOGIN_MINUTES * 60}${secure ? "; Secure" : ""}`;
+  const cookie = `${GOOGLE_LOGIN_COOKIE}=${seal(JSON.stringify({ v: 1, state, verifier, redirect, at: now, owner: ownerId, keyId: keys.id }))}; Path=/api/google; HttpOnly; SameSite=Lax; Max-Age=${LOGIN_MINUTES * 60}${secure ? "; Secure" : ""}`;
   return { url: url.toString(), cookie };
 }
 
@@ -176,10 +191,10 @@ export async function finishGoogleLogin(
   fetchImpl: Fetch = fetch,
   now = Date.now(),
 ): Promise<{ email: string; scopes: string[] }> {
-  const blocked = googleBlocked();
-  if (blocked) throw new GoogleSaid(blocked);
+  const hosted = hostedProblem("google");
+  if (hosted) throw new GoogleSaid(hosted);
   const again = "That Google login has timed out or did not start here. Click Connect Google again.";
-  let pending: { v: number; state: string; verifier: string; redirect: string; at: number; owner?: string };
+  let pending: { v: number; state: string; verifier: string; redirect: string; at: number; owner?: string; keyId?: string | null };
   try {
     pending = JSON.parse(unseal(cookie ?? ""));
   } catch {
@@ -194,17 +209,20 @@ export async function finishGoogleLogin(
   if (refused) throw new GoogleSaid(refused === "access_denied" ? "Google was not allowed in, so nothing was connected." : `Google did not connect: ${refused}.`);
   const code = answer.get("code");
   if (!code) throw new GoogleSaid(again);
+  // The same keys the login was started with: Google hands the code to that app only.
+  const keys = await keysById(db, ownerId, "google", pending.keyId);
+  if (!keys) throw new GoogleSaid(again);
 
   const { status, body } = await form(fetchImpl, TOKEN_URL, {
     code,
-    client_id: setting("GOOGLE_CLIENT_ID"),
-    client_secret: setting("GOOGLE_CLIENT_SECRET"),
+    client_id: keys.keys.clientId,
+    client_secret: keys.keys.clientSecret,
     redirect_uri: pending.redirect,
     grant_type: "authorization_code",
     code_verifier: pending.verifier,
   });
   if (status !== 200 || typeof body.access_token !== "string") {
-    if (body.error === "invalid_client") throw new GoogleSaid("Google did not accept the app keys. Check GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET against the OAuth client in Google Cloud.");
+    if (body.error === "invalid_client") throw new GoogleSaid("Google did not accept the app keys. Check the Client ID and Client secret against the OAuth client in Google Cloud.");
     if (body.error === "redirect_uri_mismatch") throw new GoogleSaid(`Google does not know this address. Add ${pending.redirect} to the OAuth client's Authorized redirect URIs in Google Cloud.`);
     throw new GoogleSaid(again);
   }
@@ -227,9 +245,9 @@ export async function finishGoogleLogin(
     throw new GoogleSaid("Google did not say which account this is, so nothing was connected. Click Connect Google again.");
   }
   await db.run(
-    `insert into google_accounts (owner_id, email, secret, scopes, start_history, connected_at) values ($1, $2, $3, $4, $5, $6)
-     on conflict (owner_id, email) do update set secret = excluded.secret, scopes = excluded.scopes, start_history = excluded.start_history, connected_at = excluded.connected_at`,
-    [ownerId, who.email, seal(JSON.stringify({ refresh: body.refresh_token } satisfies Saved)), scopes.join(","), who.history, now],
+    `insert into google_accounts (owner_id, email, secret, scopes, start_history, connected_at, app_key_id) values ($1, $2, $3, $4, $5, $6, $7)
+     on conflict (owner_id, email) do update set secret = excluded.secret, scopes = excluded.scopes, start_history = excluded.start_history, connected_at = excluded.connected_at, app_key_id = excluded.app_key_id`,
+    [ownerId, who.email, seal(JSON.stringify({ refresh: body.refresh_token } satisfies Saved)), scopes.join(","), who.history, now, keys.id],
   );
   return { email: who.email, scopes };
 }
@@ -368,9 +386,13 @@ const MAX_EVENT_PAGES = 4;
 export async function googleApi(db: Db, ownerId: string, email: string, fetchImpl: Fetch = fetch): Promise<GoogleApi> {
   const saved = await savedLogin(db, ownerId, email);
   if (!saved) throw new GoogleSaid(`${email} is not connected.`);
+  // The keys this account was connected with, even if newer ones have been saved since. Without
+  // them nothing is asked of Google, and the account stays as it is.
+  const keys = await keysById(db, ownerId, "google", saved.keyId);
+  if (!keys) throw new GoogleSaid(`The app keys ${email} was connected with are not here any more. Nothing was changed; put the same keys back to go on reading it.`);
   const { status, body } = await form(fetchImpl, TOKEN_URL, {
-    client_id: setting("GOOGLE_CLIENT_ID"),
-    client_secret: setting("GOOGLE_CLIENT_SECRET"),
+    client_id: keys.keys.clientId,
+    client_secret: keys.keys.clientSecret,
     refresh_token: saved.login.refresh,
     grant_type: "refresh_token",
   });

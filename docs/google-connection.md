@@ -69,12 +69,10 @@ project you made in step 1.
      add `spm-command-center.vercel.app` under **Branding → Authorized domains**.
    - Copy the **Client ID** and the **Client secret** straight away: newer projects show the
      secret in full only this once.
-7. **Give them to the app.** Open `ui/.env.local`. The two lines are already at the bottom.
-   Paste after the `=` signs. Don't paste them into a chat.
-   ```
-   GOOGLE_CLIENT_ID=…apps.googleusercontent.com
-   GOOGLE_CLIENT_SECRET=…
-   ```
+7. **Give them to the app.** On the Connections page, under **App keys**, click **Use my own
+   keys** next to Google, paste both and click **Save keys**. They are checked with Google, then
+   stored encrypted in the database. Don't paste them into a chat. (Put in `ui/.env.local` as
+   `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, they are copied in on the next start instead.)
 
 ## 2. Connect and try it
 
@@ -200,12 +198,11 @@ What we need from SPM, in one ask:
 
 Then Shruti does section 1 again in SPM's project, with two differences:
 - The redirect URI is `https://spm-command-center.vercel.app/api/google/callback`.
-- The keys go on Vercel, not in `.env.local`:
-  - `GOOGLE_CLIENT_ID`
-  - `GOOGLE_CLIENT_SECRET`
-  - `GOOGLE_HOSTED=true`
-
-  Set them for Production, then merge this branch and redeploy, once it's agreed.
+- The keys went on Vercel (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, with `GOOGLE_HOSTED=true`).
+  Since team logins, the live site copies them into the database on its first start, as the
+  owner's (the team's) keys, and his accounts go on using exactly them. After that the two
+  keys can be removed from Vercel; `GOOGLE_HOSTED=true` stays. New keys are saved under
+  Connections → App keys.
 
 **Jeremy's part:** Connections → **Connect Google** → his SPM account → **Allow**. Any other
 SPM account of his: **Add another Google account**.
@@ -219,6 +216,9 @@ over the project's life.
 
 - Each account's login (a refresh token) is stored encrypted, like the Slack token.
   Disconnecting revokes it at Google.
+- Each account remembers the app keys it was connected with and is always refreshed with
+  them. Saving other keys later never touches it, and an account whose keys are missing is
+  left alone rather than removed.
 - With the hosted database, Google stays off unless `GOOGLE_HOSTED=true` is set on the server.
   That switch belongs on Vercel only, so a developer's own Gmail can't end up in the client's
   database.

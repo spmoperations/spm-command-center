@@ -4,7 +4,7 @@
 import { SOURCE_NAME } from "@/core/config";
 import { addDays, isoDay } from "@/core/dates";
 import { redactSecrets } from "@/core/slack-text";
-import { describeAiError, findTasks, type FoundTask, type TaskSearch } from "@/server/ai";
+import { aiKeys, describeAiError, findTasks, type FoundTask, type TaskSearch } from "@/server/ai";
 import { uid } from "@/server/repo";
 import type { Source } from "@/core/types";
 import type { JobContext, JobResult } from "./runner";
@@ -20,7 +20,14 @@ type Finder = (input: TaskSearch) => Promise<FoundTask[]>;
 
 const validDay = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
 
-export async function taskSuggest({ db, ownerId, now }: JobContext, finder: Finder = findTasks): Promise<JobResult> {
+/** The model, with this person's AI key: their own, else the team's (see app-keys.ts). */
+const withKeyOf = (db: JobContext["db"], ownerId: string): Finder => async (input) => {
+  const keys = await aiKeys(db, ownerId);
+  if (!keys) throw new Error("The AI key is not set");
+  return findTasks(input, keys);
+};
+
+export async function taskSuggest({ db, ownerId, now }: JobContext, finder: Finder = withKeyOf(db, ownerId)): Promise<JobResult> {
   const today = isoDay(new Date(now));
   // Pre-filter in plain code: unread messages from others, in conversations that are a direct
   // message, tag the owner, or that the rules rated above Low.

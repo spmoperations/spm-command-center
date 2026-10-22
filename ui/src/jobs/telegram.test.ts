@@ -69,37 +69,37 @@ afterEach(() => {
 });
 
 describe("where Telegram may be used", () => {
-  it("needs its app keys, and with a hosted database also the server's say-so", () => {
-    expect([telegramAvailable(), telegramBlocked()]).toEqual([false, "Telegram's app keys are not set: TELEGRAM_API_ID and TELEGRAM_API_HASH. Add them to the environment. On a host that means for Production, followed by a redeploy."]);
+  it("needs its app keys, and with a hosted database also the server's say-so", async () => {
+    expect([(await telegramAvailable(db, OWNER_ID)), (await telegramBlocked(db, OWNER_ID))]).toEqual([false, "Telegram's app keys are not in place yet. Save an api_id and api_hash from my.telegram.org on the Connections page, under Telegram, App keys. Telegram's app keys are missing: TELEGRAM_API_ID and TELEGRAM_API_HASH."]);
     withKeys();
-    expect([telegramAvailable(), telegramBlocked()]).toEqual([true, null]);
+    expect([(await telegramAvailable(db, OWNER_ID)), (await telegramBlocked(db, OWNER_ID))]).toEqual([true, null]);
     // A developer's machine pointed at the hosted database: off, so their own account cannot end up there.
     process.env.DATABASE_URL = HOSTED;
-    expect([telegramAvailable(), telegramBlocked()]).toEqual([false, TELEGRAM_OFF_HERE]);
+    expect([(await telegramAvailable(db, OWNER_ID)), (await telegramBlocked(db, OWNER_ID))]).toEqual([false, TELEGRAM_OFF_HERE]);
     // The live site says it is the one meant to hold a Telegram login.
     process.env.TELEGRAM_HOSTED = "true";
-    expect([telegramAvailable(), telegramBlocked()]).toEqual([true, null]);
+    expect([(await telegramAvailable(db, OWNER_ID)), (await telegramBlocked(db, OWNER_ID))]).toEqual([true, null]);
   });
 
   it("says exactly which setting is missing or wrong, and forgives quotes and spaces pasted around a value", async () => {
     process.env.TELEGRAM_API_HASH = "0123456789abcdef0123456789abcdef";
-    expect(telegramBlocked()).toMatch(/^TELEGRAM_API_ID is not set\. TELEGRAM_API_HASH is\./);
+    expect((await telegramBlocked(db, OWNER_ID))).toMatch(/TELEGRAM_API_ID is missing\.$/);
     process.env.TELEGRAM_API_ID = "TELEGRAM_API_ID=12345";
-    expect(telegramBlocked()).toBe("TELEGRAM_API_ID is not a number. It should be the App api_id from my.telegram.org, digits only.");
+    expect((await telegramBlocked(db, OWNER_ID))).toMatch(/TELEGRAM_API_ID is not a number\. It is the App api_id from my\.telegram\.org, digits only\.$/);
     process.env.TELEGRAM_API_ID = "12345";
     process.env.TELEGRAM_API_HASH = "";
-    expect(telegramBlocked()).toMatch(/^TELEGRAM_API_HASH is not set\. TELEGRAM_API_ID is\./);
+    expect((await telegramBlocked(db, OWNER_ID))).toMatch(/TELEGRAM_API_HASH is missing\.$/);
     process.env.TELEGRAM_API_HASH = "too-short";
-    expect(telegramBlocked()).toMatch(/^TELEGRAM_API_HASH does not look right\./);
+    expect((await telegramBlocked(db, OWNER_ID))).toMatch(/TELEGRAM_API_HASH does not look right\./);
 
     // Pasted the way they sit in a settings file: still good.
     process.env.TELEGRAM_API_ID = ' "12345" ';
     process.env.TELEGRAM_API_HASH = "'0123456789abcdef0123456789ABCDEF'\n";
-    expect([telegramAvailable(), telegramBlocked()]).toEqual([true, null]);
+    expect([(await telegramAvailable(db, OWNER_ID)), (await telegramBlocked(db, OWNER_ID))]).toEqual([true, null]);
     process.env.DATABASE_URL = HOSTED;
-    expect(telegramBlocked()).toBe(TELEGRAM_OFF_HERE);
+    expect((await telegramBlocked(db, OWNER_ID))).toBe(TELEGRAM_OFF_HERE);
     process.env.TELEGRAM_HOSTED = ' "True" ';
-    expect([telegramAvailable(), telegramBlocked()]).toEqual([true, null]);
+    expect([(await telegramAvailable(db, OWNER_ID)), (await telegramBlocked(db, OWNER_ID))]).toEqual([true, null]);
     // The screens are told the same sentence, so the Connections tab can show it.
     delete process.env.TELEGRAM_HOSTED;
     const state = await loadState(db, OWNER_ID, new Date(NOW));
@@ -206,7 +206,7 @@ describe("logging in to Telegram, one request per step", () => {
 
   it("sends the code, takes it in a second request, and keeps the login sealed in the database", async () => {
     const t = telegram();
-    const first = await startTelegramLogin("+447700900123", t.open);
+    const first = await startTelegramLogin(db, OWNER_ID, "+447700900123", t.open);
     expect(first.step).toEqual({ need: "code", viaApp: true });
     // What travels to the browser and back is sealed: the connection's keys cannot be read from it.
     expect([typeof first.pending, first.pending!.includes("keys"), unseal(first.pending!).includes('"session":"keys"')]).toEqual(["string", false, true]);
@@ -223,7 +223,7 @@ describe("logging in to Telegram, one request per step", () => {
 
   it("asks for the code again when it is wrong, with the same login still good", async () => {
     const t = telegram();
-    const first = await startTelegramLogin("+447700900123", t.open);
+    const first = await startTelegramLogin(db, OWNER_ID, "+447700900123", t.open);
     const wrong = await giveTelegramCode(db, OWNER_ID, first.pending, "00000", t.open);
     expect(wrong).toEqual({ step: { need: "code", viaApp: true, error: "That code is not right. Check it and try again." }, pending: first.pending });
     expect(await saved()).toEqual([]);
@@ -232,7 +232,7 @@ describe("logging in to Telegram, one request per step", () => {
 
   it("asks for the account's password when it has one, again when it is wrong, and never keeps it", async () => {
     const t = telegram({ password: "open sesame", hint: "the usual" });
-    const first = await startTelegramLogin("+447700900123", t.open);
+    const first = await startTelegramLogin(db, OWNER_ID, "+447700900123", t.open);
     const afterCode = await giveTelegramCode(db, OWNER_ID, first.pending, "12345", t.open);
     expect(afterCode.step).toEqual({ need: "password", hint: "the usual" });
     expect(afterCode.pending).not.toBe(first.pending);
@@ -250,14 +250,14 @@ describe("logging in to Telegram, one request per step", () => {
 
   it("will not take a password before Telegram has asked for one", async () => {
     const t = telegram();
-    const first = await startTelegramLogin("+447700900123", t.open);
+    const first = await startTelegramLogin(db, OWNER_ID, "+447700900123", t.open);
     await expect(giveTelegramPassword(db, OWNER_ID, first.pending, "anything", t.open)).rejects.toThrow("Telegram has not asked for a password.");
   });
 
   it("starts over when the code has expired, the login is too old, or what comes back is not its own", async () => {
     const over = "That login has timed out. Start again with your phone number.";
     const expiring = telegram({ codeExpired: true });
-    const first = await startTelegramLogin("+447700900123", expiring.open);
+    const first = await startTelegramLogin(db, OWNER_ID, "+447700900123", expiring.open);
     await expect(giveTelegramCode(db, OWNER_ID, first.pending, "12345", expiring.open)).rejects.toThrow("That code has expired. Start again to get a new one.");
 
     const t = telegram();
@@ -272,30 +272,30 @@ describe("logging in to Telegram, one request per step", () => {
   });
 
   it("puts Telegram's refusals in plain words", async () => {
-    const start = (sendFails: Error) => startTelegramLogin("+447700900123", telegram({ sendFails }).open);
+    const start = (sendFails: Error) => startTelegramLogin(db, OWNER_ID, "+447700900123", telegram({ sendFails }).open);
     await expect(start(failure("PHONE_NUMBER_INVALID"))).rejects.toThrow("Telegram does not know that phone number. Check the country code.");
     await expect(start(failure("FLOOD_WAIT_120", { seconds: 120 }))).rejects.toThrow("Telegram asks you to wait 2 minutes before trying again.");
-    await expect(start(failure("API_ID_INVALID"))).rejects.toThrow("Telegram did not accept the app keys. Check TELEGRAM_API_ID and TELEGRAM_API_HASH.");
+    await expect(start(failure("API_ID_INVALID"))).rejects.toThrow("Telegram did not accept the app keys. Check the api_id and api_hash against the app on my.telegram.org.");
     await expect(start(new Error("Telegram requires a login email for this account"))).rejects.toThrow("Telegram wants a login email on this account first.");
     // The connection is closed even when a step fails.
     const t = telegram({ sendFails: failure("PHONE_NUMBER_BANNED") });
-    await expect(startTelegramLogin("+447700900123", t.open)).rejects.toThrow("Telegram has blocked that phone number.");
+    await expect(startTelegramLogin(db, OWNER_ID, "+447700900123", t.open)).rejects.toThrow("Telegram has blocked that phone number.");
     expect(t.asked).toEqual(["open (new)", "sendCode +447700900123", "close"]);
   });
 
   it("says when the code went to the account's email or by text message, and hands it in the right way", async () => {
     const byEmail = telegram({ via: "email", code: "123456" });
-    const first = await startTelegramLogin("+447700900123", byEmail.open);
+    const first = await startTelegramLogin(db, OWNER_ID, "+447700900123", byEmail.open);
     expect(first.step).toEqual({ need: "code", viaApp: false, email: "d***@example.com" });
     await giveTelegramCode(db, OWNER_ID, first.pending, "123456", byEmail.open);
     expect(byEmail.asked).toContain("signIn +447700900123 hash-1 123456 email");
-    expect((await startTelegramLogin("+447700900123", telegram({ via: "sms" }).open)).step).toEqual({ need: "code", viaApp: false });
+    expect((await startTelegramLogin(db, OWNER_ID, "+447700900123", telegram({ via: "sms" }).open)).step).toEqual({ need: "code", viaApp: false });
   });
 
   it("does nothing on a server that may not use Telegram", async () => {
     process.env.DATABASE_URL = HOSTED;
     const t = telegram();
-    await expect(startTelegramLogin("+447700900123", t.open)).rejects.toThrow(TELEGRAM_OFF_HERE);
+    await expect(startTelegramLogin(db, OWNER_ID, "+447700900123", t.open)).rejects.toThrow(TELEGRAM_OFF_HERE);
     expect(t.asked).toEqual([]);
   });
 });
