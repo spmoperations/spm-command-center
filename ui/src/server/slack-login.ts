@@ -41,21 +41,12 @@ async function oauthAccess(fetchImpl: Fetch, keys: SlackKeys, fields: Record<str
   return (await res.json().catch(() => ({}))) as Record<string, unknown>;
 }
 
-const wrongKeys = (error: unknown) => error === "invalid_client_id" || error === "bad_client_secret" || error === "invalid_client";
-
 /**
- * Checks a Slack app's keys before they are saved: a made-up code is swapped at Slack. Slack says
- * the code is wrong when the keys are right, and that the client is unknown when they are not.
+ * Slack names wrong keys only when a real code comes with them: with a made-up one it says the
+ * code is wrong whatever the keys, so keys cannot be checked before they are saved. A wrong Client
+ * ID or Secret shows on the first Connect Slack instead, in plain words.
  */
-export async function checkSlackKeys(keys: SlackKeys, redirect: string, fetchImpl: Fetch = fetch): Promise<void> {
-  let body: Record<string, unknown>;
-  try {
-    body = await oauthAccess(fetchImpl, keys, { code: "command-center-key-check", redirect_uri: redirect });
-  } catch {
-    throw new SlackSaid("Slack could not be reached to check the keys. Try again in a minute.");
-  }
-  if (wrongKeys(body.error)) throw new SlackSaid("Slack does not know these keys. Copy the Client ID and Client Secret again from the app's Basic Information page.");
-}
+const wrongKeys = (error: unknown) => error === "invalid_client_id" || error === "bad_client_secret" || error === "invalid_client";
 
 /** Where to send the person to connect, and the cookie that remembers this login until Slack sends them back. */
 export async function startSlackLogin(db: Db, ownerId: string, site: string, secure: boolean, now = Date.now()): Promise<{ url: string; cookie: string }> {

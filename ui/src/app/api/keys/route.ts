@@ -2,7 +2,6 @@ import { keysProblem, retireKeys, saveKeys, tidyKeys, type KeyProvider } from "@
 import { checkAiKey } from "@/server/ai";
 import { ready } from "@/server/boot";
 import { checkGoogleKeys } from "@/server/google";
-import { checkSlackKeys } from "@/server/slack-login";
 import { failed, fromDashboard, refused, signedInAs, signInFirst, siteOf } from "@/server/http";
 import { loadState } from "@/server/repo";
 
@@ -39,7 +38,7 @@ export async function POST(request: Request) {
     // Checked with the service first where it can be: wrong keys are never saved.
     if (provider === "google") await checkGoogleKeys(keys as Parameters<typeof checkGoogleKeys>[0], `${siteOf(request)}/api/google/callback`);
     if (provider === "anthropic") await checkAiKey(keys as Parameters<typeof checkAiKey>[0]);
-    if (provider === "slack") await checkSlackKeys(keys as Parameters<typeof checkSlackKeys>[0], `${siteOf(request)}/api/slack/callback`);
+    // Slack cannot check its keys without a real login: a wrong one shows on the first Connect Slack.
     await saveKeys(db, owner, provider, keys, Date.now());
     return Response.json({ state: await loadState(db, owner) });
   } catch (error) {

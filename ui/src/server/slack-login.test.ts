@@ -5,7 +5,7 @@ import type { Db } from "./db";
 import { applyAction, loadState, OWNER_ID } from "./repo";
 import { unseal } from "./secrets";
 import { createSession, SESSION_COOKIE } from "./session";
-import { checkSlackKeys, slackCallback, slackLoginRedirect } from "./slack-login";
+import { slackCallback, slackLoginRedirect } from "./slack-login";
 import type { Fetch } from "./slack";
 import { signInAs } from "./team";
 import { reset, seed, testDb } from "./testing";
@@ -137,11 +137,8 @@ describe("Connect Slack", () => {
 });
 
 describe("the team's Slack app keys", () => {
-  it("are checked with Slack before they are saved", async () => {
-    const right = slackSays(() => ({ ok: false, error: "invalid_code" }));
-    await expect(checkSlackKeys(TEAM_APP, `${SITE}/api/slack/callback`, right.fetchImpl)).resolves.toBeUndefined();
-    const wrong = slackSays(() => ({ ok: false, error: "invalid_client_id" }));
-    await expect(checkSlackKeys(TEAM_APP, `${SITE}/api/slack/callback`, wrong.fetchImpl)).rejects.toThrow("Slack does not know these keys");
+  it("must look like a Slack app's keys before they are saved", async () => {
+    expect(keysProblem("slack", TEAM_APP)).toBeNull();
     expect(keysProblem("slack", { clientId: "abc", clientSecret: TEAM_APP.clientSecret })).toMatch(/digits, a dot, digits/);
     expect(keysProblem("slack", { clientId: TEAM_APP.clientId, clientSecret: "short" })).toMatch(/32 letters and digits/);
   });
