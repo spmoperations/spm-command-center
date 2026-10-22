@@ -38,7 +38,7 @@ const ExternalLink = ({ href, children }: { href: string; children: React.ReactN
 function SlackSteps() {
   return (
     <ol className="steps">
-      <Step title="Create the Slack app" help="Pick the SPM workspace, click Next, then Create. The app is only a key holder. It is not a bot, and your replies are sent from your own account.">
+      <Step title="Create the Slack app" help="Pick the Social Profit Media Clients workspace, click Next, then Create. The app is only a key holder. It is not a bot, and your replies are sent from your own account.">
         <ExternalLink href={SLACK_CREATE_APP_URL}>Create the Slack app</ExternalLink>
       </Step>
       <Step title="Install it" help="On the app's page, open OAuth & Permissions, click Install to Workspace, then Allow.">
@@ -66,10 +66,10 @@ function SlackSteps() {
 function FathomSteps() {
   return (
     <ol className="steps">
-      <Step title="Create an API key in Fathom" help="Open Fathom's settings at the part called API Access, create a new key and name it Command Center.">
+      <Step title="Create an API key in Fathom" help="In Fathom's Settings, under API Access: click Add, then Generate API Key, name it Command Center, and copy the key straight away: Fathom shows it only once.">
         <ExternalLink href={FATHOM_API_ACCESS_URL}>Open Fathom: API Access</ExternalLink>
       </Step>
-      <Step title="Paste the key" help="The key shows calls you recorded and calls shared with you.">
+      <Step title="Paste the key" help="The key sees what you can see in Fathom: your own calls and the ones shared with you.">
         <SecretField provider="fathom" label="Fathom API key" placeholder="Fathom API key" check={checkFathomKey} />
       </Step>
     </ol>
@@ -223,7 +223,7 @@ function GoogleSteps() {
       <Step title="Google's app keys" help="Done: the team's keys are in place on this site, so there is nothing to set up in Google Cloud." />
       <Step
         title="Connect your Google account"
-        help="Google opens its own page: pick your account and click Allow, with every box ticked. The Command Center reads your inbox and your calendar. It sends an email, or adds, changes or answers an event, only when you do it here. It never deletes an email."
+        help="Google opens its own page: pick your socialprofitmedia.co account and click Allow, with every box ticked. The Command Center reads your inbox and your calendar. It sends an email, or adds, changes or answers an event, only when you do it here. It never deletes an email."
       >
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <a className="btn primary extlink" href="/api/google/start">
@@ -351,7 +351,7 @@ function ConnectOutcome({ service }: { service: "google" | "slack" }) {
 function SlackOneClick() {
   return (
     <ol className="steps">
-      <Step title="Connect Slack" help="Slack opens its own page: check it says the SPM workspace at the top right, and click Allow. Your messages are read, and your replies sent, as you.">
+      <Step title="Connect Slack" help="Slack opens its own page: check it shows the Social Profit Media Clients workspace at the top right, and click Allow. Your messages are read, and your replies sent, as you.">
         <div className="gs-row">
           <a className="btn primary" href="/api/slack/start">
             Connect Slack

@@ -23,7 +23,8 @@ function ProjectCheck() {
   return (
     <div className="gs-check">
       <p>
-        <strong>First, look at the top of the page:</strong> the project must say <strong>{PROJECT}</strong>. If it shows another name, or &quot;Select a project&quot;, click it and pick <strong>{PROJECT}</strong> in the list.
+        <strong>First, look at the top of the page:</strong> the project must say <strong>{PROJECT}</strong>. If it shows another name, or &quot;Select a project&quot;, click it and pick{" "}
+        <strong>{PROJECT}</strong> in the list.
       </p>
     </div>
   );
@@ -46,7 +47,16 @@ export default function GoogleSetupPage() {
           </Link>
           <h2>Setting up Google</h2>
           <div className="muted" style={{ fontSize: 14, maxWidth: "70ch" }}>
-            So your emails and calendar show in the Command Center, and you can answer emails and add events from here. It takes two steps: <strong>Step 1</strong> in Google Cloud, once, about 10 minutes. Then <strong>Step 2</strong>, connecting your account, one click.
+            So your emails and calendar show in the Command Center, and you can answer emails and add events from here.{" "}
+            {keysIn ? (
+              <>
+                Your team has set the Google side up already, so it is <strong>one step</strong>: connect your account.
+              </>
+            ) : (
+              <>
+                It takes two steps: <strong>Step 1</strong> in Google Cloud, once, about 10 minutes. Then <strong>Step 2</strong>, connecting your account, one click.
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -58,30 +68,42 @@ export default function GoogleSetupPage() {
             <h3>Set up Google Cloud, and save the two keys</h3>
           </div>
           {keysIn ? (
-            <p className="st-help">Keys are in place for you: your own, or the team&apos;s. Go on to Step 2.</p>
+            <p className="st-help">Done for you: the team&apos;s keys are in place. Go on to Step 2.</p>
           ) : (
             <>
               <p className="st-help">
-                Do this on a computer, signed in to Google with your <strong>SPM Google account</strong>: the one your socialprofitmedia.co email uses. If you use more than one Google account in this browser, check the picture at the top right of Google Cloud is the SPM one. Each button below opens the right page.
+                Do this on a computer, signed in to Google with your <strong>SPM Google account</strong>: the one your socialprofitmedia.co email uses. If you use more than one Google account in this
+                browser, check the picture at the top right of Google Cloud is the SPM one. Each button below opens the right page.
               </p>
               <ol className="gs-parts">
                 <Part n="1" title="Make a project">
                   <p>
-                    Open the page, type the name, and click <strong>Create</strong>. If it is your first time in Google Cloud, it first asks for your country and to agree to its terms: do that, then carry on.
+                    Open the page, type the name, and click <strong>Create</strong>. If it is your first time in Google Cloud, it first asks for your country and to agree to its terms: do that, then
+                    carry on.
                   </p>
                   <p>
-                    Google takes a few seconds. A notice then appears at the top right: click <strong>Select project</strong> in it. Now the top of the page should say <strong>{PROJECT}</strong>. If it doesn&apos;t, click the project name there and pick it.
+                    Google takes a few seconds. A notice then appears at the top right: click <strong>Select project</strong> in it. Now the top of the page should say <strong>{PROJECT}</strong>. If
+                    it doesn&apos;t, click the project name there and pick it.
                   </p>
                   <Open href="https://console.cloud.google.com/projectcreate">Open New project</Open>
                   <Sketch
                     url="console.cloud.google.com/projectcreate"
                     caption="Project name: SPM Command Center. Leave the rest as it is, then click Create."
-                    parts={[{ t: "title", text: "New Project" }, { t: "field", label: "Project name", value: "SPM Command Center", hi: true }, { t: "field", label: "Organization", value: "socialprofitmedia.co" }, { t: "buttons", items: [{ label: "Create", primary: true, hi: true }, { label: "Cancel" }] }]}
+                    parts={[
+                      { t: "title", text: "New Project" },
+                      { t: "field", label: "Project name", value: "SPM Command Center", hi: true },
+                      { t: "field", label: "Organization", value: "socialprofitmedia.co" },
+                      { t: "buttons", items: [{ label: "Create", primary: true, hi: true }, { label: "Cancel" }] },
+                    ]}
                   />
                   <Sketch
                     url="console.cloud.google.com"
                     caption="When the project is made: Select project in the notice, then check the name at the top."
-                    parts={[{ t: "topbar", project: PROJECT, hi: true }, { t: "text", text: "Create Project: SPM Command Center" }, { t: "buttons", items: [{ label: "Select project", hi: true }] }]}
+                    parts={[
+                      { t: "topbar", project: PROJECT, hi: true },
+                      { t: "text", text: "Create Project: SPM Command Center" },
+                      { t: "buttons", items: [{ label: "Select project", hi: true }] },
+                    ]}
                   />
                 </Part>
                 <Part n="2" title="Turn on Gmail and Calendar">
@@ -94,7 +116,12 @@ export default function GoogleSetupPage() {
                   <Sketch
                     url="console.cloud.google.com/apis/library/gmail.googleapis.com"
                     caption="Click Enable. Then the same on the Google Calendar API page."
-                    parts={[{ t: "topbar", project: PROJECT, hi: true }, { t: "title", text: "Gmail API" }, { t: "text", text: "Google Enterprise API · View and manage Gmail data" }, { t: "buttons", items: [{ label: "Enable", primary: true, hi: true }, { label: "Try this API" }] }]}
+                    parts={[
+                      { t: "topbar", project: PROJECT, hi: true },
+                      { t: "title", text: "Gmail API" },
+                      { t: "text", text: "Google Enterprise API · View and manage Gmail data" },
+                      { t: "buttons", items: [{ label: "Enable", primary: true, hi: true }, { label: "Try this API" }] },
+                    ]}
                   />
                 </Part>
                 <Part n="3" title="Set up the sign-in screen">
@@ -132,13 +159,16 @@ export default function GoogleSetupPage() {
                     ]}
                   />
                   <p className="st-help">
-                    If the page shows <strong>OAuth Overview</strong> with a <strong>Create OAuth client</strong> button instead of Get started, this part is done already: go on to part 4. If Internal can&apos;t be picked, the account isn&apos;t part of SPM&apos;s Google Workspace: ask Shruti before going on.
+                    If the page shows <strong>OAuth Overview</strong> with a <strong>Create OAuth client</strong> button instead of Get started, this part is done already: go on to part 4. If Internal
+                    can&apos;t be picked, the account isn&apos;t part of SPM&apos;s Google Workspace: ask Shruti before going on.
                   </p>
                 </Part>
                 <Part n="4" title="Say what it may do">
                   <ProjectCheck />
                   <p>
-                    Open the page (it is <strong>Data Access</strong> in the menu on the left), and click <strong>Add or remove scopes</strong>. A panel opens on the right. At its bottom, under <strong>Manually add scopes</strong>, paste these three lines and click <strong>Add to table</strong>, then <strong>Update</strong>. Back on the page, click <strong>Save</strong> at the bottom.
+                    Open the page (it is <strong>Data Access</strong> in the menu on the left), and click <strong>Add or remove scopes</strong>. A panel opens on the right. At its bottom, under{" "}
+                    <strong>Manually add scopes</strong>, paste these three lines and click <strong>Add to table</strong>, then <strong>Update</strong>. Back on the page, click <strong>Save</strong>{" "}
+                    at the bottom.
                   </p>
                   <div className="gs-copy">
                     <pre>{SCOPES.join("\n")}</pre>
@@ -152,19 +182,36 @@ export default function GoogleSetupPage() {
                     ))}
                   </ul>
                   <p className="st-help">
-                    The dashboard only reads by itself. It sends an email, or adds, changes, deletes or answers an event, only when you do that in the dashboard. It never deletes an email. After <strong>Update</strong>, Google lists them in two groups on the page, <strong>gmail.readonly</strong> under restricted scopes and the other two under sensitive scopes. That is expected: click <strong>Save</strong>.
+                    The dashboard only reads by itself. It sends an email, or adds, changes, deletes or answers an event, only when you do that in the dashboard. It never deletes an email. After{" "}
+                    <strong>Update</strong>, Google lists them in two groups on the page, <strong>gmail.readonly</strong> under restricted scopes and the other two under sensitive scopes. That is
+                    expected: click <strong>Save</strong>.
                   </p>
                   <Open href="https://console.cloud.google.com/auth/scopes">Open Data access</Open>
                   <Sketch
                     url="console.cloud.google.com/auth/scopes"
                     caption="Paste the three lines under Manually add scopes, click Add to table and Update. Then Save at the bottom of the page."
-                    parts={[{ t: "topbar", project: PROJECT, hi: true }, { t: "title", text: "Update selected scopes" }, { t: "text", text: "Manually add scopes" }, { t: "code", lines: SCOPES, hi: true }, { t: "buttons", items: [{ label: "Add to table", hi: true }, { label: "Update", primary: true, hi: true }] }]}
+                    parts={[
+                      { t: "topbar", project: PROJECT, hi: true },
+                      { t: "title", text: "Update selected scopes" },
+                      { t: "text", text: "Manually add scopes" },
+                      { t: "code", lines: SCOPES, hi: true },
+                      {
+                        t: "buttons",
+                        items: [
+                          { label: "Add to table", hi: true },
+                          { label: "Update", primary: true, hi: true },
+                        ],
+                      },
+                    ]}
                   />
                 </Part>
                 <Part n="5" title="Make the client, with the return address">
                   <ProjectCheck />
                   <p>
-                    Open the page. (The <strong>Create OAuth client</strong> button on the OAuth Overview page opens the same form.) For <strong>Application type</strong> pick <strong>Web application</strong>: only then do the other boxes appear, including the one for the address. Name it <code>Command Center</code>. Leave <strong>Authorized JavaScript origins</strong> empty. Under <strong>Authorized redirect URIs</strong>, click <strong>+ Add URI</strong> and paste this address, exactly. Then click <strong>Create</strong>.
+                    Open the page. (The <strong>Create OAuth client</strong> button on the OAuth Overview page opens the same form.) For <strong>Application type</strong> pick{" "}
+                    <strong>Web application</strong>: only then do the other boxes appear, including the one for the address. Name it <code>Command Center</code>. Leave{" "}
+                    <strong>Authorized JavaScript origins</strong> empty. Under <strong>Authorized redirect URIs</strong>, click <strong>+ Add URI</strong> and paste this address, exactly. Then click{" "}
+                    <strong>Create</strong>.
                   </p>
                   <div className="gs-copy">
                     <pre>{callback}</pre>
@@ -203,7 +250,9 @@ export default function GoogleSetupPage() {
                 </Part>
                 <Part n="7" title="Save them in the Command Center">
                   <p>
-                    On the <Link href="/connections#google">Connections page, in the Google card</Link>, paste the <strong>Client ID</strong> and the <strong>Client secret</strong> and click <strong>Save the keys</strong>. They are checked with Google, then stored encrypted, and everyone on the team connects with them. That&apos;s the end of Step 1: Step 2 turns on here by itself.
+                    On the <Link href="/connections#google">Connections page, in the Google card</Link>, paste the <strong>Client ID</strong> and the <strong>Client secret</strong> and click{" "}
+                    <strong>Save the keys</strong>. They are checked with Google, then stored encrypted, and everyone on the team connects with them. That&apos;s the end of Step 1: Step 2 turns on
+                    here by itself.
                   </p>
                 </Part>
               </ol>
@@ -221,7 +270,8 @@ export default function GoogleSetupPage() {
           ) : (
             <>
               <p className="st-help">
-                Click the button, pick your SPM account, leave <strong>every box ticked</strong> and click <strong>Allow</strong>. You come back here with it connected. For another of your accounts, do the same again.
+                Click the button, pick your <strong>socialprofitmedia.co</strong> account (Google lets only SPM&apos;s own accounts in), leave <strong>every box ticked</strong> and click{" "}
+                <strong>Allow</strong>. You come back here with it connected. For another of your accounts, do the same again.
               </p>
               {accounts.length > 0 && (
                 <p className="st-help">
@@ -266,10 +316,12 @@ export default function GoogleSetupPage() {
             and turn on <strong>Trust internal, domain-owned apps</strong>.
           </li>
           <li>
-            <strong>&quot;redirect_uri_mismatch&quot;:</strong> the address in part 5 is missing or different. Open the client under Clients and check it reads exactly <code>{callback}</code>. Google also says a new or changed client can take a few minutes to work: if it was made just now, wait five minutes and try again.
+            <strong>&quot;redirect_uri_mismatch&quot;:</strong> the address in part 5 is missing or different. Open the client under Clients and check it reads exactly <code>{callback}</code>. Google
+            also says a new or changed client can take a few minutes to work: if it was made just now, wait five minutes and try again.
           </li>
           <li>
-            <strong>Always open the dashboard at the same address</strong> (<code>{callback.replace("/api/google/callback", "")}</code>) when you connect: Google only sends you back to the address in part 5.
+            <strong>Always open the dashboard at the same address</strong> (<code>{callback.replace("/api/google/callback", "")}</code>) when you connect: Google only sends you back to the address in
+            part 5.
           </li>
           <li>
             <strong>Something else:</strong> send Shruti a screenshot in #spm-development.

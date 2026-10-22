@@ -85,7 +85,7 @@ export async function finishSlackLogin(db: Db, ownerId: string, answer: URLSearc
   if (body.ok !== true) {
     if (wrongKeys(body.error)) throw new SlackSaid("Slack did not accept the app's keys. The owner can check the Client ID and Client Secret.");
     if (body.error === "bad_redirect_uri") throw new SlackSaid(`Slack does not know this address. In the Slack app, under OAuth & Permissions, Redirect URLs, add ${pending.redirect}`);
-    if (body.error === "invalid_team_for_non_distributed_app") throw new SlackSaid("That Slack app belongs to another workspace. Pick the SPM workspace on Slack's page.");
+    if (body.error === "invalid_team_for_non_distributed_app") throw new SlackSaid("That Slack app belongs to another workspace. Pick the Social Profit Media Clients workspace at the top right of Slack's page.");
     throw new SlackSaid(`Slack did not connect (${String(body.error ?? "no answer")}). Click Connect Slack again.`);
   }
   const user = (body.authed_user ?? {}) as { access_token?: unknown; token_type?: unknown };

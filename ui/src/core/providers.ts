@@ -29,7 +29,10 @@ export const SLACK_USER_SCOPES = [
   "files:read",
 ];
 
-/** The Slack app Jeremy creates in SPM's workspace. User scopes only: there is no bot. */
+/** The workspace the team is on, as Slack names it on its pages. */
+export const SLACK_WORKSPACE = "Social Profit Media Clients";
+
+/** The Slack app made in that workspace. User scopes only: there is no bot. */
 export const SLACK_MANIFEST = `display_information:
   name: SPM Command Center
   description: Reads Slack for the SPM Command Center dashboard and sends replies as the person who connects it.

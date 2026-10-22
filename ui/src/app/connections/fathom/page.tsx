@@ -47,18 +47,18 @@ export default function FathomSetupPage() {
               </Part>
               <Part n="2" title="Make the key and copy it">
                 <p>
-                  Click the button to add a new API key, name it <code>Command Center</code>, and create it. Fathom then shows the key: click <strong>Copy</strong> straight away, as it may not show it
-                  again.
+                  Under <strong>API Access</strong>, click <strong>Add</strong>, then <strong>Generate API Key</strong>. Name it <code>Command Center</code> and create it. Fathom then shows the key: copy it straight
+                  away, as Fathom shows it only once.
                 </p>
                 <Sketch
                   url="fathom.video › Settings › API Access"
-                  caption="Add an API key, name it Command Center, create it."
+                  caption="API Access: Add, then Generate API Key, named Command Center."
                   parts={[
                     { t: "topbar", brand: "Fathom" },
-                    { t: "menu", items: ["General", "Recording", "Integrations", "API Access"], picked: 3 },
                     { t: "title", text: "API Access" },
-                    { t: "field", label: "Key name", value: "Command Center", hi: true },
-                    { t: "buttons", items: [{ label: "Create key", primary: true, hi: true }] },
+                    { t: "buttons", items: [{ label: "Add +", hi: true }] },
+                    { t: "field", label: "Name", value: "Command Center", hi: true },
+                    { t: "buttons", items: [{ label: "Generate API Key", primary: true, hi: true }] },
                   ]}
                 />
                 <Sketch
@@ -97,7 +97,7 @@ export default function FathomSetupPage() {
         <h3>Good to know</h3>
         <ul>
           <li>
-            <strong>Which calls come in:</strong> the calls you recorded with Fathom, and the calls someone shared with you in Fathom. A call recorded by someone else shows up once they share it with you.
+            <strong>Which calls come in:</strong> whatever you can see in Fathom: the calls you recorded, and the calls shared with you. A call recorded by someone else shows up once they share it with you.
           </li>
           <li>
             <strong>&quot;Fathom did not accept that key&quot;:</strong> copy it again, the whole of it, or make a new one.

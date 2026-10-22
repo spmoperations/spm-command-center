@@ -3,13 +3,13 @@
 import Link from "next/link";
 import { GuidePart as Part, Open, Sketch } from "@/components/Guide";
 import { SecretField } from "@/components/SecretField";
-import { checkSlackToken, SLACK_CREATE_APP_URL, SLACK_USER_SCOPES } from "@/core/providers";
+import { checkSlackToken, SLACK_CREATE_APP_URL, SLACK_USER_SCOPES, SLACK_WORKSPACE } from "@/core/providers";
 import { useApp } from "@/store/store";
 
 // The guide for connecting Slack, for anyone on the team. When the team has one Slack app set up
 // (its keys saved by the owner), it is one click: Connect Slack, then Allow on Slack's page, and
 // the person gets a token of their own. Otherwise, or if they would rather, each person makes a
-// small Slack app of their own in the SPM workspace (it only holds the key; it is not a bot) and
+// small Slack app of their own in the team's workspace (it only holds the key; it is not a bot) and
 // pastes its token here.
 
 export default function SlackSetupPage() {
@@ -27,8 +27,16 @@ export default function SlackSetupPage() {
           </Link>
           <h2>Connecting Slack</h2>
           <div className="muted" style={{ fontSize: 14, maxWidth: "70ch" }}>
-            So your Slack messages show in your inbox, and you can answer them from here. It takes about 5 minutes, once: <strong>Step 1</strong> makes a small Slack app that holds your key,{" "}
-            <strong>Step 2</strong> pastes the key here. Your replies are sent from your own Slack account, as you.
+            So your Slack messages show in your inbox, and you can answer them from here. Your replies are sent from your own Slack account, as you.{" "}
+            {oneClick ? (
+              <>
+                The team has one Slack app already, so it is <strong>one click</strong>: Connect Slack, then Allow.
+              </>
+            ) : (
+              <>
+                It takes about 5 minutes, once: <strong>Step 1</strong> makes a small Slack app that holds your key, <strong>Step 2</strong> pastes the key here.
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -47,8 +55,8 @@ export default function SlackSetupPage() {
             ) : (
               <>
                 <p className="st-help">
-                  The team has one Slack app, so there is nothing to make. Click the button: Slack opens its own page. Check it says <strong>SPM</strong> at the top right (if not, switch workspace
-                  there), then click <strong>Allow</strong>. You come back here connected, with a token of your own: your replies are sent as you.
+                  The team has one Slack app, so there is nothing to make. Click the button: Slack opens its own page. Check it shows <strong>{SLACK_WORKSPACE}</strong> at the top right (if not,
+                  switch workspace there), then click <strong>Allow</strong>. You come back here connected, with a token of your own: your replies are sent as you.
                 </p>
                 <div className="gs-row">
                   <a className="btn primary" href="/api/slack/start">
@@ -57,10 +65,10 @@ export default function SlackSetupPage() {
                 </div>
                 <Sketch
                   url="slack.com/oauth"
-                  caption="Slack's own page: check the workspace is SPM, then Allow."
+                  caption={`Slack's own page: check the workspace is ${SLACK_WORKSPACE}, then Allow.`}
                   parts={[
-                    { t: "topbar", brand: "Slack", project: "SPM" },
-                    { t: "title", text: "SPM Command Center is requesting permission to access the SPM Slack workspace" },
+                    { t: "topbar", brand: "Slack", project: SLACK_WORKSPACE },
+                    { t: "title", text: `The team's Slack app is requesting permission to access the ${SLACK_WORKSPACE} Slack workspace` },
                     { t: "text", text: "View messages and other content · Send messages on your behalf · View people in the workspace" },
                     { t: "buttons", items: [{ label: "Cancel" }, { label: "Allow", primary: true, hi: true }] },
                   ]}
@@ -90,22 +98,22 @@ export default function SlackSetupPage() {
               ) : (
                 <>
                   <p className="st-help">
-                    Do this on a computer, signed in to Slack in your browser with your <strong>SPM</strong> account. The button below opens Slack with everything filled in already.
+                    Do this on a computer, signed in to Slack in your browser, in the <strong>{SLACK_WORKSPACE}</strong> workspace. The button below opens Slack with everything filled in already.
                   </p>
                   <ol className="gs-parts">
                     <Part n="1" title="Create the app">
                       <p>
-                        Open the page. Slack asks which workspace: pick <strong>SPM</strong> and click <strong>Next</strong>. It then shows the app&apos;s settings, filled in: click{" "}
+                        Open the page. Slack asks which workspace: pick <strong>{SLACK_WORKSPACE}</strong> and click <strong>Next</strong>. It then shows the app&apos;s settings, filled in: click{" "}
                         <strong>Next</strong>, then <strong>Create</strong>.
                       </p>
                       <Open href={SLACK_CREATE_APP_URL}>Open Slack: create the app</Open>
                       <Sketch
                         url="api.slack.com/apps"
-                        caption="Pick the SPM workspace, then Next."
+                        caption={`Pick the ${SLACK_WORKSPACE} workspace, then Next.`}
                         parts={[
                           { t: "topbar", brand: "Slack API" },
                           { t: "title", text: "Create an app from a manifest" },
-                          { t: "field", label: "Pick a workspace to develop your app in", value: "SPM ▾", hi: true },
+                          { t: "field", label: "Pick a workspace to develop your app in", value: `${SLACK_WORKSPACE} ▾`, hi: true },
                           { t: "buttons", items: [{ label: "Cancel" }, { label: "Next", primary: true, hi: true }] },
                         ]}
                       />
@@ -120,30 +128,30 @@ export default function SlackSetupPage() {
                         ]}
                       />
                     </Part>
-                    <Part n="2" title="Install it in SPM">
+                    <Part n="2" title="Install it in the workspace">
                       <p>
                         You land on the app&apos;s page. In the menu on the left, open <strong>OAuth &amp; Permissions</strong>. Under <strong>OAuth Tokens</strong>, click{" "}
-                        <strong>Install to SPM</strong>, then <strong>Allow</strong> on the next page.
+                        <strong>Install to {SLACK_WORKSPACE}</strong>, then <strong>Allow</strong> on the next page.
                       </p>
                       <p>
                         If the button says <strong>Request to Install</strong> instead, the workspace wants an admin to approve apps: click it, ask Jeremy to approve it in Slack, then come back here
-                        and click <strong>Install to SPM</strong>.
+                        and click <strong>Install to {SLACK_WORKSPACE}</strong>.
                       </p>
                       <Sketch
                         url="api.slack.com/apps › OAuth & Permissions"
-                        caption="OAuth & Permissions, then Install to SPM."
+                        caption={`OAuth & Permissions, then Install to ${SLACK_WORKSPACE}.`}
                         parts={[
                           { t: "topbar", brand: "Slack API" },
                           { t: "menu", items: ["Basic Information", "OAuth & Permissions", "Event Subscriptions", "App Home"], picked: 1 },
                           { t: "title", text: "OAuth Tokens" },
-                          { t: "buttons", items: [{ label: "Install to SPM", primary: true, hi: true }] },
+                          { t: "buttons", items: [{ label: `Install to ${SLACK_WORKSPACE}`, primary: true, hi: true }] },
                         ]}
                       />
                       <Sketch
                         url="slack.com/oauth"
                         caption="Slack asks if the app may act as you: Allow."
                         parts={[
-                          { t: "title", text: "SPM Command Center is requesting permission to access the SPM Slack workspace" },
+                          { t: "title", text: `SPM Command Center is requesting permission to access the ${SLACK_WORKSPACE} Slack workspace` },
                           { t: "text", text: "View messages and other content · Send messages on your behalf · View people in the workspace" },
                           { t: "buttons", items: [{ label: "Cancel" }, { label: "Allow", primary: true, hi: true }] },
                         ]}
