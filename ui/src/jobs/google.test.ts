@@ -885,37 +885,62 @@ describe("email tags", () => {
     // A person sending an invoice is waiting on both.
     expect(tags({ direct: true, subject: "Invoice #88 for October" })).toEqual(["respond", "payment"]);
     // A company's address or a payment service is not a person waiting.
-    expect(tags({ direct: true, senders: ["billing@tools.example.com"], subject: "Your plan" })).toEqual(["payment"]);
+    expect(tags({ direct: true, senders: ["billing@tools.example.com"], subject: "Your plan renews on Nov 1" })).toEqual(["payment"]);
     expect(tags({ direct: true, senders: ["support@example.com"] })).toEqual([]);
-    expect(tags({ direct: true, senders: ["dana@example.com", "receipts@stripe.com"] })).toEqual(["payment"]);
+    expect(tags({ direct: true, senders: ["dana@example.com", "receipts@stripe.com"] })).toEqual([]);
   });
 
-  it("tags payments by the subject, by a payment service sending it, or by money in a payment email", () => {
-    expect(tags({ subject: "Your receipt from Harbor Realty" })).toEqual(["payment"]);
+  it("leaves calendar invitations and their answers out of Must respond: they are answered in the Calendar", () => {
+    for (const subject of ["Invitation: Weekly sync @ Thu 23 Oct 2026", "Updated invitation: Weekly sync", "Accepted: Weekly sync", "Declined: Call", "Cancelled event: Call"]) {
+      expect(tags({ direct: true, subject })).toEqual([]);
+    }
+    // A person's email that only mentions an invitation still waits on an answer.
+    expect(tags({ direct: true, subject: "About the invitation list" })).toEqual(["respond"]);
+  });
+
+  it("tags Payments only for money to act on: something to pay, a failed payment, a renewal or an ending", () => {
     expect(tags({ subject: "Invoice #1042 is due" })).toEqual(["payment"]);
-    expect(tags({ senders: ["receipts@stripe.com"], bulk: true })).toEqual(["payment"]);
-    expect(tags({ senders: ["service@intl.paypal.com"] })).toEqual(["payment"]);
-    expect(tags({ subject: "Quick update", text: "The payment of $1,200.00 went through this morning." })).toEqual(["payment"]);
-    // Money alone, or the word alone in the text, is not enough.
+    expect(tags({ subject: "New invoice from Harbor Realty" })).toEqual(["payment"]);
+    expect(tags({ subject: "Reminder: payment due Friday" })).toEqual(["payment"]);
+    expect(tags({ subject: "Your payment failed", senders: ["billing@tools.example.com"], bulk: true })).toEqual(["payment"]);
+    expect(tags({ subject: "Action needed", text: "Your card was declined. Update your payment method to keep your plan." })).toEqual(["payment"]);
+    expect(tags({ subject: "Your subscription renews on Nov 1" })).toEqual(["payment"]);
+    expect(tags({ subject: "Your free trial ends in 3 days" })).toEqual(["payment"]);
+    expect(tags({ subject: "Your plan expires tomorrow" })).toEqual(["payment"]);
+    expect(tags({ subject: "Heads up", text: "Your plan will automatically renew next week." })).toEqual(["payment"]);
+  });
+
+  it("leaves out of Payments what is already paid, coming back or coming in, and sales", () => {
+    expect(tags({ subject: "Your receipt from Harbor Realty" })).toEqual([]);
+    expect(tags({ subject: "Receipt for invoice #1042" })).toEqual([]);
+    expect(tags({ subject: "Payment received, thank you", senders: ["receipts@stripe.com"], bulk: true })).toEqual([]);
+    expect(tags({ subject: "Quick update", text: "The payment of $1,200.00 went through this morning." })).toEqual([]);
+    expect(tags({ subject: "Your refund is on its way" })).toEqual([]);
+    // A receipt that says when the plan renews next: paid already.
+    expect(tags({ subject: "Thanks for being a member", text: "Here is your receipt for $29. Your plan renews on Dec 1.", senders: ["billing@riverside.fm"], bulk: true })).toEqual([]);
+    // A failed payment is still one, even beside the word receipt.
+    expect(tags({ subject: "Action needed", text: "We could not charge your card for this month's receipt.", senders: ["billing@riverside.fm"], bulk: true })).toEqual(["payment"]);
+    expect(tags({ subject: "You have a new payout", senders: ["no-reply@whop.com"], bulk: true })).toEqual([]);
+    // A sale in Gmail's Promotions tab, even one that talks of an ending.
+    expect(tags({ subject: "Your trial ends soon: 50% off today", tab: "promotions", bulk: true })).toEqual(["newsletter"]);
+    // A newsletter's body that mentions renewing is still a newsletter.
+    expect(tags({ subject: "This week in growth", text: "Our pricing will automatically renew for members.", bulk: true })).toEqual(["newsletter"]);
+    // Money alone, or a payment word alone in the text, is not enough.
     expect(tags({ subject: "Quick update", text: "Tickets are $20 at the door." })).toEqual([]);
     expect(tags({ subject: "Quick update", text: "We talked about payment terms." })).toEqual([]);
   });
 
-  it("counts subscriptions as payments, but not a newsletter for saying where to unsubscribe", () => {
-    expect(tags({ subject: "Your subscription renews on Nov 1" })).toEqual(["payment"]);
-    expect(tags({ subject: "Your free trial ends in 3 days" })).toEqual(["payment"]);
-    expect(tags({ subject: "Heads up", text: "Your plan will automatically renew next week." })).toEqual(["payment"]);
-    const footer = "This week's top stories.\nYou are receiving this because you subscribed. Manage your subscription or unsubscribe here.";
-    expect(tags({ subject: "The weekly digest", text: footer, bulk: true })).toEqual(["newsletter"]);
-    // A renewal receipt is a payment, not a newsletter.
-    expect(tags({ subject: "Receipt for your subscription renewal", bulk: true })).toEqual(["payment"]);
-  });
-
-  it("tags newsletters: mailings, and Gmail's Promotions, Social and Forums tabs", () => {
+  it("tags newsletters: mailings to read, not tools telling of something that happened, nor receipts", () => {
     expect(tags({ bulk: true })).toEqual(["newsletter"]);
     expect(tags({ tab: "promotions" })).toEqual(["newsletter"]);
     expect(tags({ tab: "updates" })).toEqual([]);
     expect(tags({})).toEqual([]);
+    const footer = "This week's top stories.\nYou are receiving this because you subscribed. Manage your subscription or unsubscribe here.";
+    expect(tags({ subject: "The weekly digest", text: footer, bulk: true })).toEqual(["newsletter"]);
+    for (const sender of ["notifications@calendly.com", "feedback@slack.com", "no-reply@accounts.google.com", "noreply@mail.hellosign.com", "no-reply@zoom.us"]) {
+      expect(tags({ senders: [sender], bulk: true, tab: "updates" })).toEqual([]);
+    }
+    expect(tags({ subject: "Your receipt from Riverside", bulk: true })).toEqual([]);
   });
 
   it("shows the tags on each email row", async () => {
@@ -930,7 +955,8 @@ describe("email tags", () => {
     const rows = (await loadState(db, OWNER_ID, new Date(NOW))).inbox.filter((c) => c.source === "gmail");
     const tagsOf = (t: string) => rows.find((c) => c.id.endsWith(`:${t}`))!.tags;
     // Dana wrote to Jeremy and waits for an answer. Copied in on t5, he is not the one asked.
-    expect(["t1", "t2", "t3", "t4", "t5"].map(tagsOf)).toEqual([["payment"], ["payment"], ["newsletter"], ["respond"], []]);
+    // The Stripe receipt is paid already: in no view. The trial ending is money to act on.
+    expect(["t1", "t2", "t3", "t4", "t5"].map(tagsOf)).toEqual([[], ["payment"], ["newsletter"], ["respond"], []]);
     // Answered, it no longer waits on him.
     await applyAction(db, "replyEmail", [rows.find((c) => c.id.endsWith(":t4"))!.id, "Friday works", false, false], OWNER_ID, new Date(NOW + MINUTE));
     expect((await loadState(db, OWNER_ID, new Date(NOW + MINUTE))).inbox.find((c) => c.id.endsWith(":t4"))!.tags).toEqual([]);

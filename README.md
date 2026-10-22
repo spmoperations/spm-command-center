@@ -59,6 +59,7 @@ These are built or planned but left off the screens for now. Each has one line t
 | What | Why it is off | To bring it back |
 | --- | --- | --- |
 | The Personal side | Asked to be parked for now | `PERSONAL_SIDE = true` in `ui/src/core/config.ts` |
+| Suggested tasks (on the Tasks tab and Today) | Not wanted for now. They are still found and kept | `SUGGESTED_TASKS = true` in `ui/src/core/config.ts` |
 | Departments (the tab, and the department on tasks and team members) | Nothing yet says which department a task or person belongs to | `DEPARTMENTS = true` in `ui/src/core/config.ts` |
 | Targets (the tab, and the month's pace on Today) | The numbers are the prototype's examples; nothing fills them in yet | `TARGETS = true` in `ui/src/core/config.ts` |
 | Finding tasks with AI | The Claude account has no credit, so every run fails | `live: true` on `task-suggest` in `ui/src/core/jobs.ts` |

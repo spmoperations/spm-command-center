@@ -48,6 +48,12 @@ export const TARGETS: boolean = false;
  */
 export const PERSONAL_SIDE: boolean = false;
 
+/**
+ * Suggested tasks (action items from calls, and requests waiting for a reply) are switched off
+ * on the screens for now. They are still found and kept, so changing this to `true` shows them.
+ */
+export const SUGGESTED_TASKS: boolean = false;
+
 export const SOURCE_NAME: Record<Source, string> = { slack: "Slack", telegram: "Telegram", gmail: "Gmail" };
 /** The tab a conversation is read on: emails have a tab of their own. */
 export const conversationPage = (id: string) => (id.startsWith("gmail:") ? "/emails" : "/inbox");

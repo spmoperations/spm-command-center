@@ -6,7 +6,7 @@ import { DelegateForm } from "@/components/DelegateForm";
 import { MessageText } from "@/components/MessageText";
 import { SuggestionRow } from "@/components/SuggestionRow";
 import { DueText, PriPill, PrioritySelect, SourceLink, VisuallyHidden } from "@/components/bits";
-import { conversationPage, DEPARTMENTS, DEPTS, MODE_NAME, MODES, PERSONAL_SIDE, PRIORITY_RANK, SOURCE_NAME } from "@/core/config";
+import { conversationPage, DEPARTMENTS, DEPTS, MODE_NAME, MODES, PERSONAL_SIDE, PRIORITY_RANK, SOURCE_NAME, SUGGESTED_TASKS } from "@/core/config";
 import { clockWithZone, dueLabel, parseDay, stamp } from "@/core/dates";
 import { canAssign, canAssignInChat, isMine } from "@/core/delegation";
 import type { Mode, Priority, Task } from "@/core/types";
@@ -30,14 +30,7 @@ function Description({ t }: { t: Task }) {
       <label className="label" htmlFor={`desc-${t.id}`}>
         Description
       </label>
-      <textarea
-        className="f td-desc"
-        id={`desc-${t.id}`}
-        value={text}
-        rows={3}
-        placeholder="Context, links, what done looks like. Optional."
-        onChange={(e) => setText(e.target.value)}
-      />
+      <textarea className="f td-desc" id={`desc-${t.id}`} value={text} rows={3} placeholder="Context, links, what done looks like. Optional." onChange={(e) => setText(e.target.value)} />
       {changed && (
         <div className="td-links">
           <button className="btn primary" onClick={() => setTaskDescription(t.id, text)}>
@@ -340,16 +333,12 @@ export default function TasksPage() {
       // A task that is done leaves the table. It is still there under "Done".
       (status === "all" ? !t.done : status === "open" ? isMine(t) : status === "delegated" ? !t.done && !!t.delegatedTo : t.done),
   );
-  const suggestions = state.suggestions
-    .filter((g) => g.status === "new" && g.mode === ui.mode)
-    .sort((a, b) => PRIORITY_RANK[a.pri] - PRIORITY_RANK[b.pri] || a.due.localeCompare(b.due));
+  const suggestions = state.suggestions.filter((g) => g.status === "new" && g.mode === ui.mode).sort((a, b) => PRIORITY_RANK[a.pri] - PRIORITY_RANK[b.pri] || a.due.localeCompare(b.due));
   const mine = inMode.filter(isMine);
   const delegatedCount = inMode.filter((t) => !t.done && t.delegatedTo).length;
   const row = (t: Task) => <TaskRow key={t.id} t={t} app={app} plain={personal} delegating={delegating === t.id} onDelegating={setDelegating} />;
   // One list: highest priority first, then soonest due. What is done goes to the bottom, newest first.
-  const sorted = [...list].sort(
-    (a, b) => Number(a.done) - Number(b.done) || (a.done ? (b.doneAt ?? 0) - (a.doneAt ?? 0) : PRIORITY_RANK[a.pri] - PRIORITY_RANK[b.pri] || a.due.localeCompare(b.due)),
-  );
+  const sorted = [...list].sort((a, b) => Number(a.done) - Number(b.done) || (a.done ? (b.doneAt ?? 0) - (a.doneAt ?? 0) : PRIORITY_RANK[a.pri] - PRIORITY_RANK[b.pri] || a.due.localeCompare(b.due)));
 
   return (
     <section className="view">
@@ -368,7 +357,7 @@ export default function TasksPage() {
 
       {inMode.length === 0 && (
         <div className="panel hint-panel">
-          <strong>No {personal ? "personal " : ""}tasks yet.</strong> Type one in the box above{suggestions.length > 0 ? ", or click Add task on a suggestion below." : "."}
+          <strong>No {personal ? "personal " : ""}tasks yet.</strong> Type one in the box above{SUGGESTED_TASKS && suggestions.length > 0 ? ", or click Add task on a suggestion below." : "."}
         </div>
       )}
 
@@ -429,36 +418,39 @@ export default function TasksPage() {
         </div>
       )}
 
-      {/* Below the tasks: what was found for the owner and is not a task until they say so. */}
-      <div className="panel sg-panel" id="suggested">
-        <div className="panel-head">
-          <h3>
-            Suggested tasks{" "}
-            {suggestions.length > 0 && (
-              <span className="muted num" style={{ fontWeight: 400, fontSize: 14 }}>
-                {suggestions.length}
-              </span>
-            )}
-          </h3>
-        </div>
-        <p className="sg-intro">
-          Found for you: your action items from recorded calls, and messages that ask you for something and are still waiting for a reply. Change the priority or due date if you like. Nothing becomes a task until you click Add task.
-        </p>
-        {suggestions.length > 0 ? (
-          <div className="sg-list">
-            {(allSuggestions ? suggestions : suggestions.slice(0, SUGGESTIONS_SHOWN)).map((g) => (
-              <SuggestionRow key={g.id} g={g} app={app} />
-            ))}
-            {suggestions.length > SUGGESTIONS_SHOWN && (
-              <button className="sg-more" aria-expanded={allSuggestions} onClick={() => setAllSuggestions(!allSuggestions)}>
-                {allSuggestions ? "Show fewer" : `Show all ${suggestions.length} suggestions`}
-              </button>
-            )}
+      {/* Below the tasks: what was found for the owner and is not a task until they say so. Switched off for now (SUGGESTED_TASKS). */}
+      {SUGGESTED_TASKS && (
+        <div className="panel sg-panel" id="suggested">
+          <div className="panel-head">
+            <h3>
+              Suggested tasks{" "}
+              {suggestions.length > 0 && (
+                <span className="muted num" style={{ fontWeight: 400, fontSize: 14 }}>
+                  {suggestions.length}
+                </span>
+              )}
+            </h3>
           </div>
-        ) : (
-          <p className="empty">No suggestions right now.</p>
-        )}
-      </div>
+          <p className="sg-intro">
+            Found for you: your action items from recorded calls, and messages that ask you for something and are still waiting for a reply. Change the priority or due date if you like. Nothing
+            becomes a task until you click Add task.
+          </p>
+          {suggestions.length > 0 ? (
+            <div className="sg-list">
+              {(allSuggestions ? suggestions : suggestions.slice(0, SUGGESTIONS_SHOWN)).map((g) => (
+                <SuggestionRow key={g.id} g={g} app={app} />
+              ))}
+              {suggestions.length > SUGGESTIONS_SHOWN && (
+                <button className="sg-more" aria-expanded={allSuggestions} onClick={() => setAllSuggestions(!allSuggestions)}>
+                  {allSuggestions ? "Show fewer" : `Show all ${suggestions.length} suggestions`}
+                </button>
+              )}
+            </div>
+          ) : (
+            <p className="empty">No suggestions right now.</p>
+          )}
+        </div>
+      )}
     </section>
   );
 }

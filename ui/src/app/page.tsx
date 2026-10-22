@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { Avatar } from "@/components/MessageText";
 import { DueText, Pill, PriPill } from "@/components/bits";
-import { conversationPage, DEPARTMENTS, PRIORITY_RANK, TARGETS } from "@/core/config";
+import { conversationPage, DEPARTMENTS, PRIORITY_RANK, SUGGESTED_TASKS, TARGETS } from "@/core/config";
 import { ago, daysInMonth, isoDay, parseDay, weekStart } from "@/core/dates";
 import { plainPreview } from "@/core/message-format";
 import { isMine } from "@/core/delegation";
@@ -277,7 +277,7 @@ export default function TodayPage() {
           ) : (
             <p className="empty">Nothing due today.</p>
           )}
-          {suggested > 0 && (
+          {SUGGESTED_TASKS && suggested > 0 && (
             <div className="sg-foot">
               {suggested} suggested {suggested === 1 ? "task" : "tasks"} from your inbox and calls. <Link href="/tasks#suggested">Review</Link>
             </div>

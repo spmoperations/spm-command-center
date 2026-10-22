@@ -15,15 +15,36 @@ const PAYMENT_SENDERS = [
   "paddle.com", "gumroad.com", "lemonsqueezy.com", "chase.com", "wellsfargo.com", "bankofamerica.com", "americanexpress.com", "venmo.com",
 ];
 
-/** Words that make an email about money. */
-const PAYMENT_WORDS = /\b(invoices?|invoiced|receipts?|payments?|paid|payouts?|refund(s|ed)?|charged|billing|billed|transactions?|remittance|wire transfer|bank transfer|direct deposit|amount due|balance due|past due|overdue|purchase|order confirmation|your order)\b/i;
-/** An amount of money: "$1,200.00", "€50", "300 USD". */
-const MONEY = /(?:[$€£₹]\s?\d[\d,]*(?:\.\d{1,2})?|\b\d[\d,]*(?:\.\d{1,2})?\s?(?:USD|EUR|GBP|INR|AUD|CAD)\b)/;
+/**
+ * Tools whose emails tell of something that happened (a booking, a mention, a sign-in, a document
+ * to sign), not mailings to read: they are neither newsletters nor people writing.
+ */
+const NOTIFIERS = [
+  "calendly.com", "slack.com", "zoom.us", "google.com", "hellosign.com", "dropboxsign.com", "docusign.net", "docusign.com", "notion.so", "github.com",
+  "atlassian.net", "atlassian.com", "linear.app", "figma.com", "loom.com", "fathom.video", "airtable.com", "clickup.com", "asana.com", "trello.com",
+  "vercel.com", "supabase.com", "supabase.io", "zapier.com", "typeform.com", "canva.com", "dropbox.com", "microsoft.com", "apple.com", "skool.com",
+  ...PAYMENT_SENDERS,
+];
 
-/** Words that make an email's subject about a subscription, which is money too: a renewal, a trial ending. */
-const SUBSCRIPTION_SUBJECT = /\b(subscriptions?|renewal|renews?|renewed|auto-?renew(al)?|trial|membership|your plan|plan (change|upgrade|downgrade)|cancel(l?ed|lation)?)\b/i;
-/** The same in the text, said more fully, so a passing word does not count. */
-const SUBSCRIPTION_TEXT = /\b(your (subscription|membership|plan)|subscription (will|has|is|renews|renewal|payment)|auto-?renew(s|al|ed)?|free trial|trial (ends|will end|expires|period|is ending)|renews on|will (automatically )?renew|billing cycle|recurring (payment|charge|billing))\b/i;
+// Payments are money to act on: something to pay, a payment that failed, or a subscription or trial
+// about to renew or end. Money already paid, coming back, or coming in is not.
+/** Something to pay. */
+const DUE = /\b(amount due|balance due|payment due|past due|overdue|due (date|on|by|today|tomorrow|now|soon)|pay now|please pay|payment request(ed)?|requested (a )?payment|awaiting (your )?payment|outstanding (balance|invoice|amount|payment)|unpaid|payment reminder|invoice reminder)\b/i;
+/** A bill: in a subject, without the words of a receipt, it is one to pay. */
+const BILL = /\b(invoices?|bills?)\b/i;
+/** A payment that did not go through, or a card that will stop working. */
+const FAILED = /\b(payment (failed|declined|unsuccessful|issue|problem)|failed payment|(card|payment method) (declined|was declined|expir\w*|has expired|is expiring)|unable to (charge|process)|could ?n[o']t (charge|process)|update your (payment|billing|card))\b/i;
+/** A subscription about to renew, and charge again. */
+const RENEWAL = /\b(renews? (on|in|soon|tomorrow|next)|will (automatically )?renew|auto-?renew\w*|upcoming (renewal|charge|payment)|renewal (notice|reminder|date))\b/i;
+/** A subscription, plan or trial about to end, or ended. */
+const ENDING = /\b(trial (ends|ending|expires|expiring|will end|is ending|is over|has ended)|(subscription|plan|membership) (expires|expiring|will expire|has expired|ends|ending|will end|has ended|is ending|(has been |was )?cancel+ed))\b/i;
+/** Money already paid, coming back or coming in: a receipt, a confirmation, a refund, a payout. */
+const SETTLED = /\b(receipts?|payment (received|confirmation|confirmed|successful|complete[d]?)|thanks? (you )?for your (payment|order|purchase)|has been (paid|processed|charged)|paid in full|order confirm\w*|your order|refund\w*|payouts?|you('ve| have) been paid|money (received|sent))\b/i;
+
+const moneyToAct = (v: string) => DUE.test(v) || FAILED.test(v) || RENEWAL.test(v) || ENDING.test(v);
+
+/** A calendar invitation and its answers: answered in the Calendar, not by email. */
+const INVITATION = /^(invitation|updated invitation|invitation updated|accepted|declined|tentatively accepted|cancel+ed event|event cancel+ed|new event|event rescheduled)\b/i;
 
 /** The lines at the foot of a mailing, which every newsletter has and which say nothing about the email. */
 const FOOTER = /(unsubscribe|email preferences|manage (your )?(subscription|preferences|email)|you('re| are) receiving|you received this|update your preferences|view (it |this )?in (your )?browser|privacy policy|no longer wish)/i;
@@ -45,10 +66,10 @@ export interface TaggedEmail {
 }
 
 /** Addresses a company sends from, not a person: a tool's receipts, a help desk, a team inbox. */
-const ROLE_SENDER = /^(billing|receipts?|invoices?|invoicing|payments?|accounts?|accounting|orders?|support|help|helpdesk|care|info|news|newsletters?|updates?|notify|alerts?|security|team|hello|hi|admin|system|automated|mailer|marketing|service|feedback|calendar-notification|drive-shares-dm-noreply|comments-noreply)([+.-][^@]*)?@/i;
+const ROLE_SENDER = /^(billing|receipts?|invoices?|invoicing|payments?|accounts?|accounting|orders?|support|help|helpdesk|care|info|news|newsletters?|updates?|notify|notifications?|alerts?|security|team|hello|hi|admin|system|automated|mailer|marketing|service|feedback|calendar-notification|drive-shares-dm-noreply|comments-noreply|no-?reply|do-?not-?reply)([+.-][^@]*)?@/i;
 
 const domainOf = (email: string) => email.toLowerCase().split("@")[1] ?? "";
-const fromPaymentService = (senders: string[]) => senders.some((s) => PAYMENT_SENDERS.some((d) => domainOf(s) === d || domainOf(s).endsWith(`.${d}`)));
+const fromAny = (senders: string[], domains: string[]) => senders.some((s) => domains.some((d) => domainOf(s) === d || domainOf(s).endsWith(`.${d}`)));
 
 /** The tags of one email thread. */
 export function emailTags(e: TaggedEmail): EmailTag[] {
@@ -57,13 +78,25 @@ export function emailTags(e: TaggedEmail): EmailTag[] {
     .split("\n")
     .filter((line) => !FOOTER.test(line))
     .join("\n");
+  const latest = e.senders.at(-1) ?? "";
+  const invitation = INVITATION.test(e.subject.trim());
+  const settled = SETTLED.test(e.subject);
   const tags: EmailTag[] = [];
   // A person wrote to the owner and is waiting: the owner has not answered since. A company's
-  // address or a payment service sending to them is not a person asking.
-  const latest = e.senders.at(-1) ?? "";
-  if (e.direct && !e.answered && !ROLE_SENDER.test(latest) && !fromPaymentService([latest])) tags.push("respond");
-  if (fromPaymentService(e.senders) || PAYMENT_WORDS.test(e.subject) || (PAYMENT_WORDS.test(text) && MONEY.test(text)) || SUBSCRIPTION_SUBJECT.test(e.subject) || SUBSCRIPTION_TEXT.test(text)) tags.push("payment");
-  // A receipt or a renewal sent by a tool is about money first, not a newsletter.
-  if (!tags.length && (e.bulk || e.tab === "promotions" || e.tab === "social" || e.tab === "forums")) tags.push("newsletter");
+  // address, a payment service, or a calendar invitation is not a person asking.
+  if (e.direct && !e.answered && !invitation && !ROLE_SENDER.test(latest) && !fromAny([latest], PAYMENT_SENDERS)) tags.push("respond");
+  // Money to act on, by the subject; or by the text, when it is not a mailing or comes from a
+  // billing address or a payment service. Never a sale in Gmail's Promotions tab.
+  const billingSender = ROLE_SENDER.test(latest) || fromAny(e.senders, PAYMENT_SENDERS);
+  const bySubject = moneyToAct(e.subject) || (BILL.test(e.subject) && !settled);
+  // A receipt that says when the plan renews next is still a receipt: only something to pay, or a
+  // payment that failed, counts in a text that is otherwise about money already paid.
+  const byText = !settled && (DUE.test(text) || FAILED.test(text) || ((RENEWAL.test(text) || ENDING.test(text)) && !SETTLED.test(text))) && (!e.bulk || billingSender);
+  if (e.tab !== "promotions" && (bySubject || byText)) tags.push("payment");
+  // A mailing to read: not a tool telling of something that happened, and not a receipt.
+  const mailing = e.bulk || e.tab === "promotions" || e.tab === "social" || e.tab === "forums";
+  // A receipt from a billing address is something that happened, not something to read.
+  const receipt = settled || (SETTLED.test(text) && billingSender);
+  if (!tags.length && mailing && !receipt && !invitation && !fromAny(e.senders, NOTIFIERS)) tags.push("newsletter");
   return tags;
 }

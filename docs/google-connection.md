@@ -134,11 +134,16 @@ emails** beside the account. Both also end the login on Google's side.
 
   The Emails tab has a view for each tag (plain rules in `ui/src/core/email-tags.ts`, no AI):
   - **Must respond:** a person wrote to the account (in Primary, not a mailing, the account
-    in To) and the latest email is theirs. A company address such as billing@ or support@,
-    or a payment service, does not count. Answering clears it.
-  - **Payments:** invoices, receipts, payouts and renewals: by the sending service, the
-    subject, or payment words with an amount in the text.
-  - **Newsletters:** mailings and Gmail's Promotions, Social and Forums tabs, unless about money.
+    in To) and the latest email is theirs. A company address such as billing@, support@ or
+    no-reply@, a payment service, or a calendar invitation or its answer does not count.
+    Answering clears it.
+  - **Payments:** money still to pay: an invoice or bill, a payment due or overdue, a failed
+    payment or card, or a subscription that renews or ends. Receipts, refunds, payouts and
+    "payment received" emails are already settled and stay out, and so does Gmail's
+    Promotions tab.
+  - **Newsletters:** mailings and Gmail's Promotions, Social and Forums tabs. Notices from
+    the tools the team uses (Calendly, Slack, Zoom, Google and the like), receipts and
+    invitations are not newsletters.
   - **Other:** none of these. An email can have two tags, such as a person sending an invoice.
 
   Tick several rows (or the box above the list for all of them) to mark them done, put them
