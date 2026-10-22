@@ -314,15 +314,15 @@ function GoogleNotReady({ why, noKeys }: { why: string | null; noKeys: boolean }
 }
 
 /**
- * After Google sends the person back: says how it went, once, then takes it out of the address
- * so a reload does not say it again.
+ * After Google or Slack sends the person back: says how it went, once, then takes it out of the
+ * address so a reload does not say it again.
  */
-function GoogleOutcome() {
+function ConnectOutcome({ service }: { service: "google" | "slack" }) {
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
-    if (!query.has("google") && !query.has("google_error")) return;
-    const failed = query.get("google_error");
+    if (!query.has(service) && !query.has(`${service}_error`)) return;
+    const failed = query.get(`${service}_error`);
     window.history.replaceState(null, "", window.location.pathname + window.location.hash);
     if (failed) {
       // Shown once the page has drawn, not while it is drawing.
@@ -330,17 +330,70 @@ function GoogleOutcome() {
       return;
     }
     const account = query.get("account");
-    toast(`Google connected${account ? `: ${account}` : ""}. Reading the inbox and calendar now.`);
+    toast(service === "google" ? `Google connected${account ? `: ${account}` : ""}. Reading the inbox and calendar now.` : "Slack connected. Reading your messages now.");
     void refresh();
     // The first read runs on the server after the way back; look again once it has had time.
     const later = setTimeout(() => void refresh(), 15_000);
     return () => clearTimeout(later);
-  }, []);
+  }, [service]);
   if (!error) return null;
   return (
     <div className="panel" role="alert" style={{ borderColor: "var(--bad)", background: "var(--bad-soft)", padding: "12px 16px", marginBottom: 14 }}>
-      <strong>Google was not connected.</strong> {error}
+      <strong>{service === "google" ? "Google" : "Slack"} was not connected.</strong> {error}
     </div>
+  );
+}
+
+/**
+ * Slack, when the team has one Slack app set up: one click, and Slack's own page to allow it. The
+ * person gets a token of their own. Pasting a token stays as the other way.
+ */
+function SlackOneClick() {
+  return (
+    <ol className="steps">
+      <Step title="Connect Slack" help="Slack opens its own page: check it says the SPM workspace at the top right, and click Allow. Your messages are read, and your replies sent, as you.">
+        <div className="gs-row">
+          <a className="btn primary" href="/api/slack/start">
+            Connect Slack
+          </a>
+        </div>
+      </Step>
+      <li className="steps-plain">
+        <details className="fallback">
+          <summary>Or paste a token instead</summary>
+          <SlackSteps />
+        </details>
+      </li>
+    </ol>
+  );
+}
+
+/**
+ * For the owner: one Slack app for the whole team, so everyone connects with one click instead
+ * of making an app of their own. Its Client ID and Client Secret are kept encrypted.
+ */
+function TeamSlackApp({ app }: { app: App }) {
+  const keys = app.state.appKeys.slack;
+  const site = typeof window === "undefined" ? "" : window.location.origin;
+  if (keys.using === "own") return <div className="st-help">Team members connect Slack with one click, through your Slack app ({keys.label}).</div>;
+  return (
+    <details className="fallback">
+      <summary>Let the team connect Slack with one click</summary>
+      <div className="st-help">
+        Instead of each person making a Slack app, everyone can use yours. On{" "}
+        <ExternalLink href="https://api.slack.com/apps">api.slack.com/apps</ExternalLink>, open your app (SPM Command Center):
+      </div>
+      <ol className="gs-list st-help">
+        <li>
+          <strong>OAuth &amp; Permissions</strong>, under <strong>Redirect URLs</strong>: click Add New Redirect URL, paste <code>{site}/api/slack/callback</code>, click Add, then <strong>Save URLs</strong>.
+        </li>
+        <li>
+          <strong>Basic Information</strong>, under App Credentials: copy the <strong>Client ID</strong>, and the <strong>Client Secret</strong> (click Show). Paste both here. Don&apos;t click Regenerate.
+        </li>
+      </ol>
+      <div className="st-help">Your own Slack connection is not touched, and nobody else sees your messages.</div>
+      <KeyForm app="slack" />
+    </details>
   );
 }
 
@@ -452,16 +505,17 @@ function ProviderCard({ provider, app }: { provider: Provider; app: App }) {
                   New to this? <Link href={`/connections/${provider}`}>Open the step-by-step guide, with pictures</Link>.
                 </p>
               )}
-              <Steps local={app.state.localData} />
+              {provider === "slack" && app.state.appKeys.slack.using ? <SlackOneClick /> : <Steps local={app.state.localData} />}
             </>
           )
         )}
+        {provider === "slack" && app.state.me.isOwner && <TeamSlackApp app={app} />}
       </div>
     </div>
   );
 }
 
-type KeyApp = "google" | "telegram";
+type KeyApp = "google" | "telegram" | "slack";
 
 /** The fields of each app's keys. */
 const KEY_FIELDS: Record<KeyApp, { key: string; label: string; placeholder: string; secret: boolean }[]> = {
@@ -472,6 +526,10 @@ const KEY_FIELDS: Record<KeyApp, { key: string; label: string; placeholder: stri
   telegram: [
     { key: "apiId", label: "api_id", placeholder: "Digits only", secret: false },
     { key: "apiHash", label: "api_hash", placeholder: "32 letters and digits", secret: true },
+  ],
+  slack: [
+    { key: "clientId", label: "Client ID", placeholder: "1234567890.1234567890", secret: false },
+    { key: "clientSecret", label: "Client Secret", placeholder: "32 letters and digits", secret: true },
   ],
 };
 
@@ -541,7 +599,8 @@ export default function ConnectionsPage() {
           </div>
         </div>
       </div>
-      <GoogleOutcome />
+      <ConnectOutcome service="google" />
+      <ConnectOutcome service="slack" />
       <div className="prov-list">
         {PROVIDERS.map((p) => (
           <ProviderCard key={p} provider={p} app={app} />

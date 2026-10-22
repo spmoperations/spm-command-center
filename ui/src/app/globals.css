@@ -368,6 +368,10 @@ table.set tr:last-child td { border-bottom: 0; }
 .key-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-top: 10px; align-items: end; width: 100%; }
 .key-field { display: grid; gap: 4px; }
 .guide-link { margin: 0 0 12px; }
+.steps > li.steps-plain { display: block; }
+.steps > li.steps-plain::before { display: none; }
+.prov-body > .fallback { margin-top: 12px; }
+.fallback ol.gs-list { padding-left: 22px; margin: 4px 0; }
 .key-field .f { font-family: var(--f-mono); }
 .key-form-acts { display: flex; gap: 12px; align-items: center; }
 .key-form .field-error { grid-column: 1 / -1; }

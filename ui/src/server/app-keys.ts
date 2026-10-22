@@ -3,6 +3,7 @@
 //   Google     the OAuth client's Client ID and secret, from Google Cloud
 //   Telegram   the api_id and api_hash, from my.telegram.org
 //   Anthropic  the AI key, for finding tasks in messages
+//   Slack      one Slack app's Client ID and Client Secret, so each person connects with one click
 //
 // They are kept in the database, sealed like every login, for each person: anyone can save keys
 // of their own and connect their accounts with them. Someone who has none uses the owner's, the
@@ -18,11 +19,12 @@ import type { Db } from "./db";
 import { OWNER_ID } from "./owner";
 import { seal, unseal } from "./secrets";
 
-export type KeyProvider = "google" | "telegram" | "anthropic";
+export type KeyProvider = "google" | "telegram" | "anthropic" | "slack";
 export interface GoogleKeys { clientId: string; clientSecret: string }
 export interface TelegramKeys { apiId: number; apiHash: string }
 export interface AnthropicKeys { apiKey: string; workspaceId?: string }
-export type KeysOf<P extends KeyProvider> = P extends "google" ? GoogleKeys : P extends "telegram" ? TelegramKeys : AnthropicKeys;
+export interface SlackKeys { clientId: string; clientSecret: string }
+export type KeysOf<P extends KeyProvider> = P extends "google" ? GoogleKeys : P extends "telegram" ? TelegramKeys : P extends "slack" ? SlackKeys : AnthropicKeys;
 
 /** Keys as a connection uses them. `id` is the saved row they are; null for the server's settings. */
 export interface Keys<P extends KeyProvider> {
@@ -33,7 +35,7 @@ export interface Keys<P extends KeyProvider> {
   label: string;
 }
 
-const NAME: Record<KeyProvider, string> = { google: "Google", telegram: "Telegram", anthropic: "the AI" };
+const NAME: Record<KeyProvider, string> = { google: "Google", telegram: "Telegram", anthropic: "the AI", slack: "Slack" };
 
 /** A setting as it was meant: a value pasted with quotes or spaces around it still counts. */
 export const setting = (name: string) => (process.env[name] ?? "").trim().replace(/^["']+|["']+$/g, "").trim();
@@ -62,6 +64,16 @@ export function keysProblem<P extends KeyProvider>(provider: P, given: Record<st
     if (!/^[0-9a-f]{32}$/i.test(hash)) return `${field("apiHash")} does not look right. It is the App api_hash from my.telegram.org: 32 letters and digits.`;
     return null;
   }
+  if (provider === "slack") {
+    const id = clean(given.clientId);
+    const secret = clean(given.clientSecret);
+    if (!id && !secret) return `Slack's app keys are missing: ${field("clientId")} and ${field("clientSecret")}.`;
+    if (!id) return `${field("clientId")} is missing.`;
+    if (!secret) return `${field("clientSecret")} is missing.`;
+    if (!/^\d+\.\d+$/.test(id)) return `${field("clientId")} does not look right. It is on the Slack app's Basic Information page: digits, a dot, digits.`;
+    if (!/^[0-9a-f]{32}$/i.test(secret)) return `${field("clientSecret")} does not look right. It is on the Slack app's Basic Information page, under Show: 32 letters and digits.`;
+    return null;
+  }
   return clean(given.apiKey) ? null : `${field("apiKey")} is missing.`;
 }
 
@@ -69,6 +81,7 @@ export function keysProblem<P extends KeyProvider>(provider: P, given: Record<st
 export function tidyKeys<P extends KeyProvider>(provider: P, given: Record<string, unknown>): KeysOf<P> {
   if (provider === "google") return { clientId: clean(given.clientId), clientSecret: clean(given.clientSecret) } as KeysOf<P>;
   if (provider === "telegram") return { apiId: Number(clean(given.apiId)), apiHash: clean(given.apiHash).toLowerCase() } as KeysOf<P>;
+  if (provider === "slack") return { clientId: clean(given.clientId), clientSecret: clean(given.clientSecret).toLowerCase() } as KeysOf<P>;
   const workspaceId = clean(given.workspaceId);
   return { apiKey: clean(given.apiKey), ...(workspaceId ? { workspaceId } : {}) } as KeysOf<P>;
 }
@@ -80,6 +93,7 @@ export function keysLabel<P extends KeyProvider>(provider: P, keys: KeysOf<P>): 
     return `Client ID ${id.slice(0, 6)}…${id.replace(".apps.googleusercontent.com", "").slice(-4)}`;
   }
   if (provider === "telegram") return `api_id …${String((keys as TelegramKeys).apiId).slice(-3)}`;
+  if (provider === "slack") return `Client ID …${(keys as SlackKeys).clientId.slice(-4)}`;
   return `key …${(keys as AnthropicKeys).apiKey.slice(-4)}`;
 }
 
@@ -89,6 +103,7 @@ const SETTINGS: Record<KeyProvider, Record<string, string>> = {
   google: { clientId: "GOOGLE_CLIENT_ID", clientSecret: "GOOGLE_CLIENT_SECRET" },
   telegram: { apiId: "TELEGRAM_API_ID", apiHash: "TELEGRAM_API_HASH" },
   anthropic: { apiKey: "ANTHROPIC_API_KEY", workspaceId: "ANTHROPIC_WORKSPACE_ID" },
+  slack: { clientId: "SLACK_CLIENT_ID", clientSecret: "SLACK_CLIENT_SECRET" },
 };
 
 const fromSettings = (provider: KeyProvider): Record<string, string> => Object.fromEntries(Object.entries(SETTINGS[provider]).map(([k, name]) => [k, setting(name)]));
@@ -111,7 +126,7 @@ export const settingsProblem = (provider: KeyProvider) => keysProblem(provider, 
  * keys never reach the hosted database. Null when this server may use it.
  */
 export function hostedProblem(provider: KeyProvider): string | null {
-  if (provider === "anthropic" || !process.env.DATABASE_URL) return null;
+  if (provider === "anthropic" || provider === "slack" || !process.env.DATABASE_URL) return null;
   return setting(provider === "google" ? "GOOGLE_HOSTED" : "TELEGRAM_HOSTED").toLowerCase() === "true" ? null : offHere(provider);
 }
 
@@ -208,7 +223,7 @@ export async function adoptSettingsKeys(db: Db, now = Date.now()): Promise<strin
   // has none of these, and never copies its own keys there.
   const liveSite = Boolean(process.env.VERCEL) || setting("GOOGLE_HOSTED").toLowerCase() === "true" || setting("TELEGRAM_HOSTED").toLowerCase() === "true";
   if (process.env.DATABASE_URL && !liveSite) return notes;
-  for (const provider of ["google", "telegram", "anthropic"] as const) {
+  for (const provider of ["google", "telegram", "anthropic", "slack"] as const) {
     const keys = settingsKeys(provider);
     if (!keys || hostedProblem(provider)) continue;
     // In a transaction, so two servers starting together copy them once.

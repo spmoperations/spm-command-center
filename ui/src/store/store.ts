@@ -386,7 +386,7 @@ export const saveTargets = (values: Record<string, number>) => void act("saveTar
  * Saves this person's own app keys for Google, Telegram or the AI, after the server has checked
  * them, or with `keys` null stops using their own. Resolves to an error message, or null when done.
  */
-export async function saveAppKeys(provider: "google" | "telegram" | "anthropic", keys: Record<string, string> | null): Promise<string | null> {
+export async function saveAppKeys(provider: "google" | "telegram" | "anthropic" | "slack", keys: Record<string, string> | null): Promise<string | null> {
   try {
     const { state } = await request<{ state: AppState }>("/api/keys", keys ? { step: "save", provider, keys } : { step: "stop", provider });
     setState(state);

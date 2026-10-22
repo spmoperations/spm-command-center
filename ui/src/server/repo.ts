@@ -381,12 +381,13 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
   const allows = (what: keyof ReturnType<typeof googleCan>) => google.some((a) => googleCan(a.scopes)[what]);
   // Why this person cannot connect Telegram or Google now. A login already here keeps its own keys.
   const telegramIn = telegramHere && connections.some((c) => c.provider === "telegram");
-  const [telegramNow, googleNow, telegramKeys, googleKeys, aiKeys, ai] = await Promise.all([
+  const [telegramNow, googleNow, telegramKeys, googleKeys, aiKeys, slackKeys, ai] = await Promise.all([
     telegramIn ? Promise.resolve(null) : telegramBlocked(db, ownerId),
     google.length ? Promise.resolve(hostedProblem("google")) : googleBlocked(db, ownerId),
     keysOnScreen(db, ownerId, "telegram"),
     keysOnScreen(db, ownerId, "google"),
     keysOnScreen(db, ownerId, "anthropic"),
+    keysOnScreen(db, ownerId, "slack"),
     aiConfigured(db, ownerId),
   ]);
   const connection = (p: Provider) => {
@@ -442,7 +443,7 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     telegramBlocked: telegramNow,
     googleAvailable: googleNow === null,
     googleBlocked: googleNow,
-    appKeys: { google: googleKeys, telegram: telegramKeys, anthropic: aiKeys },
+    appKeys: { google: googleKeys, telegram: telegramKeys, anthropic: aiKeys, slack: slackKeys },
     googleAccounts: google.map((a) => ({ email: a.email, connectedAt: a.connectedAt, ...googleCan(a.scopes) })),
     googleAllows: { gmail: allows("gmail"), send: allows("send"), calendar: allows("calendar"), addEvents: allows("addEvents") },
     localData: !process.env.DATABASE_URL,

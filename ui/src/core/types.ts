@@ -424,5 +424,5 @@ export interface AppState {
    * The app keys a new Google or Telegram connection by this person uses: their own, the team's
    * (the owner's), or the server's settings; and their own, when they saved some. Never a secret.
    */
-  appKeys: Record<"google" | "telegram" | "anthropic", AppKeysOnScreen>;
+  appKeys: Record<"google" | "telegram" | "anthropic" | "slack", AppKeysOnScreen>;
 }

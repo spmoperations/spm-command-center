@@ -42,6 +42,7 @@ The owner can give someone on the team a Command Center of their own: **Settings
 - **New password** ends that person's sessions. **Turn off** stops their sign-in and their checks, and keeps their data. **Remove** deletes their login and everything of theirs.
 - Only the owner sees Team logins. The scheduled checks run for the owner first, then for each team member who can sign in (`ui/src/server/team.ts`).
 - Each service has a step-by-step guide with drawings of the screens, linked from its card on the Connections page: `/connections/slack`, `/connections/fathom`, `/connections/telegram` and `/connections/google`.
+- **Slack with one click.** The owner can let the whole team use one Slack app: in the Slack card, under "Let the team connect Slack with one click", add `https://<site>/api/slack/callback` to the app's Redirect URLs and paste its Client ID and Client Secret (kept as the team's app keys). Everyone then sees **Connect Slack**: Slack's own page, Allow, and each person gets a token of their own (`ui/src/server/slack-login.ts`). Slack only sends people back to https addresses, so this works on the live site, not on `http://127.0.0.1`. Pasting a token still works everywhere.
 
 ### App keys
 

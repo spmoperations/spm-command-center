@@ -2,6 +2,7 @@ import { keysProblem, retireKeys, saveKeys, tidyKeys, type KeyProvider } from "@
 import { checkAiKey } from "@/server/ai";
 import { ready } from "@/server/boot";
 import { checkGoogleKeys } from "@/server/google";
+import { checkSlackKeys } from "@/server/slack-login";
 import { failed, fromDashboard, refused, signedInAs, signInFirst, siteOf } from "@/server/http";
 import { loadState } from "@/server/repo";
 
@@ -10,7 +11,7 @@ export const maxDuration = 30;
 
 /** How each key is named on screen, for messages about it. */
 const FIELD: Record<string, string> = { clientId: "Client ID", clientSecret: "Client secret", apiId: "api_id", apiHash: "api_hash", apiKey: "API key" };
-const PROVIDERS: KeyProvider[] = ["google", "telegram", "anthropic"];
+const PROVIDERS: KeyProvider[] = ["google", "telegram", "anthropic", "slack"];
 
 /**
  * A person's own app keys: { step: "save", provider, keys } checks them and keeps them, sealed,
@@ -38,6 +39,7 @@ export async function POST(request: Request) {
     // Checked with the service first where it can be: wrong keys are never saved.
     if (provider === "google") await checkGoogleKeys(keys as Parameters<typeof checkGoogleKeys>[0], `${siteOf(request)}/api/google/callback`);
     if (provider === "anthropic") await checkAiKey(keys as Parameters<typeof checkAiKey>[0]);
+    if (provider === "slack") await checkSlackKeys(keys as Parameters<typeof checkSlackKeys>[0], `${siteOf(request)}/api/slack/callback`);
     await saveKeys(db, owner, provider, keys, Date.now());
     return Response.json({ state: await loadState(db, owner) });
   } catch (error) {
