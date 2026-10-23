@@ -224,7 +224,7 @@ export function NotifyChoice({
   const flip = (way: "slack" | "telegram", on: boolean) => onChange(on ? [...value.filter((w) => w !== way), way] : value.filter((w) => w !== way));
   return (
     <span className="tk-notify">
-      Tell {person.name.split(" ")[0]} on
+      Tell {person.name.split(" ")[0]}, from your own account, on
       {person.slack && (
         <label className="inline-check">
           <input type="checkbox" checked={value.includes("slack")} onChange={(e) => flip("slack", e.target.checked)} /> Slack

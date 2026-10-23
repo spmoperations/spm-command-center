@@ -9,6 +9,7 @@ import { isMine } from "@/core/delegation";
 import { PROVIDERS } from "@/core/providers";
 import { evalMetric } from "@/core/targets";
 import type { Mode } from "@/core/types";
+import { HelpButton } from "@/components/Help";
 import { reviewThisWeek } from "@/components/Tickets";
 import { PROFESSIONAL_ONLY, refresh, setMode, signOut, useApp, useMode, useToast, type App } from "@/store/store";
 
@@ -170,6 +171,7 @@ function Chrome({ children }: { children: React.ReactNode }) {
                   Updated {app.now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
                 </button>
               )}
+              <HelpButton pathname={pathname} />
               <ThemeToggle />
               {/* A team member sees whose Command Center this is. The owner's header stays as it was. */}
               {app && !app.state.me.isOwner && <span className="signed-in">{app.state.owner.name}</span>}
