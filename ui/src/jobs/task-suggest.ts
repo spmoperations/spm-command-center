@@ -6,6 +6,7 @@ import { addDays, isoDay } from "@/core/dates";
 import { redactSecrets } from "@/core/slack-text";
 import { aiKeys, describeAiError, findTasks, type FoundTask, type TaskSearch } from "@/server/ai";
 import { uid } from "@/server/repo";
+import { TEAM } from "@/server/tickets";
 import type { Source } from "@/core/types";
 import type { JobContext, JobResult } from "./runner";
 
@@ -50,7 +51,8 @@ export async function taskSuggest({ db, ownerId, now }: JobContext, finder: Find
   const conversations = await db.query<{ id: string; source: string; ctx: string; from_name: string }>("select id, source, ctx, from_name from conversations where owner_id = $2 and id in (select jsonb_array_elements_text($1::jsonb))", [idList, ownerId]);
   const lines = await db.query<{ conversation_id: string; sender_name: string; me: boolean; body: string }>("select conversation_id, sender_name, me, body from messages where owner_id = $2 and conversation_id in (select jsonb_array_elements_text($1::jsonb)) order by at", [idList, ownerId]);
   const known = [
-    ...(await db.query<{ title: string }>("select title from tasks where owner_id = $1 and (not done or done_at > $2)", [ownerId, now - 7 * 86_400_000])),
+    // The team's open tickets, whoever's inbox they came from: none is suggested twice.
+    ...(await db.query<{ title: string }>("select title from tasks where owner_id = $1 and (not done or done_at > $2)", [TEAM, now - 7 * 86_400_000])),
     ...(await db.query<{ title: string }>("select title from suggestions where owner_id = $1 and created_at > $2", [ownerId, now - 14 * 86_400_000])),
   ].map((r) => r.title);
 

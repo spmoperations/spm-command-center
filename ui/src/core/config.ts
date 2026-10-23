@@ -1,4 +1,4 @@
-import type { Line, Mode, Priority, Provider, Source } from "./types";
+import type { Line, Mode, Priority, Provider, Source, TicketStatus } from "./types";
 
 /** Jeremy's five departments, as named in his prototype. */
 export const DEPTS = ["Client Sales", "SPM Sales", "SPM Marketing", "Operations", "Finances"] as const;
@@ -49,15 +49,23 @@ export const TARGETS: boolean = false;
 export const PERSONAL_SIDE: boolean = false;
 
 /**
- * Suggested tasks (action items from calls, and requests waiting for a reply) are switched off
- * on the screens for now. They are still found and kept, so changing this to `true` shows them.
+ * Suggested tasks (action items from calls, and requests waiting for a reply) are reviewed on
+ * the Review tab, by the whole team. This shows how many are waiting on Today; `false` hides it.
  */
-export const SUGGESTED_TASKS: boolean = false;
+export const SUGGESTED_TASKS: boolean = true;
 
 /** The most one picture added to a reply may weigh: what one request to the live site can carry, with room to spare. */
 export const MOST_PICTURE_BYTES = 4 * 1024 * 1024;
 /** The most pictures that go with one Slack message. */
 export const MOST_PICTURES = 10;
+
+/** Tickets on the board are numbered SPM-1, SPM-2 and so on. */
+export const TICKET_PREFIX = "SPM";
+export const TICKET_STATUSES: TicketStatus[] = ["open", "in_progress", "waiting", "done"];
+export const TICKET_STATUS_NAME: Record<TicketStatus, string> = { open: "Open", in_progress: "In progress", waiting: "Waiting", done: "Done" };
+/** Why a suggestion was turned down, as the review asks. */
+export const REJECT_REASONS = { not_task: "Not a task", duplicate: "Duplicate", already_done: "Already done", wrong_person: "Wrong person", chit_chat: "Chit-chat", other: "Other" } as const;
+export type RejectReason = keyof typeof REJECT_REASONS;
 
 export const SOURCE_NAME: Record<Source, string> = { slack: "Slack", telegram: "Telegram", gmail: "Gmail" };
 /** The tab a conversation is read on: emails have a tab of their own. */

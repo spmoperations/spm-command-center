@@ -1,5 +1,6 @@
 // Fathom job. Read-only: brings in recorded calls with their notes, transcript and action
-// items. Action items Fathom assigned to the owner become suggested tasks, with no AI of ours.
+// items. Every open action item becomes a suggestion for the team's review, with who Fathom
+// says it is for, and no AI of ours.
 import { addDays } from "@/core/dates";
 import type { ActionItem } from "@/core/types";
 import { listMeetings, type FathomMeeting } from "@/server/fathom";
@@ -64,11 +65,13 @@ export async function fathomPull({ db, ownerId, now, cursor }: JobContext, apiKe
       );
       calls++;
       for (const [k, item] of m.actionItems.entries()) {
-        if (!item.mine || item.done) continue;
+        if (item.done) continue;
+        const forWhom = item.mine ? null : item.who !== "Unassigned" ? item.who : null;
+        const why = item.mine ? `Fathom listed this as your action item on "${m.title}".` : forWhom ? `Fathom listed this for ${forWhom} on "${m.title}".` : `Fathom listed this on "${m.title}", for nobody in particular.`;
         suggested += await db.run(
-          `insert into suggestions (id, owner_id, title, dept, pri, due, why, src_type, src_id, dedupe_key, created_at)
-           values ($1, $2, $3, 'Operations', 'mid', $4, $5, 'meeting', $6, $7, $8) on conflict (owner_id, dedupe_key) do nothing`,
-          [uid("s"), ownerId, item.text.slice(0, 160), addDays(new Date(m.startedAt), DEFAULT_DUE_DAYS), `Fathom listed this as your action item on "${m.title}".`, id, `${id}:action:${k}`, now],
+          `insert into suggestions (id, owner_id, title, dept, pri, due, why, src_type, src_id, dedupe_key, created_at, for_name)
+           values ($1, $2, $3, 'Operations', 'mid', $4, $5, 'meeting', $6, $7, $8, $9) on conflict (owner_id, dedupe_key) do nothing`,
+          [uid("s"), ownerId, item.text.slice(0, 160), addDays(new Date(m.startedAt), DEFAULT_DUE_DAYS), why, id, `${id}:action:${k}`, now, forWhom],
         );
       }
       if (raw.created_at > newest) newest = raw.created_at;

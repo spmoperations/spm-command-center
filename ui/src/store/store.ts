@@ -9,7 +9,8 @@ import { isoDay, pad } from "@/core/dates";
 import { jobById } from "@/core/jobs";
 import { PROVIDER_NAME } from "@/core/providers";
 import type { AssignWhere } from "@/core/delegation";
-import type { AddedPicture, AppState, ConversationChange, JobId, Mode, Person, Priority, Provider, Rule, Suggestion, Task } from "@/core/types";
+import type { AddedPicture, AppState, ConversationChange, JobId, Mode, Person, Priority, Provider, Rule, Suggestion, Task, TicketInput } from "@/core/types";
+import type { RejectReason } from "@/core/config";
 
 export interface UiState {
   /** Which side of the dashboard is showing. Remembered in this browser. */
@@ -359,7 +360,20 @@ export const openTask = (id: string | null) => setUi({ openTask: id });
 
 export const addTask = (input: Pick<Task, "title" | "description" | "dept" | "project" | "pri" | "due" | "mode">) => void act("addTask", [input], "Task added");
 export const actionItemToTask = (meetingId: string, index: number) => void act("actionItemToTask", [meetingId, index], "Task added");
-export const toggleTask = (id: string, done: boolean) => void act("toggleTask", [id, done], done ? "Task done" : undefined, inTasks(id, { done, doneAt: done ? Date.now() : null }));
+export const toggleTask = (id: string, done: boolean) => void act("toggleTask", [id, done], done ? "Task done" : undefined, inTasks(id, { done, doneAt: done ? Date.now() : null, status: done ? "done" : "open" }));
+
+// The board, shared by the team. Each answers true once the change is saved.
+export const createTicket = (input: TicketInput) => act("createTicket", [input], "Ticket added");
+export const updateTicket = (id: string, patch: Partial<TicketInput>, said?: string) =>
+  act("updateTicket", [id, patch], said, inTasks(id, { ...(patch.status && { status: patch.status, done: patch.status === "done" }), ...(patch.title !== undefined && { title: patch.title }), ...(patch.due && { due: patch.due }) }));
+
+// The review, shared by the team.
+const outOfReview = (ids: string[]) => (s: AppState): AppState => ({ ...s, review: s.review.filter((g) => !ids.includes(g.id)) });
+export const acceptReview = (id: string, input?: Partial<TicketInput>) => act("acceptSuggestion", input ? [id, input] : [id], "Ticket made", outOfReview([id]));
+export const rejectReview = (id: string, reason: RejectReason) => act("rejectSuggestion", [id, reason], "Turned down", outOfReview([id]));
+export const mergeReview = (id: string, ticketId: string) => act("mergeSuggestion", [id, ticketId], "Merged into the ticket", outOfReview([id]));
+export const reviewMany = (ids: string[], decision: "accept" | RejectReason) =>
+  act("reviewMany", [ids, decision], decision === "accept" ? `${ids.length} ${ids.length === 1 ? "ticket" : "tickets"} made` : `${ids.length} turned down`, outOfReview(ids));
 export const setTaskPriority = (id: string, pri: Priority) => void act("setTaskPriority", [id, pri], undefined, inTasks(id, { pri }));
 export const setTaskDescription = (id: string, description: string) => void act("setTaskDescription", [id, description], "Description saved", inTasks(id, { description: description.trim() }));
 export const delegateTask = (id: string, personId: string, note: string, due: string, where: AssignWhere = "dm") => void act("delegateTask", [id, personId, note, due, where], delegatedIn(where));
@@ -424,6 +438,7 @@ export const addHandle = (personId: string, handle: string) => void act("addHand
 export const removeHandle = (personId: string, index: number) => void act("removeHandle", [personId, index]);
 export const addPerson = (input: Omit<Person, "id">) => void act("addPerson", [input], `Added ${input.name}`);
 export const removePerson = (personId: string) => void act("removePerson", [personId], "Removed");
+export const setPersonTelegram = (personId: string, telegramId: string) => void act("setPersonTelegram", [personId, telegramId], telegramId ? "Telegram linked" : "Telegram taken away");
 
 export type RuleKind = "labelRules" | "priorityRules";
 export const addRule = (kind: RuleKind, rule: Omit<Rule, "id">) => void act("addRule", [kind, rule], "Rule added");

@@ -8,7 +8,7 @@ import { clampInterval, defaultJobSettings, JOBS } from "@/core/jobs";
 import { requestSummary } from "@/core/requests";
 import { applyRules } from "@/core/rules";
 import type {
-  AddedPicture, AppState, Conversation, ConversationChange, FocusBoard, JobId, JobStatus, Meeting, MessagePicture, Metric, Mode, Person, Priority, Provider, Reaction, Rule, Source, Suggestion, Task, CalendarItem,
+  AddedPicture, AppState, Conversation, ConversationChange, FocusBoard, JobId, JobStatus, Meeting, MessagePicture, Metric, Mode, Person, Priority, Provider, Reaction, Rule, Source, Suggestion, CalendarItem,
 } from "@/core/types";
 import { aiConfigured } from "./ai";
 import { emailTags, type TaggedEmail } from "@/core/email-tags";
@@ -19,6 +19,7 @@ import { isUploadKey, telegramAvatarIds, type StoredPicture } from "./media";
 import { SLACK_FILES_SCOPE, SLACK_NEEDS_UPLOAD, SLACK_UPLOAD_SCOPE, type Fetch } from "./slack";
 import { hashPassword, MIN_PASSWORD, teamLogins } from "./team";
 import { telegramBlocked } from "./telegram";
+import { insertTicket, logEvent, reviewItems, sourceNote, TEAM, teamPeople, teamTickets, TICKET_ACTIONS } from "./tickets";
 import type { Db } from "./db";
 import { OWNER_ID } from "./owner";
 
@@ -101,12 +102,6 @@ function backFromTheApp(messages: MessageRow[]): Set<string> {
   }
   return shownOnce;
 }
-interface TaskRow {
-  id: string; title: string; description: string | null; mode: Mode; dept: string; project: string; pri: Priority; due: string; done: boolean; done_at: number | null;
-  src_type: "message" | "meeting" | null; src_id: string | null; delegable: boolean;
-  delegated_to: string | null; delegated_name: string | null; delegated_role: string | null; delegated_note: string | null; delegated_at: number | null;
-  created_at: number;
-}
 interface RuleRow { id: string; kind: "priority" | "label"; source: Rule["source"]; match_on: Rule["when"]; op: Rule["op"]; value: string; pri: Priority | null; line: Rule["line"] | null; mode: Mode | null }
 
 // How much of a conversation the screens get: the threads and single messages written in
@@ -116,13 +111,6 @@ const REPLIES_SHOWN = 40;
 const MESSAGES_SHOWN = 150;
 
 const toRule = (r: RuleRow): Rule => ({ id: r.id, source: r.source, when: r.match_on, op: r.op, value: r.value, pri: r.pri ?? undefined, line: r.line ?? undefined, mode: r.mode ?? undefined });
-
-const toTask = (t: TaskRow): Task => ({
-  id: t.id, title: t.title, description: t.description ?? "", mode: t.mode, dept: t.dept, project: t.project, pri: t.pri, due: t.due, done: t.done, doneAt: t.done_at, createdAt: Number(t.created_at),
-  src: t.src_type && t.src_id ? { type: t.src_type, id: t.src_id } : null,
-  delegable: t.delegable,
-  delegatedTo: t.delegated_to ? { personId: t.delegated_to, name: t.delegated_name ?? "", role: t.delegated_role ?? "", note: t.delegated_note ?? "", at: t.delegated_at ?? 0 } : null,
-});
 
 export async function loadRules(db: Db, ownerId: string): Promise<{ labelRules: Rule[]; priorityRules: Rule[] }> {
   const rows = await db.query<RuleRow>("select * from rules where owner_id = $1 order by position", [ownerId]);
@@ -351,12 +339,13 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
   ] = await Promise.all([
     db.query<{ name: string }>("select name from users where id = $1", [ownerId]),
     loadRules(db, ownerId),
-    db.query<TaskRow>("select * from tasks where owner_id = $1 order by created_at, id limit 1000", [ownerId]),
+    teamTickets(db, ownerId),
     db.query<{ id: string; title: string; mode: Mode; dept: string; project: string; pri: Priority; due: string; why: string; src_type: "message" | "meeting" | null; src_id: string | null; status: Suggestion["status"]; delegable: boolean }>(
       "select * from suggestions where owner_id = $1 and (status = 'new' or created_at > $2) order by created_at desc limit 300",
       [ownerId, now.getTime() - 14 * 86_400_000],
     ),
-    db.query<{ id: string; name: string; role: string; depts: string[]; handles: string[]; slack_user_id: string | null }>("select * from team_members where owner_id = $1 order by position, name", [ownerId]),
+    // The team list is the team's: everyone with a login assigns from the same one.
+    db.query<{ id: string; name: string; role: string; depts: string[]; handles: string[]; slack_user_id: string | null; telegram_id: string | null }>("select * from team_members where owner_id = $1 order by position, name", [TEAM]),
     db.query<{ id: string; parent: string | null; name: string; target: number; unit: Metric["unit"]; is_sum: boolean }>("select * from metrics where owner_id = $1 order by position", [ownerId]),
     db.query<{ metric_id: string; day: string; value: number }>("select metric_id, day, value from metric_logs where owner_id = $1 and day like $2", [ownerId, `${month}-%`]),
     db.query<{ id: string; scope: "day" | "week"; period: string; body: string; done: boolean; mode: Mode }>("select * from focus_items where owner_id = $1 and period >= $2 order by position", [ownerId, addDays(now, -14)]),
@@ -372,8 +361,8 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     // Apps and people who have left come first, so someone current with the same name wins.
     db.query<{ name: string; image: string }>("select name, image from slack_users where owner_id = $1 and image <> '' order by (not deleted) asc, (not is_bot) asc", [ownerId]),
     db.query<{ project: string }>(
-      "select distinct project from (select project from tasks where owner_id = $1 union select project from meetings where owner_id = $1 union select project from conversations where owner_id = $1) p where project <> '' order by project",
-      [ownerId],
+      "select distinct project from (select project from tasks where owner_id = $2 union select project from meetings where owner_id = $1 union select project from conversations where owner_id = $1) p where project <> '' order by project",
+      [ownerId, TEAM],
     ),
     loadConversations(db, ownerId),
     loadMeetings(db, ownerId),
@@ -396,6 +385,7 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     loadJobStatus(db, ownerId),
   ]);
 
+  const people = await teamPeople(db);
   const logs: AppState["logs"] = {};
   for (const l of logRows) (logs[l.metric_id] ??= {})[Number(l.day.slice(8))] = Number(l.value);
   const board = (): FocusBoard => ({ day: {}, week: {} });
@@ -422,7 +412,9 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
   return {
     month,
     inbox,
-    tasks: tasks.map(toTask),
+    tasks,
+    review: await reviewItems(db, ownerId, people),
+    people,
     suggestions: suggestions.map((g) => ({
       // A call from last week suggests a date that has passed: offer today instead.
       id: g.id, title: g.title, mode: g.mode, dept: g.dept, project: g.project, pri: g.pri, due: g.status === "new" && g.due < today ? today : g.due, why: g.why,
@@ -430,7 +422,7 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     })),
     meetings,
     calendar,
-    team: team.map((p): Person => ({ id: p.id, name: p.name, role: p.role, depts: p.depts ?? [], handles: p.handles ?? [], slackUserId: p.slack_user_id })),
+    team: team.map((p): Person => ({ id: p.id, name: p.name, role: p.role, depts: p.depts ?? [], handles: p.handles ?? [], slackUserId: p.slack_user_id, telegramId: p.telegram_id })),
     projects: projects.map((p) => p.project),
     labelRules,
     priorityRules,
@@ -534,15 +526,16 @@ const asMode = (value: unknown): Mode => (value === "personal" ? "personal" : "p
 const asDescription = (text: unknown) => String(text ?? "").trim().slice(0, 4000);
 
 async function insertTask(c: ActionContext, t: { title: string; description?: string; dept: string; project: string; pri: Priority; due: string; mode?: Mode; src?: { type: "message" | "meeting"; id: string } | null; delegable?: boolean }): Promise<string> {
-  const id = uid("t");
-  const mode = asMode(t.mode);
-  // A personal task has no department or client: it is filed under "Personal".
+  // A ticket is the team's. Only the owner has a personal side: everyone else's are work tickets.
+  const mode = c.ownerId === TEAM ? asMode(t.mode) : "professional";
   const [dept, project] = mode === "personal" ? [PERSONAL, PERSONAL] : [t.dept, t.project];
-  await c.db.run(
-    "insert into tasks (id, owner_id, title, description, dept, project, pri, due, src_type, src_id, delegable, mode, created_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
-    [id, c.ownerId, t.title, asDescription(t.description), dept, project, t.pri, t.due, t.src?.type ?? null, t.src?.id ?? null, t.delegable ?? true, mode, c.now.getTime()],
-  );
-  return id;
+  return insertTicket(c, { title: t.title, description: asDescription(t.description), dept, project, pri: t.pri, due: t.due, mode, src: t.src ?? null, delegable: t.delegable ?? true, source: await sourceNote(c.db, c.ownerId, t.src) });
+}
+
+/** A ticket of the team's that this person may change: someone other than the owner never reaches a personal one. */
+async function teamTask(c: ActionContext, id: string): Promise<void> {
+  const [t] = await c.db.query<{ id: string }>("select id from tasks where owner_id = $1 and id = $2 and (mode = 'professional' or $3::boolean)", [TEAM, id, c.ownerId === TEAM]);
+  if (!t) throw new Error("That task no longer exists.");
 }
 
 interface Assignee { id: string; name: string; role: string; slack_user_id: string | null }
@@ -554,17 +547,17 @@ interface Assignee { id: string; name: string; role: string; slack_user_id: stri
  */
 async function assignee(c: ActionContext, personId: string): Promise<Assignee> {
   if (!personId.startsWith(SLACK_PICK)) {
-    const [person] = await c.db.query<Assignee>("select id, name, role, slack_user_id from team_members where owner_id = $1 and id = $2", [c.ownerId, personId]);
+    const [person] = await c.db.query<Assignee>("select id, name, role, slack_user_id from team_members where owner_id = $1 and id = $2", [TEAM, personId]);
     if (!person) throw new Error("That task or person no longer exists.");
     return person;
   }
   const slackUserId = personId.slice(SLACK_PICK.length);
-  const [known] = await c.db.query<Assignee>("select id, name, role, slack_user_id from team_members where owner_id = $1 and slack_user_id = $2 order by position limit 1", [c.ownerId, slackUserId]);
+  const [known] = await c.db.query<Assignee>("select id, name, role, slack_user_id from team_members where owner_id = $1 and slack_user_id = $2 order by position limit 1", [TEAM, slackUserId]);
   if (known) return known;
   const [user] = await c.db.query<{ name: string }>("select name from slack_users where owner_id = $1 and id = $2 and not is_bot and not deleted", [c.ownerId, slackUserId]);
   if (!user) throw new Error("That person is no longer in Slack.");
   const person: Assignee = { id: uid("u"), name: user.name, role: "Team member", slack_user_id: slackUserId };
-  await c.db.run("insert into team_members (id, owner_id, name, role, depts, handles, slack_user_id, position) values ($1, $2, $3, $4, '[]', '[]', $5, $6)", [person.id, c.ownerId, person.name, person.role, slackUserId, Math.floor(c.now.getTime() / 1000)]);
+  await c.db.run("insert into team_members (id, owner_id, name, role, depts, handles, slack_user_id, position) values ($1, $2, $3, $4, '[]', '[]', $5, $6)", [person.id, TEAM, person.name, person.role, slackUserId, Math.floor(c.now.getTime() / 1000)]);
   return person;
 }
 
@@ -579,8 +572,8 @@ async function assignee(c: ActionContext, personId: string): Promise<Assignee> {
 async function delegate(c: ActionContext, taskId: string, personId: string, note: string, due: string, where: AssignWhere = "dm") {
   const person = personId ? await assignee(c, personId) : null;
   const [task] = await c.db.query<{ title: string; description: string | null; pri: Priority; project: string; mode: Mode; src_type: string | null; src_id: string | null }>(
-    "select title, description, pri, project, mode, src_type, src_id from tasks where owner_id = $1 and id = $2",
-    [c.ownerId, taskId],
+    "select title, description, pri, project, mode, src_type, src_id from tasks where owner_id = $1 and id = $2 and (mode = 'professional' or $3::boolean)",
+    [TEAM, taskId, c.ownerId === TEAM],
   );
   if (!task) throw new Error("That task or person no longer exists.");
   // The message says what the task is, when it is due and how much it matters. Its description follows in the thread.
@@ -642,12 +635,13 @@ async function delegate(c: ActionContext, taskId: string, personId: string, note
     // In a thread that exists already it goes into that same thread, right after the message.
     await thenDescription(first, place.target, holder.name, place.label, place.thread ?? null);
   }
-  await c.db.run("update tasks set due = $1, delegated_to = $2, delegated_name = $3, delegated_role = $4, delegated_note = $5, delegated_at = $6 where owner_id = $8 and id = $7", [due, holder!.id, holder!.name, holder!.role, note, now, taskId, c.ownerId]);
+  await c.db.run("update tasks set due = $1, delegated_to = $2, delegated_name = $3, delegated_role = $4, delegated_note = $5, delegated_at = $6, assignee_user = null, updated_at = $6 where owner_id = $8 and id = $7", [due, holder!.id, holder!.name, holder!.role, note, now, taskId, TEAM]);
+  await logEvent(c, taskId, `Assigned to ${holder!.name}, told on Slack${where === "dm" ? "" : ` in ${holder!.role === "Slack channel" ? holder!.name : "the chat"}`}`);
 }
 
 /** The task still open for a conversation, if there is one. One is enough. */
 async function openTaskFor(c: ActionContext, conversationId: string) {
-  const [task] = await c.db.query<{ id: string; delegated_to: string | null }>("select id, delegated_to from tasks where owner_id = $1 and src_type = 'message' and src_id = $2 and not done order by created_at limit 1", [c.ownerId, conversationId]);
+  const [task] = await c.db.query<{ id: string; delegated_to: string | null }>("select id, delegated_to from tasks where owner_id = $3 and coalesce(source_owner, owner_id) = $1 and src_type = 'message' and src_id = $2 and not done order by created_at limit 1", [c.ownerId, conversationId, TEAM]);
   return task ?? null;
 }
 
@@ -898,8 +892,9 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
     await insertTask(c, input);
   },
   async setTaskDescription(c, id: string, description: string) {
-    const changed = await c.db.run("update tasks set description = $1 where owner_id = $2 and id = $3", [asDescription(description), c.ownerId, id]);
-    if (!changed) throw new Error("That task no longer exists.");
+    await teamTask(c, id);
+    await c.db.run("update tasks set description = $1, updated_at = $4 where owner_id = $2 and id = $3", [asDescription(description), TEAM, id, c.now.getTime()]);
+    await logEvent(c, id, "Description changed");
   },
   /** Turns one action item from a call into a task, once. Someone else's becomes a follow-up. */
   async actionItemToTask(c, meetingId: string, index: number) {
@@ -907,24 +902,31 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
     const item = meeting?.action_items?.[index];
     if (!item) throw new Error("That action item no longer exists.");
     const title = (item.mine ? item.text : `Follow up with ${item.who}: ${item.text}`).slice(0, 160);
-    const [{ n }] = await c.db.query<{ n: number }>("select count(*)::int as n from tasks where owner_id = $1 and src_type = 'meeting' and src_id = $2 and title = $3", [c.ownerId, meetingId, title]);
+    const [{ n }] = await c.db.query<{ n: number }>("select count(*)::int as n from tasks where owner_id = $4 and coalesce(source_owner, owner_id) = $1 and src_type = 'meeting' and src_id = $2 and title = $3", [c.ownerId, meetingId, title, TEAM]);
     if (n > 0) return;
     await insertTask(c, { title, dept: "Operations", project: meeting.project, pri: "mid", due: addDays(c.now, 2), src: { type: "meeting", id: meetingId } });
   },
   async toggleTask(c, id: string, done: boolean) {
-    await c.db.run("update tasks set done = $1, done_at = $2 where owner_id = $3 and id = $4", [done, done ? c.now.getTime() : null, c.ownerId, id]);
+    await teamTask(c, id);
+    await c.db.run("update tasks set done = $1, done_at = $2, status = case when $1 then 'done' when status = 'done' then 'open' else status end, updated_at = $5 where owner_id = $3 and id = $4", [done, done ? c.now.getTime() : null, TEAM, id, c.now.getTime()]);
+    await logEvent(c, id, done ? "Status: Done" : "Status: Open");
   },
   async setTaskPriority(c, id: string, pri: Priority) {
-    await c.db.run("update tasks set pri = $1 where owner_id = $2 and id = $3", [pri, c.ownerId, id]);
+    await teamTask(c, id);
+    await c.db.run("update tasks set pri = $1, updated_at = $4 where owner_id = $2 and id = $3", [pri, TEAM, id, c.now.getTime()]);
   },
   async delegateTask(c, id: string, personId: string, note: string, due: string, where: AssignWhere = "dm") {
-    const [task] = await c.db.query<{ delegated_to: string | null }>("select delegated_to from tasks where owner_id = $1 and id = $2 for update", [c.ownerId, id]);
+    await teamTask(c, id);
+    const [task] = await c.db.query<{ delegated_to: string | null }>("select delegated_to from tasks where owner_id = $1 and id = $2 for update", [TEAM, id]);
     // Already assigned: this is a second click on Assign.
     if (task?.delegated_to) return;
     await delegate(c, id, personId, note, due, where);
   },
   async undelegateTask(c, id: string) {
-    await c.db.run("update tasks set delegated_to = null, delegated_name = null, delegated_role = null, delegated_note = null, delegated_at = null where owner_id = $1 and id = $2", [c.ownerId, id]);
+    await teamTask(c, id);
+    // Back with whoever took it back.
+    await c.db.run("update tasks set delegated_to = null, delegated_name = null, delegated_role = null, delegated_note = null, delegated_at = null, assignee_user = $3 where owner_id = $1 and id = $2", [TEAM, id, c.ownerId]);
+    await logEvent(c, id, "Taken back");
     // A hand-off that was never sent is withdrawn with the task: from the outbox, and from the
     // chat's thread if it was going to be posted there.
     const unsent = await c.db.query<{ message_id: string | null; conversation_id: string | null }>("delete from outbox where owner_id = $1 and task_id = $2 and status = 'queued' returning message_id, conversation_id", [c.ownerId, id]);
@@ -935,21 +937,7 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
     }
   },
 
-  // Suggested tasks
-  async editSuggestion(c, id: string, patch: { pri?: Priority; due?: string }) {
-    await c.db.run("update suggestions set pri = coalesce($1, pri), due = coalesce($2, due) where owner_id = $3 and id = $4", [patch.pri ?? null, patch.due ?? null, c.ownerId, id]);
-  },
-  async acceptSuggestion(c, id: string) {
-    // Held for this change, so two clicks on Add task add one task.
-    const [g] = await c.db.query<{ title: string; mode: Mode; dept: string; project: string; pri: Priority; due: string; src_type: "message" | "meeting" | null; src_id: string | null; delegable: boolean }>("select * from suggestions where owner_id = $1 and id = $2 and status = 'new' for update", [c.ownerId, id]);
-    if (!g) return;
-    const today = isoDay(c.now);
-    await insertTask(c, { title: g.title, dept: g.dept, project: g.project, pri: g.pri, due: g.due < today ? today : g.due, mode: g.mode, src: g.src_type && g.src_id ? { type: g.src_type, id: g.src_id } : null, delegable: g.delegable });
-    await c.db.run("update suggestions set status = 'accepted' where owner_id = $2 and id = $1", [id, c.ownerId]);
-  },
-  async dismissSuggestion(c, id: string) {
-    await c.db.run("update suggestions set status = 'dismissed' where owner_id = $1 and id = $2", [c.ownerId, id]);
-  },
+  // Suggested tasks: see TICKET_ACTIONS in tickets.ts, which reviews them for the whole team.
 
   // Today
   async addFocus(c, scope: "day" | "week", period: string, text: string, mode?: Mode) {
@@ -1022,27 +1010,34 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
   },
 
   // Settings: team
+  // Settings: the team list. It is the team's: everyone with a login assigns from the same one.
   async togglePersonDept(c, id: string, dept: string) {
-    const [p] = await c.db.query<{ depts: string[] }>("select depts from team_members where owner_id = $1 and id = $2", [c.ownerId, id]);
+    const [p] = await c.db.query<{ depts: string[] }>("select depts from team_members where owner_id = $1 and id = $2", [TEAM, id]);
     if (!p) return;
     const depts = p.depts.includes(dept) ? p.depts.filter((d) => d !== dept) : [...p.depts, dept];
-    await c.db.run("update team_members set depts = $1 where owner_id = $3 and id = $2", [JSON.stringify(depts), id, c.ownerId]);
+    await c.db.run("update team_members set depts = $1 where owner_id = $3 and id = $2", [JSON.stringify(depts), id, TEAM]);
   },
   async addHandle(c, id: string, handle: string) {
-    const [p] = await c.db.query<{ handles: string[] }>("select handles from team_members where owner_id = $1 and id = $2", [c.ownerId, id]);
+    const [p] = await c.db.query<{ handles: string[] }>("select handles from team_members where owner_id = $1 and id = $2", [TEAM, id]);
     if (!p || p.handles.some((h) => h.toLowerCase() === handle.toLowerCase())) return;
-    await c.db.run("update team_members set handles = $1 where owner_id = $3 and id = $2", [JSON.stringify([...p.handles, handle]), id, c.ownerId]);
+    await c.db.run("update team_members set handles = $1 where owner_id = $3 and id = $2", [JSON.stringify([...p.handles, handle]), id, TEAM]);
   },
   async removeHandle(c, id: string, index: number) {
-    const [p] = await c.db.query<{ handles: string[] }>("select handles from team_members where owner_id = $1 and id = $2", [c.ownerId, id]);
+    const [p] = await c.db.query<{ handles: string[] }>("select handles from team_members where owner_id = $1 and id = $2", [TEAM, id]);
     if (!p) return;
-    await c.db.run("update team_members set handles = $1 where owner_id = $3 and id = $2", [JSON.stringify(p.handles.filter((_, k) => k !== index)), id, c.ownerId]);
+    await c.db.run("update team_members set handles = $1 where owner_id = $3 and id = $2", [JSON.stringify(p.handles.filter((_, k) => k !== index)), id, TEAM]);
   },
   async addPerson(c, input: { name: string; role: string; depts: string[]; handles: string[]; slackUserId?: string | null }) {
-    await c.db.run("insert into team_members (id, owner_id, name, role, depts, handles, slack_user_id, position) values ($1, $2, $3, $4, $5, $6, $7, $8)", [uid("u"), c.ownerId, input.name, input.role, JSON.stringify(input.depts), JSON.stringify(input.handles), input.slackUserId || null, Math.floor(c.now.getTime() / 1000)]);
+    await c.db.run("insert into team_members (id, owner_id, name, role, depts, handles, slack_user_id, position) values ($1, $2, $3, $4, $5, $6, $7, $8)", [uid("u"), TEAM, input.name, input.role, JSON.stringify(input.depts), JSON.stringify(input.handles), input.slackUserId || null, Math.floor(c.now.getTime() / 1000)]);
+  },
+  /** Their Telegram account, so an assignment can reach them there. Empty takes it away. */
+  async setPersonTelegram(c, id: string, telegramId: string) {
+    const value = String(telegramId ?? "").trim();
+    if (value && !/^-?\d{1,20}$/.test(value)) throw new Error("Pick them from your Telegram chats.");
+    await c.db.run("update team_members set telegram_id = $3 where owner_id = $1 and id = $2", [TEAM, id, value || null]);
   },
   async removePerson(c, id: string) {
-    await c.db.run("delete from team_members where owner_id = $1 and id = $2", [c.ownerId, id]);
+    await c.db.run("delete from team_members where owner_id = $1 and id = $2", [TEAM, id]);
   },
 
   // Settings: sorting rules
@@ -1097,6 +1092,9 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
     if (provider === "google") return forgetGoogle(c.db, c.ownerId, null, false);
     await c.db.run("delete from connections where owner_id = $1 and provider = $2", [c.ownerId, provider]);
   },
+
+  // The board and the review, shared by the team.
+  ...TICKET_ACTIONS,
 };
 
 export async function applyAction(db: Db, type: string, args: unknown[], ownerId = OWNER_ID, now = new Date()): Promise<void> {

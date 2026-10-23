@@ -7,6 +7,7 @@ import { attachmentText, channelKind, contextLabel, mentionedIds, mentionsUser, 
 import type { Db } from "@/server/db";
 import type { StoredPicture } from "@/server/media";
 import { RateLimited, SLACK_FILES_HOST, type SlackClient } from "@/server/slack";
+import { TEAM } from "@/server/tickets";
 import type { JobContext, JobResult } from "./runner";
 
 interface SlackUser { id: string; name?: string; real_name?: string; deleted?: boolean; is_bot?: boolean; is_app_user?: boolean; profile?: { real_name?: string; display_name?: string; email?: string; image_72?: string; image_48?: string } }
@@ -347,7 +348,7 @@ const threadItem = (channelId: string, root: string) => `slack:${channelId}:${ro
 
 /** Tasks, suggestions and sent messages that point at a row follow it to the row that replaced it. */
 async function repoint(db: Db, ownerId: string, from: string, to: string): Promise<void> {
-  await db.run("update tasks set src_id = $1 where owner_id = $2 and src_type = 'message' and src_id = $3", [to, ownerId, from]);
+  await db.run("update tasks set src_id = $1 where owner_id = $4 and coalesce(source_owner, owner_id) = $2 and src_type = 'message' and src_id = $3", [to, ownerId, from, TEAM]);
   await db.run("update suggestions set src_id = $1 where owner_id = $2 and src_type = 'message' and src_id = $3", [to, ownerId, from]);
   await db.run("update outbox set conversation_id = $1 where owner_id = $2 and conversation_id = $3", [to, ownerId, from]);
 }

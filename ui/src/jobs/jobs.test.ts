@@ -605,7 +605,7 @@ describe("Fathom job", () => {
     });
   });
 
-  it("stores the call and suggests only the owner's open action items, once", async () => {
+  it("stores the call and suggests every open action item once, saying who Fathom gave it to", async () => {
     const first = await fathomPull(ctx(), "key", fathom([call]));
     expect(first).toMatchObject({ items: 1, cursor: { createdAfter: "2026-10-07T10:00:00Z" } });
     await fathomPull(ctx(), "key", fathom([call]));
@@ -614,7 +614,15 @@ describe("Fathom job", () => {
     expect(s.meetings[0]).toMatchObject({ title: "Weekly check-in", transcriptLines: 2, transcript: [] });
     // The moment it started goes to the page, which shows it in the timezone of whoever is looking.
     expect(s.meetings[0].at).toBe(Date.parse("2026-10-07T09:00:00Z"));
-    expect(s.suggestions.map((g) => [g.title, g.src?.id, g.due])).toEqual([["Send the September report", "fathom:42", "2026-10-09"]]);
+    const found = (s: Awaited<ReturnType<typeof loadState>>) => s.review.map((g) => [g.title, g.src?.id, g.due, g.forName, g.assignee, g.source.label, g.source.quote]).sort();
+    expect(found(s)).toEqual([
+      // Jeremy's own: his. Maya's: named, and for nobody on the team list until she is on it.
+      ["Send the September report", "fathom:42", "2026-10-09", null, `user:${OWNER_ID}`, "Fathom · Weekly check-in", "Send the September report"],
+      ["Share brand assets", "fathom:42", "2026-10-09", "Maya Chen", null, "Fathom · Weekly check-in", "Share brand assets"],
+    ]);
+    // Once Maya is on the team list, her item would go to her.
+    await db.run("insert into team_members (id, owner_id, name, role) values ('u_maya', $1, 'Maya Chen', 'Client')", [OWNER_ID]);
+    expect(found(await loadState(db, OWNER_ID, new Date(NOW))).map((g) => g[4])).toEqual([`user:${OWNER_ID}`, "member:u_maya"]);
   });
 
   it("stops with a wait time when Fathom says slow down", async () => {

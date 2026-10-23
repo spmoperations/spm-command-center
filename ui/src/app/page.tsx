@@ -183,7 +183,7 @@ export default function TodayPage() {
     ? [...unanswered].sort((a, b) => PRIORITY_RANK[a.pri] - PRIORITY_RANK[b.pri] || b.at - a.at)
     : unanswered.filter((c) => c.pri === "high").sort((a, b) => b.at - a.at);
   const tasks = state.tasks.filter((t) => t.mode === ui.mode);
-  const due = tasks.filter((t) => isMine(t) && t.due <= today);
+  const due = tasks.filter((t) => isMine(t, state.me.id) && t.due <= today);
   const handedOff = tasks.filter((t) => !t.done && t.delegatedTo && t.due <= today);
   // Tasks finished today stay in the list, ticked off, below the open ones.
   const doneToday = tasks.filter((t) => t.done && (t.doneAt ? isoDay(new Date(t.doneAt)) === today : t.due === today));
@@ -196,7 +196,7 @@ export default function TodayPage() {
 
   const clock = { day: now.getDate(), dim: daysInMonth(now) };
   const pace = state.metrics.filter((m) => !m.parent).map((m) => evalMetric(m, state.metrics, state.logs, clock));
-  const suggested = state.suggestions.filter((g) => g.status === "new" && g.mode === ui.mode).length;
+  const suggested = state.review.length;
   const monthName = now.toLocaleString("en-US", { month: "long" });
 
   return (
@@ -279,7 +279,7 @@ export default function TodayPage() {
           )}
           {SUGGESTED_TASKS && suggested > 0 && (
             <div className="sg-foot">
-              {suggested} suggested {suggested === 1 ? "task" : "tasks"} from your inbox and calls. <Link href="/tasks#suggested">Review</Link>
+              {suggested} flagged from the team&apos;s chats and calls. <Link href="/review">Review</Link>
             </div>
           )}
         </div>

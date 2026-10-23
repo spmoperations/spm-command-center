@@ -118,7 +118,7 @@ describe("signing in", () => {
     expect(await ownerOfSession(open, { email: ALEX.email })).toBeNull();
   });
 
-  it("works through the login and action requests: each person gets their own Command Center", async () => {
+  it("works through the login and action requests: each person gets their own inbox, and the team's board", async () => {
     const alex = await addAlex();
     const signIn = (email: string, password: string) =>
       login(new Request("http://127.0.0.1:3100/api/login", { method: "POST", headers: { "content-type": "application/json", origin: "http://127.0.0.1:3100", host: "127.0.0.1:3100", "sec-fetch-site": "same-origin" }, body: JSON.stringify({ email, password }) }));
@@ -129,7 +129,7 @@ describe("signing in", () => {
     const state = async (c: string) =>
       (await actionRoute(new Request("http://127.0.0.1:3100/api/action", { method: "POST", headers: { cookie: c, "content-type": "application/json", host: "127.0.0.1:3100", "sec-fetch-site": "same-origin" }, body: JSON.stringify({ type: "editConversations", args: [[], {}] }) }))).json();
     const hers = await state(cookie);
-    expect([hers.me, hers.inbox.length, hers.tasks.length]).toEqual([{ id: alex, isOwner: false }, 0, 0]);
+    expect([hers.me, hers.inbox.length, hers.tasks.length]).toEqual([{ id: alex, isOwner: false }, 0, 1]);
     // The owner's session, as it was before team logins existed, still opens the owner's.
     const mine = await state(`${SESSION_COOKIE}=${createSession("jeremy@example.com")}`);
     expect([mine.me.isOwner, mine.inbox.map((c: { id: string }) => c.id).sort(), mine.tasks.length]).toEqual([true, ["slack:C1", "slack:D1"], 1]);
@@ -162,7 +162,7 @@ describe("each person's data", () => {
     expect((await loadState(db, OWNER_ID, now)).inbox.find((c) => c.id === "slack:D1")!.text).toBe("Can we swap the hook on clip 4 before Friday?");
   });
 
-  it("lets a team member change only their own rows, even when they send the owner's ids", async () => {
+  it("keeps the owner's conversations from a team member who sends their ids, and shares the board and the team list", async () => {
     const alex = await addAlex();
     const act = (type: string, ...args: unknown[]) => applyAction(db, type, args, alex, now);
     const ownerRows = async () => db.query("select id, done, pri from conversations where owner_id = $1 order by id", [OWNER_ID]);
@@ -171,11 +171,16 @@ describe("each person's data", () => {
     await act("editConversations", ["slack:D1"], { pri: "low" });
     await expect(act("markConversationDone", "slack:D1")).resolves.toBeUndefined();
     await expect(act("sendReply", "slack:D1", "Hello", false)).rejects.toThrow("no longer exists");
-    await act("toggleTask", "t_hook", true);
-    await act("removePerson", "u_luis");
     expect(await ownerRows()).toEqual(before);
-    expect(await db.query("select done from tasks where id = 't_hook'")).toEqual([{ done: false }]);
-    expect((await db.query("select id from team_members where owner_id = $1", [OWNER_ID])).length).toBe(2);
+    // The team's tickets are hers to work on too, but never a personal one of the owner's.
+    await act("toggleTask", "t_hook", true);
+    expect(await db.query("select done, status from tasks where id = 't_hook'")).toEqual([{ done: true, status: "done" }]);
+    await db.run("update tasks set mode = 'personal' where id = 't_hook'");
+    await expect(act("toggleTask", "t_hook", false)).rejects.toThrow("no longer exists");
+    expect((await loadState(db, alex, now)).tasks).toEqual([]);
+    // The team list is the team's.
+    await act("removePerson", "u_luis");
+    expect((await db.query("select id from team_members where owner_id = $1", [OWNER_ID])).length).toBe(1);
     expect(await db.query("select id from outbox")).toEqual([]);
   });
 
@@ -212,7 +217,7 @@ describe("the database change", () => {
 
 describe("every query", () => {
   // Tables holding one person's rows. Picking one out by id alone could reach someone else's.
-  const OWNED = "connections|jobs|slack_users|slack_channels|conversations|messages|meetings|team_members|tasks|suggestions|rules|metrics|metric_logs|focus_items|quick_links|outbox|media|telegram_chats|calendar_events|important|google_accounts";
+  const OWNED = "connections|jobs|slack_users|slack_channels|conversations|messages|meetings|team_members|tasks|suggestions|rules|metrics|metric_logs|focus_items|quick_links|outbox|media|telegram_chats|calendar_events|important|google_accounts|ticket_events";
 
   it("names whose rows it reads or changes", () => {
     const files: string[] = [];

@@ -126,6 +126,77 @@ export interface TaskSource {
   id: string;
 }
 
+/** Where a ticket stands on the board. Done is the last; Waiting is on someone else. */
+export type TicketStatus = "open" | "in_progress" | "waiting" | "done";
+
+/** One thing that happened to a ticket, for its history. */
+export interface TicketEvent {
+  at: number;
+  by: string;
+  what: string;
+}
+
+/** Where a ticket or a suggestion came from, kept so everyone on the team can read it. */
+export interface SourceNote {
+  /** "Slack · #sales", "Fathom · SPM Ops". */
+  label: string;
+  /** The line it came from. */
+  quote: string;
+  /** Its place in Slack, Gmail or the recording, when there is one. */
+  link?: string | null;
+  /** Whose inbox or call it came from. */
+  from: string;
+}
+
+/** Someone a ticket can be for: a login (the owner, Alex) or a team member without one. */
+export interface TeamPerson {
+  /** "user:<id>" for a login, "member:<id>" for someone on the team list. */
+  id: string;
+  name: string;
+  role: string;
+  login: boolean;
+  /** Where an assignment can reach them: only team members are told, the logins see it here. */
+  slack: boolean;
+  telegram: boolean;
+}
+
+/** What a ticket is, as it is made or changed on screen. */
+export interface TicketInput {
+  title: string;
+  description: string;
+  /** A TeamPerson id, or null for nobody yet. */
+  assignee: string | null;
+  client: string;
+  due: string;
+  status: TicketStatus;
+  pri?: Priority;
+  /** Where to tell a team member it is theirs. Nothing: they are not told. */
+  notify?: ("slack" | "telegram")[];
+}
+
+/** Something a check flagged, waiting for someone on the team to make it a ticket or turn it down. */
+export interface ReviewItem {
+  id: string;
+  title: string;
+  why: string;
+  source: SourceNote;
+  /** Who the source says it is for, when it says (Fathom's assignee). */
+  forName: string | null;
+  /** The TeamPerson it would go to. */
+  assignee: string | null;
+  client: string;
+  due: string;
+  pri: Priority;
+  at: number;
+  /** Why it may be done already, when something says so. */
+  looksDone: string | null;
+  src: TaskSource | null;
+  /** Whose inbox or calls it came from: a login's id. */
+  fromUser: string;
+  /** From the signed-in person's own inbox or calls, so it can be opened here. */
+  mine: boolean;
+}
+
 export interface Delegation {
   personId: string;
   name: string;
@@ -153,6 +224,19 @@ export interface Task {
   /** False for decisions and anything only the owner can do. */
   delegable: boolean;
   delegatedTo?: Delegation | null;
+  /** Where it stands on the board. */
+  status: TicketStatus;
+  /** Its number on the board (SPM-12). */
+  number: number | null;
+  /** Who it is for: a TeamPerson id. Null: nobody yet, or a whole Slack channel (see delegatedTo). */
+  assignee: string | null;
+  assigneeName: string | null;
+  createdBy?: string | null;
+  /** Where it came from, readable by everyone on the team. */
+  source?: SourceNote | null;
+  /** It came from someone else's inbox or calls: `src` cannot be opened here. */
+  theirs?: boolean;
+  history?: TicketEvent[];
 }
 
 export interface Suggestion {
@@ -271,6 +355,8 @@ export interface Person {
   handles: string[];
   /** Their Slack account, so a delegated task can reach them as a direct message. */
   slackUserId?: string | null;
+  /** Their Telegram account, so an assignment can reach them there too. */
+  telegramId?: string | null;
 }
 
 /**
@@ -373,8 +459,13 @@ export interface AppState {
   /** YYYY-MM the target logs belong to. */
   month: string;
   inbox: Conversation[];
+  /** The team's tickets: everyone with a login shares them. */
   tasks: Task[];
   suggestions: Suggestion[];
+  /** What the checks flagged across the team, waiting to be made a ticket or turned down. */
+  review: ReviewItem[];
+  /** Everyone a ticket can be for. */
+  people: TeamPerson[];
   meetings: Meeting[];
   /** The connected Google Calendars, from the start of last week to three weeks ahead. */
   calendar: CalendarItem[];

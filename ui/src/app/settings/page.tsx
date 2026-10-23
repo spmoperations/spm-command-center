@@ -10,7 +10,7 @@ import { PROVIDER_NAME } from "@/core/providers";
 import { ruleHits } from "@/core/rules";
 import type { JobSetting, Line, Person, Priority, Rule, Source, TeamLogin } from "@/core/types";
 import {
-  addHandle, addPerson, addRule, addTeamLogin, clearManualPriorities, deleteRule, moveRule, removeHandle, removePerson, runJobNow,
+  addHandle, addPerson, addRule, addTeamLogin, clearManualPriorities, deleteRule, moveRule, removeHandle, removePerson, runJobNow, setPersonTelegram,
   removeTeamLogin, setChannelSelected, setImportant, setJobEnabled, setJobInterval, setTeamPassword, syncNow, toast, togglePersonDept, turnOffTeamLogin, useApp, type App, type RuleKind,
 } from "@/store/store";
 
@@ -215,7 +215,8 @@ function Important({ app }: { app: App }) {
   );
 }
 
-function PersonRow({ p }: { p: Person }) {
+/** `telegram` is the signed-in person's Telegram chats: an assignment goes from their own account, to someone in them. */
+function PersonRow({ p, telegram }: { p: Person; telegram: { id: string; name: string }[] }) {
   const [handle, setHandle] = useState("");
   return (
     <tr>
@@ -225,6 +226,18 @@ function PersonRow({ p }: { p: Person }) {
           {p.role}
           {!p.slackUserId && " · no Slack account linked"}
         </div>
+        {(telegram.length > 0 || p.telegramId) && (
+          <div className="person-tg">
+            <Combo
+              value={p.telegramId ?? ""}
+              label={`${p.name}'s Telegram`}
+              placeholder="Telegram: type or pick…"
+              none="No Telegram"
+              choices={[...telegram.map((t) => ({ value: t.id, label: t.name })), ...(p.telegramId && !telegram.some((t) => t.id === p.telegramId) ? [{ value: p.telegramId, label: "Linked by someone else" }] : [])]}
+              onChange={(id) => setPersonTelegram(p.id, id)}
+            />
+          </div>
+        )}
       </td>
       {DEPARTMENTS && (
         <td>
@@ -412,7 +425,7 @@ function Team({ app }: { app: App }) {
         <h3>Team and responsibilities</h3>
       </div>
       <p className="set-intro">
-        The people you assign work to. {DEPARTMENTS ? "When you assign a task, people in its department are offered first, and anyone" : "When you assign a task, anyone"} whose responsibilities match the task is marked as the best fit. You can also assign to anyone on Slack; they are added here the first time. Pick each person&apos;s Slack account so an assigned task can reach them.
+        The people you assign work to. {DEPARTMENTS ? "When you assign a task, people in its department are offered first, and anyone" : "When you assign a task, anyone"} whose responsibilities match the task is marked as the best fit. You can also assign to anyone on Slack; they are added here the first time. Pick each person&apos;s Slack account, and their Telegram if they use it, so an assigned task can reach them. The list is the team&apos;s: everyone with a login assigns from it.
       </p>
       <div className="table-scroll">
         <table className="set">
@@ -426,7 +439,7 @@ function Team({ app }: { app: App }) {
           </thead>
           <tbody>
             {app.state.team.map((p) => (
-              <PersonRow key={p.id} p={p} />
+              <PersonRow key={p.id} p={p} telegram={app.state.telegramPeople} />
             ))}
           </tbody>
         </table>

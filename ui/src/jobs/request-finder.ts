@@ -5,6 +5,7 @@ import { PERSONAL } from "@/core/config";
 import { looksLikeRequest, requestDue, requestSummary, whereAsked } from "@/core/requests";
 import type { Mode, Priority } from "@/core/types";
 import { uid } from "@/server/repo";
+import { TEAM } from "@/server/tickets";
 import type { JobContext, JobResult } from "./runner";
 
 /** Messages looked at per run, oldest first. A backlog is worked through over a few runs. */
@@ -54,8 +55,8 @@ export async function requestFinder({ db, ownerId, now }: JobContext): Promise<J
     // One open suggestion or task per conversation is enough.
     const [{ n }] = await db.query<{ n: number }>(
       `select (select count(*) from suggestions where owner_id = $1 and src_type = 'message' and src_id = $2 and status = 'new')::int
-            + (select count(*) from tasks where owner_id = $1 and src_type = 'message' and src_id = $2 and not done)::int as n`,
-      [ownerId, m.conversation_id],
+            + (select count(*) from tasks where owner_id = $3 and coalesce(source_owner, owner_id) = $1 and src_type = 'message' and src_id = $2 and not done)::int as n`,
+      [ownerId, m.conversation_id, TEAM],
     );
     if (n > 0) continue;
     const personal = m.mode === "personal";

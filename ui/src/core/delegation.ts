@@ -32,8 +32,11 @@ export function candidates(team: Person[], t: Delegable, all: boolean): Candidat
     );
 }
 
-/** On the owner's plate: neither done nor handed to someone. */
-export const isMine = (t: Task) => !t.done && !t.delegatedTo;
+/**
+ * On someone's plate: not done, and theirs on the board. Without `me`, as before tickets had
+ * owners: not handed to anyone.
+ */
+export const isMine = (t: Task, me?: string) => !t.done && (me ? t.assignee === `user:${me}` : !t.delegatedTo);
 
 /**
  * Whether a task can be assigned to someone else. Personal tasks stay with the owner, and so

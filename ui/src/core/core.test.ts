@@ -75,7 +75,7 @@ describe("delegation", () => {
   ];
   const task = (over: Partial<Task>): Task => ({
     id: "t", title: "Swap hook on Harbor clip #4", description: "", mode: "professional", dept: "Client Sales", project: "Harbor Realty", pri: "high",
-    due: "2026-10-09", done: false, createdAt: 0, delegable: true, ...over,
+    due: "2026-10-09", done: false, createdAt: 0, delegable: true, status: "open", number: 1, assignee: "user:owner", assigneeName: "Jeremy", ...over,
   });
 
   it("finds responsibilities named in the title or project, singular or plural", () => {
