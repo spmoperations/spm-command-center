@@ -10,7 +10,7 @@ import { assignable, defaultNotify, NotifyChoice, PersonPicker, reviewThisWeek, 
 import { conversationPage, REJECT_REASONS, type RejectReason } from "@/core/config";
 import { sinceMonday, stamp } from "@/core/dates";
 import type { ReviewItem, TicketInput } from "@/core/types";
-import { acceptReview, mergeReview, openConversation, rejectReview, reviewMany, showMeeting, useApp, type App } from "@/store/store";
+import { acceptReview, mergeReview, openConversation, rejectReview, restoreReview, reviewMany, showMeeting, useApp, type App } from "@/store/store";
 
 const REASONS = Object.entries(REJECT_REASONS) as [RejectReason, string][];
 
@@ -40,6 +40,16 @@ function ReviewCard({ g, app, people, picked, onPick, clients }: { g: ReviewItem
         <input type="checkbox" className="pick" checked={picked} aria-label={`Select: ${g.title}`} onClick={(e) => onPick(!picked, e.shiftKey)} onChange={() => {}} />
         <span className="pill tk-new">New task</span>
         {g.looksDone && <span className="pill tk-done">Looks done already</span>}
+        {g.confidence !== null && (
+          <span className="chip rv-sure" title="How sure the AI is that this is a real task">
+            AI: {g.confidence}% sure
+          </span>
+        )}
+        {g.unchecked && (
+          <span className="chip" title="The AI reads each flagged message and keeps only real tasks. This one is next.">
+            Not checked by the AI yet
+          </span>
+        )}
         <span className="muted rv-when">
           Found in {g.source.from}&apos;s {g.source.label.split(" · ")[0]} · {stamp(g.raisedAt, now)}
         </span>
@@ -149,6 +159,7 @@ export default function ReviewPage() {
   // Only what was said this week, since Monday.
   const week = reviewThisWeek(state.review, app.now);
   const older = state.review.length - week.length;
+  const setAside = reviewThisWeek(state.setAside, app.now).filter((g) => from === "all" || (from === "mine" ? g.mine : `user:${g.fromUser}` === from));
   const monday = new Date(sinceMonday(app.now)).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
   const shown = week.filter((g) => from === "all" || (from === "mine" ? g.mine : `user:${g.fromUser}` === from));
   const ids = shown.filter((g) => picked.has(g.id)).map((g) => g.id);
@@ -182,7 +193,11 @@ export default function ReviewPage() {
           value={from}
           label="Whose"
           onChange={setFrom}
-          options={[["all", "Everyone's"], ["mine", "Mine"], ...logins.filter((p) => p.id !== `user:${state.me.id}`).map((p): [string, string] => [p.id, `${p.name.split(" ")[0]}'s`])]}
+          options={[
+            ["all", "Everyone's"],
+            ["mine", "Mine"],
+            ...(state.me.isOwner ? [] : logins.filter((p) => p.id !== `user:${state.me.id}`).map((p): [string, string] => [p.id, `${p.name.split(" ")[0]}'s`])),
+          ]}
         />
       </div>
 
@@ -241,6 +256,31 @@ export default function ReviewPage() {
             <ReviewCard key={g.id} g={g} app={app} people={people} clients={clients} picked={picked.has(g.id)} onPick={(on, range) => pick(g.id, on, range)} />
           ))}
         </div>
+      )}
+
+      {setAside.length > 0 && (
+        <details className="panel rv-aside">
+          <summary>
+            Set aside by the AI this week: {setAside.length} {setAside.length === 1 ? "message that is" : "messages that are"} not a task
+          </summary>
+          <p className="muted">The AI read each of these and was not sure it is a real task. If one is, put it back and it waits above like the rest.</p>
+          <ul>
+            {setAside.map((g) => (
+              <li key={g.id}>
+                <div>
+                  <strong>{g.title}</strong>{" "}
+                  <span className="muted">
+                    · {g.source.label} · {g.source.from}&apos;s · AI: {g.confidence}% sure it is a task
+                  </span>
+                  {g.source.quote && <p className="tk-quote">{g.source.quote}</p>}
+                </div>
+                <button className="btn" onClick={() => void restoreReview(g.id)}>
+                  Put back
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
     </section>
   );

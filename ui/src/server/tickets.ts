@@ -208,6 +208,8 @@ interface SuggestionRow extends SourceParts {
   from_name: string;
   m_at: number | null;
   mt_at: number | null;
+  confidence: number | null;
+  checked_at: number | null;
 }
 
 const firstName = (name: string) => norm(name).split(" ")[0] ?? "";
@@ -239,18 +241,31 @@ function guessFor(g: SuggestionRow, people: TeamPerson[], slack: InSlack[] = [])
     );
     return { forName: named, assignee: personNamed(people, named)?.id ?? inSlack?.id ?? null };
   }
-  return { forName: g.for_name, assignee: `user:${g.owner_id}` };
+  // A message the AI says is for someone on the team goes to them; otherwise to whoever it was written to.
+  const named = personNamed(people, g.for_name);
+  return { forName: g.for_name, assignee: named?.id ?? `user:${g.owner_id}` };
 }
 
-const SUGGESTION_SQL = `select s.id, s.owner_id, s.title, s.why, s.project, s.pri, s.due, s.mode, s.src_type, s.src_id, s.dedupe_key, s.for_name, s.looks_done, s.delegable, s.created_at, u.name as from_name,
+const SUGGESTION_FROM = `select s.id, s.owner_id, s.title, s.why, s.project, s.pri, s.due, s.mode, s.src_type, s.src_id, s.dedupe_key, s.for_name, s.looks_done, s.delegable, s.created_at, s.confidence, s.checked_at, u.name as from_name,
          c.source as c_source, c.ctx as c_ctx, c.from_name as c_from, c.external_id as c_chat, c.last_text as c_text,
          m.body as m_body, m.at as m_at, mt.title as mt_title, mt.url as mt_url, mt.action_items as mt_items, mt.started_at as mt_at
   from suggestions s
   join users u on u.id = s.owner_id
   left join conversations c on s.src_type = 'message' and c.owner_id = s.owner_id and c.id = s.src_id
   left join messages m on s.dedupe_key like 'ask:%' and m.owner_id = s.owner_id and m.id = substr(s.dedupe_key, 5)
-  left join meetings mt on s.src_type = 'meeting' and mt.owner_id = s.owner_id and mt.id = s.src_id
+  left join meetings mt on s.src_type = 'meeting' and mt.owner_id = s.owner_id and mt.id = s.src_id`;
+
+/** Every open suggestion across the team that this person may see. Takes the team as $1 and the person as $2. */
+const SUGGESTION_SQL = `${SUGGESTION_FROM}
   where s.owner_id in (${TEAM_USERS}) and s.status = 'new' and (s.mode = 'professional' or s.owner_id = $2)`;
+
+/** What the AI set aside as not a task since $3, that this person may see. */
+const SET_ASIDE_SQL = `${SUGGESTION_FROM}
+  where s.owner_id in (${TEAM_USERS}) and s.status = 'dismissed' and s.reason = 'not_task' and s.confidence is not null and s.checked_at > $3
+    and (s.mode = 'professional' or s.owner_id = $2)`;
+
+/** How far back the list of what the AI set aside goes. */
+const SET_ASIDE_DAYS = 14;
 
 function toReview(g: SuggestionRow, viewer: string, people: TeamPerson[], slack: InSlack[]): ReviewItem {
   const item = g.src_type === "meeting" ? (g.mt_items?.[actionIndex(g.dedupe_key) ?? -1] ?? null) : null;
@@ -272,6 +287,8 @@ function toReview(g: SuggestionRow, viewer: string, people: TeamPerson[], slack:
     pri: g.pri,
     at: Number(g.created_at),
     raisedAt: Number(g.m_at ?? g.mt_at ?? g.created_at),
+    confidence: g.confidence === null ? null : Number(g.confidence),
+    unchecked: g.src_type === "message" && g.dedupe_key.startsWith("ask:") && g.checked_at === null,
     looksDone: g.looks_done ?? (item?.done ? "Marked done in Fathom." : null),
     src: g.src_type && g.src_id ? { type: g.src_type, id: g.src_id } : null,
     fromUser: g.owner_id,
@@ -284,6 +301,12 @@ export async function reviewItems(db: Db, viewer: string, people: TeamPerson[]):
   const rows = await db.query<SuggestionRow>(`${SUGGESTION_SQL} order by s.created_at desc, s.id limit 300`, [TEAM, viewer]);
   const slack = rows.some((g) => g.src_type === "meeting") ? await teamSlack(db) : [];
   return rows.map((g) => toReview(g, viewer, people, slack));
+}
+
+/** What the AI set aside as not a task lately, newest first, so anyone can see it and put one back. */
+export async function setAsideItems(db: Db, viewer: string, people: TeamPerson[], now: number): Promise<ReviewItem[]> {
+  const rows = await db.query<SuggestionRow>(`${SET_ASIDE_SQL} order by s.checked_at desc, s.id limit 100`, [TEAM, viewer, now - SET_ASIDE_DAYS * 86_400_000]);
+  return rows.map((g) => toReview(g, viewer, people, []));
 }
 
 /** Everyone in the team's Slack, as the team's logins have read it: they share one workspace. */
@@ -734,6 +757,15 @@ export const TICKET_ACTIONS: Record<string, (c: Ctx, ...args: any[]) => Promise<
   async rejectSuggestion(c, id: string, reason: RejectReason) {
     const g = await heldSuggestion(c, id);
     if (g) await reject(c, g, reason);
+  },
+  /** Puts back a suggestion the AI set aside as not a task. It is not asked about again. */
+  async restoreSuggestion(c, id: string) {
+    const [g] = await c.db.query<{ owner_id: string }>(
+      `select owner_id from suggestions where owner_id in (${TEAM_USERS}) and id = $2 and status = 'dismissed' and reason = 'not_task' and (mode = 'professional' or owner_id = $3) for update`,
+      [TEAM, id, c.ownerId],
+    );
+    if (!g) return;
+    await c.db.run("update suggestions set status = 'new', reason = null, confidence = null, checked_at = coalesce(checked_at, $3) where owner_id = $1 and id = $2", [g.owner_id, id, c.now.getTime()]);
   },
   /** Turned down without a reason, as the old list of suggestions did. */
   async dismissSuggestion(c, id: string) {

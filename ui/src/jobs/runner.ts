@@ -17,6 +17,7 @@ import { gmailPull } from "./gmail";
 import { outboxSend } from "./outbox";
 import { requestFinder } from "./request-finder";
 import { slackDirectorySync, slackPull } from "./slack";
+import { taskCheck } from "./task-check";
 import { taskSuggest } from "./task-suggest";
 import { telegramPull } from "./telegram";
 
@@ -76,6 +77,9 @@ async function execute(jobId: JobId, ctx: JobContext): Promise<JobResult> {
     case "task-suggest":
       if (!(await aiConfigured(ctx.db, ctx.ownerId))) throw new NotReady("The AI key is not set");
       return taskSuggest(ctx);
+    case "task-check":
+      if (!(await aiConfigured(ctx.db, ctx.ownerId))) throw new NotReady("The AI key is not set");
+      return taskCheck(ctx);
     case "outbox-retry": {
       const token = await secretFor(ctx.db, ctx.ownerId, "slack");
       // Telegram is opened only if something is waiting to go there.

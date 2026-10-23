@@ -1,4 +1,5 @@
-// The one place the Command Center uses an AI model: finding the owner's tasks in new messages.
+// The one place the Command Center uses an AI model: checking whether each message the rules
+// flagged is a real task (task-check), and finding other tasks in new messages (task-suggest).
 // Everything else (priority, labels, who can take a task, call notes) is plain logic.
 //
 // This file only makes the call. What the model is told is in `src/prompts/`.
@@ -7,13 +8,17 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { DEPTS } from "@/core/config";
 import { FIELDS, message, SYSTEM, type TaskSearch } from "@/prompts/task-finder";
+import * as check from "@/prompts/task-check";
 import { keysForNew, type AnthropicKeys } from "./app-keys";
 import type { Db } from "./db";
 
 export type { TaskSearch };
+export type TaskCheck = check.TaskCheck;
 
-// Development default: the cheapest current model. Set ANTHROPIC_MODEL to change it.
-export const AI_MODEL = process.env.ANTHROPIC_MODEL ?? "claude-haiku-4-5";
+// Telling a real task from small talk is a judgment, so the most capable current model makes it,
+// thinking as much as each request needs. Few messages reach it, so it costs little. Set
+// ANTHROPIC_MODEL to change it.
+export const AI_MODEL = process.env.ANTHROPIC_MODEL ?? "claude-opus-5-5";
 
 /** The AI key this person's checks use: their own, else the team's, else the server's settings (see app-keys.ts). */
 export const aiKeys = async (db: Db, ownerId: string): Promise<AnthropicKeys | null> => (await keysForNew(db, ownerId, "anthropic"))?.keys ?? null;
@@ -56,6 +61,39 @@ export async function findTasks(input: TaskSearch, keys: AnthropicKeys): Promise
   if (response.stop_reason === "refusal") throw new Error("The model declined to read these conversations.");
   if (!response.parsed_output) throw new Error("The model's answer could not be read.");
   return response.parsed_output.tasks;
+}
+
+const Verdicts = z.object({
+  verdicts: z.array(
+    z.object({
+      id: z.string().describe(check.FIELDS.id),
+      is_task: z.boolean().describe(check.FIELDS.is_task),
+      confidence: z.number().describe(check.FIELDS.confidence),
+      title: z.string().describe(check.FIELDS.title),
+      summary: z.string().describe(check.FIELDS.summary),
+      for_whom: z.string().describe(check.FIELDS.for_whom),
+      already_done: z.boolean().describe(check.FIELDS.already_done),
+      done_evidence: z.string().describe(check.FIELDS.done_evidence),
+    }),
+  ),
+});
+
+export type Verdict = z.infer<typeof Verdicts>["verdicts"][number];
+
+/** Asks the model whether each flagged message is a real task. Throws the SDK's typed errors; the job turns them into a readable message. */
+export async function checkCandidates(input: check.TaskCheck, keys: AnthropicKeys): Promise<Verdict[]> {
+  const response = await anthropic(keys).messages.parse({
+    model: AI_MODEL,
+    max_tokens: 16000,
+    thinking: { type: "adaptive" },
+    system: check.SYSTEM,
+    messages: [{ role: "user", content: check.message(input) }],
+    output_config: { format: zodOutputFormat(Verdicts) },
+  });
+  if (response.stop_reason === "refusal") throw new Error("The model declined to read these messages.");
+  if (response.stop_reason === "max_tokens") throw new Error("The model's answer was cut short. Fewer messages go next time.");
+  if (!response.parsed_output) throw new Error("The model's answer could not be read.");
+  return response.parsed_output.verdicts;
 }
 
 /** Checks an AI key before it is saved: asking which models it may use costs nothing. */

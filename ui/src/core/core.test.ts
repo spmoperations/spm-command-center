@@ -143,6 +143,13 @@ describe("requests in messages", () => {
     expect(looksLikeRequest("Booked 2 more discovery calls for tomorrow.")).toBe(false);
     expect(looksLikeRequest("here it is https://docs.google.com/spreadsheets/d/abc/edit?gid=42")).toBe(false);
     expect(looksLikeRequest("ok?")).toBe(false);
+    // Small talk and one-word questions ask for nothing; a real question of a few words does.
+    expect(looksLikeRequest("Hey, how are you?")).toBe(false);
+    expect(looksLikeRequest("Thanks so much!")).toBe(false);
+    expect(looksLikeRequest("Good morning! How's it going?")).toBe(false);
+    expect(looksLikeRequest("really? wow")).toBe(false);
+    expect(looksLikeRequest("Is the deck ready yet?")).toBe(true);
+    expect(looksLikeRequest("Hey, can you send me the deck?")).toBe(true);
   });
 
   it("takes the due day from the message, and says tomorrow when it names none", () => {
@@ -193,16 +200,16 @@ describe("timers", () => {
   it("defines every job once, with a default no faster than its floor", () => {
     expect(new Set(JOBS.map((j) => j.id)).size).toBe(JOBS.length);
     for (const job of JOBS) expect(job.defaultMin).toBeGreaterThanOrEqual(job.minMin);
-    expect(JOBS.filter((j) => j.usesAI).map((j) => j.id)).toEqual(["task-suggest"]);
+    expect(JOBS.filter((j) => j.usesAI).map((j) => j.id)).toEqual(["task-check", "task-suggest"]);
   });
 
   it("leaves out the checks that cannot work yet", () => {
     expect(JOBS.filter((j) => !j.live).map((j) => j.id)).toEqual(["telegram-pull", "gmail-pull", "calendar-pull", "task-suggest"]);
-    expect(liveJobs(false).map((j) => j.id)).toEqual(["slack-pull", "fathom-pull", "inbox-rules", "request-finder", "slack-directory-sync", "outbox-retry"]);
-    // Where Telegram can be used, its check joins them; the AI one still waits for credit.
-    expect(liveJobs(true).map((j) => j.id)).toEqual(["slack-pull", "telegram-pull", "fathom-pull", "inbox-rules", "request-finder", "slack-directory-sync", "outbox-retry"]);
+    expect(liveJobs(false).map((j) => j.id)).toEqual(["slack-pull", "fathom-pull", "inbox-rules", "request-finder", "task-check", "slack-directory-sync", "outbox-retry"]);
+    // Where Telegram can be used, its check joins them; the AI that finds tasks of its own stays off.
+    expect(liveJobs(true).map((j) => j.id)).toEqual(["slack-pull", "telegram-pull", "fathom-pull", "inbox-rules", "request-finder", "task-check", "slack-directory-sync", "outbox-retry"]);
     // The same for Google's two checks.
-    expect(liveJobs(false, true).map((j) => j.id)).toEqual(["slack-pull", "fathom-pull", "gmail-pull", "calendar-pull", "inbox-rules", "request-finder", "slack-directory-sync", "outbox-retry"]);
+    expect(liveJobs(false, true).map((j) => j.id)).toEqual(["slack-pull", "fathom-pull", "gmail-pull", "calendar-pull", "inbox-rules", "request-finder", "task-check", "slack-directory-sync", "outbox-retry"]);
   });
 
   it("keeps a timer at or above the fastest allowed", () => {

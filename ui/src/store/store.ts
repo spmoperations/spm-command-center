@@ -372,6 +372,8 @@ const outOfReview = (ids: string[]) => (s: AppState): AppState => ({ ...s, revie
 export const acceptReview = (id: string, input?: Partial<TicketInput>) => act("acceptSuggestion", input ? [id, input] : [id], "Ticket made", outOfReview([id]));
 export const rejectReview = (id: string, reason: RejectReason) => act("rejectSuggestion", [id, reason], "Turned down", outOfReview([id]));
 export const mergeReview = (id: string, ticketId: string) => act("mergeSuggestion", [id, ticketId], "Merged into the ticket", outOfReview([id]));
+/** Puts back what the AI set aside as not a task. */
+export const restoreReview = (id: string) => act("restoreSuggestion", [id], "Put back for review", (s) => ({ ...s, setAside: s.setAside.filter((g) => g.id !== id) }));
 export const reviewMany = (ids: string[], decision: "accept" | RejectReason) =>
   act("reviewMany", [ids, decision], decision === "accept" ? `${ids.length} ${ids.length === 1 ? "ticket" : "tickets"} made` : `${ids.length} turned down`, outOfReview(ids));
 export const setTaskPriority = (id: string, pri: Priority) => void act("setTaskPriority", [id, pri], undefined, inTasks(id, { pri }));

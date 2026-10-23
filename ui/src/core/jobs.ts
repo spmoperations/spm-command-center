@@ -37,7 +37,10 @@ export const JOBS: JobDefinition[] = [
   { id: "calendar-pull", name: "Gets the meetings coming up", tab: "Meetings", defaultMin: 30, minMin: 10, usesAI: false, needs: "google", live: false },
   { id: "inbox-rules", name: "Marks what is urgent, adds labels", tab: "Inbox", defaultMin: 60, minMin: 5, usesAI: false, needs: null, follows: ["slack-pull", "telegram-pull", "gmail-pull"], live: true },
   { id: "request-finder", name: "Finds messages that ask you for something", tab: "Tasks", defaultMin: 60, minMin: 5, usesAI: false, needs: null, follows: ["slack-pull", "telegram-pull", "gmail-pull"], live: true },
-  // Built and tested, but the Claude account has no credit, so every run fails. Set live to true once it has.
+  // The AI reads what the request finder flagged and keeps only real tasks (see jobs/task-check).
+  { id: "task-check", name: "Checks each flagged message with AI: a real task or not", tab: "Tasks", defaultMin: 30, minMin: 5, usesAI: true, needs: "ai", follows: ["request-finder"], live: true },
+  // Finds tasks the rules cannot, but would repeat what the request finder and the AI check
+  // already do. Off; set live to true to use it as well.
   { id: "task-suggest", name: "Finds other tasks in your messages", tab: "Tasks", defaultMin: 60, minMin: 15, usesAI: true, needs: "ai", live: false },
   { id: "slack-directory-sync", name: "Updates your channel and team list", tab: "Settings", defaultMin: 1440, minMin: 60, usesAI: false, needs: "slack", live: true },
   { id: "outbox-retry", name: "Retries anything that failed to send", tab: "Inbox", defaultMin: 1, minMin: 1, usesAI: false, needs: null, live: true },

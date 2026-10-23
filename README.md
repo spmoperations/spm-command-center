@@ -61,7 +61,7 @@ These are built or planned but left off the screens for now. Each has one line t
 | The Personal side | Asked to be parked for now | `PERSONAL_SIDE = true` in `ui/src/core/config.ts` |
 | Departments (the tab, and the department on tasks and team members) | Nothing yet says which department a task or person belongs to | `DEPARTMENTS = true` in `ui/src/core/config.ts` |
 | Targets (the tab, and the month's pace on Today) | The numbers are the prototype's examples; nothing fills them in yet | `TARGETS = true` in `ui/src/core/config.ts` |
-| Finding tasks with AI | The Claude account has no credit, so every run fails | `live: true` on `task-suggest` in `ui/src/core/jobs.ts` |
+| Finding tasks of its own with AI | It would repeat what the request finder and the AI check already find | `live: true` on `task-suggest` in `ui/src/core/jobs.ts` |
 | Telegram | It needs its two app keys (api_id and api_hash, from my.telegram.org) under Connections → App keys, or in the settings for the first start. With the hosted database it also needs `TELEGRAM_HOSTED=true`, which only the live site sets, so a developer's own account can never end up in the hosted database | Set the keys (and on the live site the switch). The Connections tab then shows the Telegram login. On your own machine use `npm run dev:local`, which keeps the data on your computer |
 
 While the Personal side is off, everything shows as Professional, including anything that was moved to Personal earlier.
@@ -100,7 +100,8 @@ Off for now (see above). When it is on, the switch next to the title shows one s
 | `fathom-pull` | Reads new calls with notes, transcript and action items. Every open action item goes to the Review tab, with who Fathom gave it to | No |
 | `inbox-rules` | Applies the sorting rules after each message check, and clears the Slack and Telegram conversations whose latest message is the owner's (a new message from someone else brings one back; one restored by hand stays). Then clears any conversation with nothing new for 3 days (`INBOX_DAYS` in `ui/src/core/config.ts`): it moves to the cleared list, keeps its suggested task if a request is still waiting, and comes back when something new arrives or the owner restores it | No |
 | `request-finder` | After each message check, finds messages that ask the owner for something (a question, "can you", "please", "following up" and the like) and are still unanswered, and suggests a "Reply to" task. Drops the suggestion once he replies | No |
-| `task-suggest` | Finds other tasks in new messages from conversations the rules rated worth reading | Yes |
+| `task-check` | After the request finder: reads each message it flagged, with the few messages around it (keys and passwords taken out), and keeps only real tasks. Each kept one gets a clear title, a summary, who it is for, how sure the model is and whether it looks done already; what is under 60% sure is set aside, listed at the bottom of the Review tab, and can be put back. Model: `claude-opus-5-5` with adaptive thinking (`ANTHROPIC_MODEL` changes it), 20 messages per request. Until a message is checked it shows on the Review tab as "Not checked by the AI yet" | Yes |
+| `task-suggest` | Finds other tasks in new messages from conversations the rules rated worth reading. Off | Yes |
 | `outbox-retry` | Sends what is waiting in the outbox | No |
 | `telegram-pull` | Reads new Telegram messages with their pictures, stickers and reactions. Runs only on a server that may use Telegram (see What is switched off) | No |
 | `gmail-pull` | Reads the emails that arrived in each connected Gmail inbox since the last run. Runs only on a server that may use Google, like Telegram | No |
@@ -179,7 +180,7 @@ To move to the hosted database: put the string in `ui/.env.local`, run `npm run 
 
 | What | What it needs |
 | --- | --- |
-| Finding tasks in messages with AI | Credit on the Claude account. The check is built and tested, and fails today with "no credit". Requests waiting for a reply are found without it. |
+| The AI check of flagged messages | Credit on the Claude account (the team's AI key). Built and tested against a pretend model; on 23 Oct 2026 the account answered "credit balance is too low". Until there is credit, every flagged request still reaches the Review tab, marked "Not checked by the AI yet". |
 | Sending, fully proven | Switched on with `SENDING_ENABLED=true`. A reply into a thread has been sent and read back from Slack. An assignment by direct message and a post to a channel have only run against a fake Slack so far. |
 | Telegram on the live site, proven | Built and tested against a pretend Telegram. It needs the two app keys and `TELEGRAM_HOSTED=true` on the host, and has not yet been through a real login there. Pictures are kept in the database with no clean-up yet: about 100 KB each. |
 | Pictures from Slack, and sending them | The `files:read` permission (to show them) and `files:write` (to send them) on the Slack app, under User Token Scopes, then a reinstall. A workspace's own custom emoji show by name; their pictures would need `emoji:read`. |

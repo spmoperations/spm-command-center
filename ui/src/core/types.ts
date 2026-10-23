@@ -191,6 +191,10 @@ export interface ReviewItem {
   at: number;
   /** When it was said: the message, or the start of the call. The Review tab shows this week's. */
   raisedAt: number;
+  /** A message the rules flagged, read by the AI: how sure it is that this is a real task. Null when not asked. */
+  confidence: number | null;
+  /** A message the rules flagged that the AI has not read yet. */
+  unchecked: boolean;
   /** Why it may be done already, when something says so. */
   looksDone: string | null;
   src: TaskSource | null;
@@ -425,6 +429,7 @@ export type JobId =
   | "inbox-rules"
   | "request-finder"
   | "task-suggest"
+  | "task-check"
   | "slack-directory-sync"
   | "outbox-retry";
 
@@ -469,6 +474,8 @@ export interface AppState {
   review: ReviewItem[];
   /** Everyone a ticket can be for. */
   people: TeamPerson[];
+  /** What the AI set aside as not a task lately, so anyone can put one back. */
+  setAside: ReviewItem[];
   /** Everyone in the team's Slack, as any login on the team has read it: a ticket can go to any of them. */
   teamSlack: { id: string; name: string }[];
   meetings: Meeting[];

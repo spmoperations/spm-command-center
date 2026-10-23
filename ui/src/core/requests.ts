@@ -1,5 +1,6 @@
-// Spots a message that asks the owner for something. Plain rules, no AI: a question, or one
-// of the phrases people use when they need an answer or an action.
+// Spots a message that asks the owner for something. Plain rules, no AI: a question of a few
+// words, or one of the phrases people use when they need an answer or an action. Small talk does
+// not count. The AI check (jobs/task-check) then reads each one and keeps only real tasks.
 import { addDays, isoDay } from "./dates";
 import { plainPreview } from "./message-format";
 
@@ -19,11 +20,17 @@ const ASKS = [
   /\b(asap|urgent|urgently|deadline)\b/,
 ];
 
-/** True when the message reads as a question or a request. Too short to judge counts as no. */
+/** Greetings, thanks and how-are-yous. Taken out before judging, so "Hey, how are you?" asks for nothing. */
+const SMALL_TALK = /\b(hi|hey|hello|yo|thanks|thank you|thx|ty|ok|okay|cool|nice|great|awesome|congrats|good (morning|afternoon|evening|night)|gm|how are (you|u)( doing)?|how('?s| is) (it going|everything|your day)|what'?s up|sup|lol|haha)\b/g;
+/** A question mark alone counts from this many words: "ok?" and "really? wow" ask for nothing. */
+const QUESTION_WORDS = 4;
+
+/** True when the message reads as a question or a request. Too short to judge, or only small talk, counts as no. */
 export function looksLikeRequest(text: string): boolean {
-  const plain = text.replace(LINKS, " ").toLowerCase();
+  const plain = text.replace(LINKS, " ").toLowerCase().replace(SMALL_TALK, " ");
   if (plain.replace(/[^a-z0-9]/g, "").length < 6) return false;
-  return plain.includes("?") || ASKS.some((ask) => ask.test(plain));
+  const words = plain.split(/\s+/).filter((w) => /[a-z0-9]/.test(w)).length;
+  return ASKS.some((ask) => ask.test(plain)) || (plain.includes("?") && words >= QUESTION_WORDS);
 }
 
 const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
