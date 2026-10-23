@@ -6,7 +6,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { Seg } from "@/components/bits";
-import { defaultNotify, NotifyChoice, PersonSelect, SourceBox, ticketName, TicketForm } from "@/components/Tickets";
+import { assignable, defaultNotify, NotifyChoice, PersonPicker, SourceBox, ticketName, TicketForm, type Assignable } from "@/components/Tickets";
 import { conversationPage, REJECT_REASONS, type RejectReason } from "@/core/config";
 import { stamp } from "@/core/dates";
 import type { ReviewItem, TicketInput } from "@/core/types";
@@ -15,7 +15,7 @@ import { acceptReview, mergeReview, openConversation, rejectReview, reviewMany, 
 const REASONS = Object.entries(REJECT_REASONS) as [RejectReason, string][];
 
 /** What a card would make, as it stands on screen. */
-const asInput = (g: ReviewItem, today: string, people: App["state"]["people"]): TicketInput => ({
+const asInput = (g: ReviewItem, today: string, people: Assignable[]): TicketInput => ({
   title: g.title,
   description: g.why,
   assignee: g.assignee,
@@ -26,9 +26,9 @@ const asInput = (g: ReviewItem, today: string, people: App["state"]["people"]): 
   notify: defaultNotify(people, g.assignee),
 });
 
-function ReviewCard({ g, app, picked, onPick, clients }: { g: ReviewItem; app: App; picked: boolean; onPick(on: boolean, range: boolean): void; clients: string[] }) {
+function ReviewCard({ g, app, people, picked, onPick, clients }: { g: ReviewItem; app: App; people: Assignable[]; picked: boolean; onPick(on: boolean, range: boolean): void; clients: string[] }) {
   const { state, today, now } = app;
-  const [card, setCard] = useState<TicketInput>(() => asInput(g, today, state.people));
+  const [card, setCard] = useState<TicketInput>(() => asInput(g, today, people));
   const [editing, setEditing] = useState(false);
   const [merging, setMerging] = useState(false);
   const [into, setInto] = useState("");
@@ -41,19 +41,28 @@ function ReviewCard({ g, app, picked, onPick, clients }: { g: ReviewItem; app: A
         <span className="pill tk-new">New task</span>
         {g.looksDone && <span className="pill tk-done">Looks done already</span>}
         <span className="muted rv-when">
-          {g.source.from}&apos;s {g.source.label.split(" · ")[0]} · {stamp(g.at, now)}
+          Found in {g.source.from}&apos;s {g.source.label.split(" · ")[0]} · {stamp(g.at, now)}
         </span>
       </div>
       <h3 className="rv-title">{g.title}</h3>
       <div className="rv-fields">
-        <PersonSelect people={state.people} value={card.assignee} onChange={(assignee) => set({ assignee, notify: defaultNotify(state.people, assignee) })} />
-        <input className="f" list="rv-clients" value={card.client} placeholder="Client" aria-label="Client" onChange={(e) => set({ client: e.target.value })} />
-        <input className="f" type="date" value={card.due} aria-label="Due date" onChange={(e) => set({ due: e.target.value })} />
+        <div className="rv-field rv-who">
+          <span className="label">Assigned to: whose task</span>
+          <PersonPicker people={people} value={card.assignee} onChange={(assignee) => set({ assignee, notify: defaultNotify(people, assignee) })} />
+        </div>
+        <div className="rv-field">
+          <span className="label">Client</span>
+          <input className="f" list="rv-clients" value={card.client} placeholder="Client" aria-label="Client" onChange={(e) => set({ client: e.target.value })} />
+        </div>
+        <div className="rv-field">
+          <span className="label">Due</span>
+          <input className="f" type="date" value={card.due} aria-label="Due date" onChange={(e) => set({ due: e.target.value })} />
+        </div>
       </div>
-      <NotifyChoice people={state.people} assignee={card.assignee} value={card.notify ?? []} onChange={(notify) => set({ notify })} />
-      {g.forName && !state.people.some((p) => p.id === card.assignee) && (
+      <NotifyChoice people={people} assignee={card.assignee} value={card.notify ?? []} onChange={(notify) => set({ notify })} />
+      {g.forName && !people.some((p) => p.id === card.assignee) && (
         <p className="rv-for">
-          The source says it is for <strong>{g.forName}</strong>, who is not on the team list yet. Add them in Settings, or pick someone.
+          {g.source.label.startsWith("Fathom") ? "Fathom" : "The message"} says it is for <strong>{g.forName}</strong>. Type their name above to give it to them, from the team list, Slack or Telegram.
         </p>
       )}
       <SourceBox
@@ -120,15 +129,7 @@ function ReviewCard({ g, app, picked, onPick, clients }: { g: ReviewItem; app: A
         </div>
       )}
       {editing && (
-        <TicketForm
-          heading="Edit and accept"
-          initial={card}
-          people={state.people}
-          clients={clients}
-          submit="Accept"
-          onSubmit={(input) => acceptReview(g.id, input)}
-          onCancel={() => setEditing(false)}
-        />
+        <TicketForm heading="Edit and accept" initial={card} people={people} clients={clients} submit="Accept" onSubmit={(input) => acceptReview(g.id, input)} onCancel={() => setEditing(false)} />
       )}
     </article>
   );
@@ -143,6 +144,7 @@ export default function ReviewPage() {
   if (!app) return null;
   const { state } = app;
   const clients = state.projects;
+  const people = assignable(state);
   const logins = state.people.filter((p) => p.login);
   const shown = state.review.filter((g) => from === "all" || (from === "mine" ? g.mine : `user:${g.fromUser}` === from));
   const ids = shown.filter((g) => picked.has(g.id)).map((g) => g.id);
@@ -231,7 +233,7 @@ export default function ReviewPage() {
       ) : (
         <div className="rv-list">
           {shown.map((g) => (
-            <ReviewCard key={g.id} g={g} app={app} clients={clients} picked={picked.has(g.id)} onPick={(on, range) => pick(g.id, on, range)} />
+            <ReviewCard key={g.id} g={g} app={app} people={people} clients={clients} picked={picked.has(g.id)} onPick={(on, range) => pick(g.id, on, range)} />
           ))}
         </div>
       )}

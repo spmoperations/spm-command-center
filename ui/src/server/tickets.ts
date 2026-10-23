@@ -11,7 +11,7 @@
 // Telegram from the account of whoever assigned it, through the outbox like every message.
 import crypto from "node:crypto";
 import { PRIORITY_NAME, REJECT_REASONS, SOURCE_NAME, TICKET_PREFIX, TICKET_STATUS_NAME, TICKET_STATUSES, type RejectReason } from "@/core/config";
-import { assignmentText, CHANNEL_PICK } from "@/core/delegation";
+import { assignmentText, CHANNEL_PICK, SLACK_PICK } from "@/core/delegation";
 import { isoDay, parseDay } from "@/core/dates";
 import { norm } from "@/core/rules";
 import type { Mode, Priority, ReviewItem, Source, SourceNote, Task, TaskSource, TeamPerson, TicketEvent, TicketInput, TicketStatus } from "@/core/types";
@@ -223,11 +223,19 @@ export function personNamed(people: TeamPerson[], name: string | null | undefine
 }
 
 /** Who a suggestion would go to: whoever the source says, else whoever's inbox or call it is. */
-function guessFor(g: SuggestionRow, people: TeamPerson[]): { forName: string | null; assignee: string | null } {
+/** Someone in the team's Slack, who can be picked straight from there: "slack:<id>". */
+type InSlack = { id: string; name: string };
+
+function guessFor(g: SuggestionRow, people: TeamPerson[], slack: InSlack[] = []): { forName: string | null; assignee: string | null } {
   const item = g.src_type === "meeting" ? (g.mt_items?.[actionIndex(g.dedupe_key) ?? -1] ?? null) : null;
   if (item && !item.mine) {
     const named = g.for_name ?? (item.who && item.who !== "Unassigned" ? item.who : null);
-    return { forName: named, assignee: personNamed(people, named)?.id ?? null };
+    // Someone on the team first; else the same name in Slack, who joins the team list once it is theirs.
+    const inSlack = personNamed(
+      slack.map((u) => ({ id: `${SLACK_PICK}${u.id}`, name: u.name, role: "", login: false, slack: true, telegram: false })),
+      named,
+    );
+    return { forName: named, assignee: personNamed(people, named)?.id ?? inSlack?.id ?? null };
   }
   return { forName: g.for_name, assignee: `user:${g.owner_id}` };
 }
@@ -242,9 +250,9 @@ const SUGGESTION_SQL = `select s.id, s.owner_id, s.title, s.why, s.project, s.pr
   left join meetings mt on s.src_type = 'meeting' and mt.owner_id = s.owner_id and mt.id = s.src_id
   where s.owner_id in (${TEAM_USERS}) and s.status = 'new' and (s.mode = 'professional' or s.owner_id = $2)`;
 
-function toReview(g: SuggestionRow, viewer: string, people: TeamPerson[]): ReviewItem {
+function toReview(g: SuggestionRow, viewer: string, people: TeamPerson[], slack: InSlack[]): ReviewItem {
   const item = g.src_type === "meeting" ? (g.mt_items?.[actionIndex(g.dedupe_key) ?? -1] ?? null) : null;
-  const guess = guessFor(g, people);
+  const guess = guessFor(g, people, slack);
   return {
     id: g.id,
     title: g.title,
@@ -271,7 +279,42 @@ function toReview(g: SuggestionRow, viewer: string, people: TeamPerson[]): Revie
 /** Every open suggestion across the team, newest first, as the review shows it. */
 export async function reviewItems(db: Db, viewer: string, people: TeamPerson[]): Promise<ReviewItem[]> {
   const rows = await db.query<SuggestionRow>(`${SUGGESTION_SQL} order by s.created_at desc, s.id limit 300`, [TEAM, viewer]);
-  return rows.map((g) => toReview(g, viewer, people));
+  const slack = rows.some((g) => g.src_type === "meeting") ? await teamSlack(db) : [];
+  return rows.map((g) => toReview(g, viewer, people, slack));
+}
+
+/** Everyone in the team's Slack, as the team's logins have read it: they share one workspace. */
+export async function teamSlack(db: Db): Promise<InSlack[]> {
+  return db.query<InSlack>(`select distinct on (id) id, name from slack_users where owner_id in (${TEAM_USERS}) and not is_bot and not deleted order by id, (owner_id = $1) desc`, [TEAM]);
+}
+
+/**
+ * The team-list row for someone picked straight from Slack ("slack:<id>") or from the assigner's
+ * own Telegram chats ("telegram:<id>"). Someone already on the list is that row; anyone else is
+ * added, so they are there next time and can be told.
+ */
+async function memberFor(c: Ctx, pick: string): Promise<string> {
+  const slack = pick.startsWith(SLACK_PICK);
+  const id = pick.slice(pick.indexOf(":") + 1);
+  if (!(slack ? /^[UW][A-Z0-9]{2,20}$/ : /^-?\d{1,20}$/).test(id)) throw new Error("Who should it be for?");
+  const [known] = slack
+    ? await c.db.query<{ id: string }>("select id from team_members where owner_id = $1 and slack_user_id = $2 order by position limit 1", [TEAM, id])
+    : await c.db.query<{ id: string }>("select id from team_members where owner_id = $1 and telegram_id = $2 order by position limit 1", [TEAM, id]);
+  if (known) return known.id;
+  const [found] = slack
+    ? await c.db.query<{ name: string }>(`select name from slack_users where owner_id in (${TEAM_USERS}) and id = $2 and not is_bot and not deleted order by (owner_id = $1) desc limit 1`, [TEAM, id])
+    : await c.db.query<{ name: string }>("select from_name as name from conversations where owner_id = $1 and source = 'telegram' and direct and external_id = $2 limit 1", [c.ownerId, id]);
+  if (!found) throw new Error(slack ? "That person is no longer in Slack." : "That person is not one of your Telegram chats.");
+  const memberId = uid("u");
+  await c.db.run("insert into team_members (id, owner_id, name, role, depts, handles, slack_user_id, telegram_id, position) values ($1, $2, $3, 'Team member', '[]', '[]', $4, $5, $6)", [
+    memberId,
+    TEAM,
+    found.name,
+    slack ? id : null,
+    slack ? null : id,
+    Math.floor(c.now.getTime() / 1000),
+  ]);
+  return memberId;
 }
 
 // ---------- The board ----------
@@ -486,6 +529,7 @@ async function assignTo(c: Ctx, taskId: string, assignee: string | null, notify:
     await c.db.run(`update tasks set assignee_user = $3, ${unhand} where owner_id = $1 and id = $2`, [TEAM, taskId, userId]);
     return `Assigned to ${user.name}`;
   }
+  if (assignee.startsWith(SLACK_PICK) || assignee.startsWith("telegram:")) assignee = `member:${await memberFor(c, assignee)}`;
   if (!assignee.startsWith("member:")) throw new Error("Who should it be for?");
   const [member] = await c.db.query<{
     id: string;
@@ -600,7 +644,7 @@ async function accept(c: Ctx, g: SuggestionRow, input: Partial<TicketInput> | un
     },
     `Made a ticket from ${fromWhere(note)}`,
   );
-  const assignee = edits.assignee !== undefined ? edits.assignee : guessFor(g, people).assignee;
+  const assignee = edits.assignee !== undefined ? edits.assignee : guessFor(g, people, g.src_type === "meeting" ? await teamSlack(c.db) : []).assignee;
   await logEvent(c, ticket, await assignTo(c, ticket, assignee, edits.notify ?? []));
   await c.db.run("update suggestions set status = 'accepted', ticket_id = $3 where owner_id = $1 and id = $2", [g.owner_id, g.id, ticket]);
   return ticket;

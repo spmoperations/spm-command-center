@@ -56,7 +56,8 @@ export function Combo({ id, value, onChange, choices, placeholder, none, label }
   useEffect(() => {
     if (!open) return;
     const away = (e: Event) => {
-      if (!list.current?.contains(e.target as Node)) close();
+      // A resize comes from the window, which is not part of the page: that closes it too.
+      if (!(e.target instanceof Node) || !list.current?.contains(e.target)) close();
     };
     window.addEventListener("scroll", away, true);
     window.addEventListener("resize", away);

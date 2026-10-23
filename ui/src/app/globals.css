@@ -908,6 +908,21 @@ select.f.tk-done { background: var(--good-soft); color: var(--good); }
 .tk-history summary { cursor: pointer; font-size: 13px; font-weight: 600; }
 .tk-history ol { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13px; }
 .person-tg { margin-top: 6px; max-width: 260px; }
+.rv-field { display: grid; gap: 3px; min-width: 160px; }
+.rv-field .label { font-size: 11.5px; }
+.rv-who { min-width: 260px; flex: 1 1 260px; max-width: 360px; }
+.tk-for { display: flex; gap: 6px; align-items: center; font-size: 12.5px; flex-wrap: wrap; }
+.tk-people { display: grid; gap: 12px; }
+.tk-person { display: grid; gap: 8px; padding: 12px 14px; }
+.tk-person-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 13.5px; }
+.tk-person-head .tk-who { font-size: 15px; }
+.tk-person-head .due { font-family: inherit; }
+.tk-lines { list-style: none; margin: 0; padding: 0; display: grid; }
+.tk-line { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 7px 0; border-top: 1px solid var(--line); }
+.tk-line .tk-title { flex: 1 1 240px; }
+.tk-line.done .tk-title { color: var(--muted); text-decoration: line-through; }
+.tk-line .due { font-size: 12.5px; }
+.tk-from { font-size: 12px; }
 @media (max-width: 560px) {
   .tk-grid { grid-template-columns: minmax(0, 1fr); }
   .rv-acts { align-items: flex-start; }

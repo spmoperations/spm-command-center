@@ -19,7 +19,7 @@ import { isUploadKey, telegramAvatarIds, type StoredPicture } from "./media";
 import { SLACK_FILES_SCOPE, SLACK_NEEDS_UPLOAD, SLACK_UPLOAD_SCOPE, type Fetch } from "./slack";
 import { hashPassword, MIN_PASSWORD, teamLogins } from "./team";
 import { telegramBlocked } from "./telegram";
-import { insertTicket, logEvent, reviewItems, sourceNote, TEAM, teamPeople, teamTickets, TICKET_ACTIONS } from "./tickets";
+import { insertTicket, logEvent, reviewItems, sourceNote, TEAM, teamPeople, teamSlack, teamTickets, TICKET_ACTIONS } from "./tickets";
 import type { Db } from "./db";
 import { OWNER_ID } from "./owner";
 
@@ -415,6 +415,7 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     tasks,
     review: await reviewItems(db, ownerId, people),
     people,
+    teamSlack: (await teamSlack(db)).sort((a, b) => a.name.localeCompare(b.name)),
     suggestions: suggestions.map((g) => ({
       // A call from last week suggests a date that has passed: offer today instead.
       id: g.id, title: g.title, mode: g.mode, dept: g.dept, project: g.project, pri: g.pri, due: g.status === "new" && g.due < today ? today : g.due, why: g.why,

@@ -3,9 +3,10 @@
 // What the board and the review share: the ticket form, who a ticket can be for, and where it came from.
 
 import { useEffect, useState } from "react";
+import { Combo } from "@/components/Combo";
 import { Avatar } from "@/components/MessageText";
 import { PRIORITIES, PRIORITY_NAME, TICKET_PREFIX, TICKET_STATUS_NAME, TICKET_STATUSES } from "@/core/config";
-import type { SourceNote, TeamPerson, TicketInput, TicketStatus } from "@/core/types";
+import type { AppState, SourceNote, TeamPerson, TicketInput, TicketStatus } from "@/core/types";
 
 export const ticketName = (n: number | null | undefined) => (n ? `${TICKET_PREFIX}-${n}` : "");
 
@@ -23,43 +24,49 @@ export function StatusPill({ status }: { status: TicketStatus }) {
   return <span className={`pill tk-${status}`}>{TICKET_STATUS_NAME[status]}</span>;
 }
 
-/** Who a ticket is for, as a list to pick from: the logins, then the team list. */
-export function PersonSelect({
-  people,
-  value,
-  onChange,
-  label = "Assignee",
-  allowNobody = true,
-}: {
-  people: TeamPerson[];
-  value: string | null;
-  onChange(id: string | null): void;
-  label?: string;
-  allowNobody?: boolean;
-}) {
-  const logins = people.filter((p) => p.login);
-  const members = people.filter((p) => !p.login);
+/** Someone a ticket can be given to, and the heading they are listed under. */
+export type Assignable = TeamPerson & { group: string };
+
+/**
+ * Everyone a ticket can be for, as the picker lists them: the Command Center logins, the team
+ * list, then anyone else in Slack or in the signed-in person's own Telegram chats. Someone picked
+ * from Slack or Telegram joins the team list, so they can be told and are there next time.
+ */
+export function assignable(state: AppState): Assignable[] {
+  const logins = state.people.filter((p) => p.login);
+  const members = state.people.filter((p) => !p.login);
+  const loginNames = new Set(logins.map((p) => p.name.toLowerCase()));
+  const onSlack = new Set(state.team.map((p) => p.slackUserId).filter(Boolean));
+  const onTelegram = new Set(state.team.map((p) => p.telegramId).filter(Boolean));
+  const telegram = new Map<string, string>();
+  for (const c of state.inbox) if (c.source === "telegram" && c.direct && c.id.startsWith("telegram:")) telegram.set(c.id.slice("telegram:".length), c.from);
+  return [
+    ...logins.map((p) => ({ ...p, group: "Command Center" })),
+    ...members.map((p) => ({ ...p, group: "Team list" })),
+    ...(state.teamSlack.length ? state.teamSlack : state.slackPeople)
+      .filter((u) => !onSlack.has(u.id) && !loginNames.has(u.name.toLowerCase()))
+      .map((u) => ({ id: `slack:${u.id}`, name: u.name, role: "", login: false, slack: true, telegram: false, group: "Slack" })),
+    ...[...telegram].filter(([id]) => !onTelegram.has(id)).map(([id, name]) => ({ id: `telegram:${id}`, name, role: "", login: false, slack: false, telegram: true, group: "Telegram" })),
+  ];
+}
+
+/** The name of whoever a ticket is for, and what they are: "Jeremy Moser", "Luis Ramos (team list)". */
+export function whose(people: Assignable[], id: string | null): string {
+  const p = people.find((x) => x.id === id);
+  return p ? p.name : "Nobody yet";
+}
+
+/** Who a ticket is for: type a few letters of anyone's name, or pick. */
+export function PersonPicker({ people, value, onChange, label = "Assigned to" }: { people: Assignable[]; value: string | null; onChange(id: string | null): void; label?: string }) {
   return (
-    <select className="f" value={value ?? ""} aria-label={label} onChange={(e) => onChange(e.target.value || null)}>
-      {allowNobody && <option value="">Nobody yet</option>}
-      <optgroup label="With a login">
-        {logins.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.name}
-          </option>
-        ))}
-      </optgroup>
-      {members.length > 0 && (
-        <optgroup label="Team list">
-          {members.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-              {p.role ? ` · ${p.role}` : ""}
-            </option>
-          ))}
-        </optgroup>
-      )}
-    </select>
+    <Combo
+      value={value ?? ""}
+      label={label}
+      placeholder="Type a name: Command Center, team, Slack or Telegram…"
+      none="Nobody yet"
+      choices={people.map((p) => ({ value: p.id, label: p.group === "Team list" && p.role ? `${p.name} · ${p.role}` : p.name, group: p.group }))}
+      onChange={(v) => onChange(v || null)}
+    />
   );
 }
 
@@ -150,7 +157,7 @@ export function TicketForm({
 }: {
   heading: string;
   initial: TicketInput;
-  people: TeamPerson[];
+  people: Assignable[];
   clients: string[];
   submit: string;
   onSubmit(input: TicketInput): Promise<boolean>;
@@ -197,8 +204,8 @@ export function TicketForm({
         </label>
         <div className="tk-grid">
           <label className="tk-field">
-            <span className="label">Assignee</span>
-            <PersonSelect people={people} value={t.assignee} onChange={(assignee) => set({ assignee, notify: defaultNotify(people, assignee) })} />
+            <span className="label">Assigned to: whose task it is</span>
+            <PersonPicker people={people} value={t.assignee} onChange={(assignee) => set({ assignee, notify: defaultNotify(people, assignee) })} />
           </label>
           <label className="tk-field">
             <span className="label">Client</span>

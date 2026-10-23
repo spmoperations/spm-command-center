@@ -466,6 +466,8 @@ export interface AppState {
   review: ReviewItem[];
   /** Everyone a ticket can be for. */
   people: TeamPerson[];
+  /** Everyone in the team's Slack, as any login on the team has read it: a ticket can go to any of them. */
+  teamSlack: { id: string; name: string }[];
   meetings: Meeting[];
   /** The connected Google Calendars, from the start of last week to three weeks ahead. */
   calendar: CalendarItem[];

@@ -1,11 +1,13 @@
 "use client";
 
-// The board: the team's tickets in four columns, Open, In progress, Waiting and Done. Shared by
-// everyone with a login. A ticket comes from the review, from a chat or a call, or is made here.
+// The board: the team's tickets in four columns, Open, In progress, Waiting and Done, or person by
+// person, to follow up with whoever has them. Shared by everyone with a login. A ticket comes from
+// the review, from a chat or a call, or is made here.
 
 import Link from "next/link";
 import { useState } from "react";
-import { SourceBox, sourceApp, StatusPill, ticketName, TicketForm, Who } from "@/components/Tickets";
+import { Seg } from "@/components/bits";
+import { assignable, SourceBox, sourceApp, StatusPill, ticketName, TicketForm, Who } from "@/components/Tickets";
 import { conversationPage, PERSONAL_SIDE, MODE_NAME, TICKET_STATUS_NAME, TICKET_STATUSES } from "@/core/config";
 import { dueLabel, stamp } from "@/core/dates";
 import type { Task, TicketInput, TicketStatus } from "@/core/types";
@@ -13,6 +15,24 @@ import { createTicket, openConversation, openTask, showMeeting, toggleTask, upda
 
 /** Done tickets shown before "Show all": the newest. */
 const DONE_SHOWN = 20;
+/** Which way the board was last looked at, kept in this browser only. */
+const VIEW_KEY = "cc-board-view";
+type View = "status" | "person";
+
+/** Whose a ticket is, as a name: a person, a whole Slack channel, or nobody yet. */
+const holderOf = (t: Task) => t.assigneeName ?? (t.delegatedTo?.name || null);
+
+function StatusSelect({ t }: { t: Task }) {
+  return (
+    <select className={`f tk-status-select tk-${t.status}`} value={t.status} aria-label={`Status of ${t.title}`} onChange={(e) => void updateTicket(t.id, { status: e.target.value as TicketStatus })}>
+      {TICKET_STATUSES.map((s) => (
+        <option key={s} value={s}>
+          {TICKET_STATUS_NAME[s]}
+        </option>
+      ))}
+    </select>
+  );
+}
 
 const asInput = (t: Task): TicketInput => ({
   title: t.title,
@@ -56,26 +76,101 @@ function TicketCard({ t, app, onOpen }: { t: Task; app: App; onOpen(): void }) {
       </div>
       {t.project && <span className="chip">{t.project}</span>}
       <div className="tk-meta">
-        <select
-          className={`f tk-status-select tk-${t.status}`}
-          value={t.status}
-          aria-label={`Status of ${t.title}`}
-          onChange={(e) => void updateTicket(t.id, { status: e.target.value as TicketStatus })}
-        >
-          {TICKET_STATUSES.map((s) => (
-            <option key={s} value={s}>
-              {TICKET_STATUS_NAME[s]}
-            </option>
-          ))}
-        </select>
-        <Who name={t.assigneeName ?? (t.delegatedTo?.name || null)} />
+        <StatusSelect t={t} />
         <span className={`due ${t.done ? "" : due.tone}`}>{t.done ? "Done" : due.text}</span>
+      </div>
+      <div className="tk-for">
+        <span className="muted">Assigned to</span> <Who name={holderOf(t)} />
       </div>
       <div className="tk-foot">
         <span className="muted">{sourceApp(t.source)}</span>
         <span className="tk-num">{ticketName(t.number)}</span>
       </div>
     </article>
+  );
+}
+
+/** One ticket as a line, in a person's list. */
+function TicketLine({ t, app, onOpen }: { t: Task; app: App; onOpen(): void }) {
+  const due = dueLabel(t.due, app.today);
+  return (
+    <li className={`tk-line ${t.done ? "done" : ""}`}>
+      <input type="checkbox" className="tk-tick" checked={t.done} aria-label={`Done: ${t.title}`} onChange={(e) => toggleTask(t.id, e.target.checked)} />
+      <span className="tk-num">{ticketName(t.number)}</span>
+      <button className="tk-title" onClick={onOpen}>
+        {t.title}
+      </button>
+      {t.project && <span className="chip">{t.project}</span>}
+      <StatusSelect t={t} />
+      <span className={`due ${t.done ? "" : due.tone}`}>{t.done ? "Done" : due.text}</span>
+      <span className="muted tk-from">{sourceApp(t.source)}</span>
+    </li>
+  );
+}
+
+/** Everything one person has: what is open, soonest due first, and what they have done. */
+function PersonTickets({ name, list, app, onOpen }: { name: string | null; list: Task[]; app: App; onOpen(id: string): void }) {
+  const [showDone, setShowDone] = useState(false);
+  const open = list.filter((t) => !t.done).sort((a, b) => a.due.localeCompare(b.due) || (a.number ?? 0) - (b.number ?? 0));
+  const done = list.filter((t) => t.done).sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0));
+  const overdue = open.filter((t) => t.due < app.today).length;
+  const waiting = open.filter((t) => t.status === "waiting").length;
+  return (
+    <div className="panel tk-person">
+      <div className="tk-person-head">
+        <Who name={name} />
+        <span className="muted">
+          {open.length} open
+          {overdue > 0 && <strong className="due overdue"> · {overdue} overdue</strong>}
+          {waiting > 0 && ` · ${waiting} waiting on someone`}
+          {done.length > 0 && ` · ${done.length} done`}
+        </span>
+      </div>
+      {open.length > 0 ? (
+        <ul className="tk-lines">
+          {open.map((t) => (
+            <TicketLine key={t.id} t={t} app={app} onOpen={() => onOpen(t.id)} />
+          ))}
+        </ul>
+      ) : (
+        <p className="muted tk-empty">Nothing open.</p>
+      )}
+      {done.length > 0 && (
+        <button className="sg-more" aria-expanded={showDone} onClick={() => setShowDone(!showDone)}>
+          {showDone ? "Hide what is done" : `Show the ${done.length} done`}
+        </button>
+      )}
+      {showDone && (
+        <ul className="tk-lines">
+          {done.map((t) => (
+            <TicketLine key={t.id} t={t} app={app} onOpen={() => onOpen(t.id)} />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** The board person by person: Jeremy first, then everyone with a login, the team list, and what is nobody's yet. */
+function ByPerson({ tickets, app, onOpen }: { tickets: Task[]; app: App; onOpen(id: string): void }) {
+  const rank = new Map(app.state.people.map((p, k) => [p.id, k]));
+  const groups = new Map<string, { name: string | null; list: Task[] }>();
+  for (const t of tickets) {
+    const key = t.assignee ?? (t.delegatedTo ? `channel:${t.delegatedTo.personId}` : "none");
+    const group = groups.get(key) ?? { name: holderOf(t), list: [] };
+    group.list.push(t);
+    groups.set(key, group);
+  }
+  const order = (key: string) => (key === "none" ? 2_000 : (rank.get(key) ?? 1_000));
+  return (
+    <div className="tk-people">
+      {[...groups]
+        .sort(([a], [b]) => order(a) - order(b))
+        .map(([key, g]) => (
+          <PersonTickets key={key} name={g.name} list={g.list} app={app} onOpen={onOpen} />
+        ))}
+      {groups.size === 0 && <p className="muted">No tickets yet.</p>}
+    </div>
   );
 }
 
@@ -88,7 +183,7 @@ function TicketDetail({ t, app, onClose }: { t: Task; app: App; onClose(): void 
     <TicketForm
       heading={`${ticketName(t.number)} · ${t.title}`}
       initial={before}
-      people={state.people}
+      people={assignable(state)}
       clients={state.projects}
       submit="Save"
       assigned
@@ -151,6 +246,21 @@ export default function TasksPage() {
   const [adding, setAdding] = useState(false);
   const [allDone, setAllDone] = useState(false);
   const [over, setOver] = useState<TicketStatus | null>(null);
+  const [view, setViewNow] = useState<View>(() => {
+    try {
+      return window.localStorage.getItem(VIEW_KEY) === "person" ? "person" : "status";
+    } catch {
+      return "status";
+    }
+  });
+  const setView = (v: View) => {
+    setViewNow(v);
+    try {
+      window.localStorage.setItem(VIEW_KEY, v);
+    } catch {
+      // Not kept: it starts by status next time.
+    }
+  };
   if (!app) return null;
   const { state, ui, today } = app;
   const me = `user:${state.me.id}`;
@@ -179,17 +289,26 @@ export default function TasksPage() {
           </div>
         </div>
         <div className="tk-filters">
-          <select className="f" value={who} aria-label="Whose tickets" onChange={(e) => setWho(e.target.value)}>
-            <option value="all">Everyone</option>
-            <option value={me}>Mine</option>
+          <Seg
+            value={view}
+            label="Show the board"
+            onChange={setView}
+            options={[
+              ["status", "By status"],
+              ["person", "By person"],
+            ]}
+          />
+          <select className="f" value={who} aria-label="Whose tasks" onChange={(e) => setWho(e.target.value)}>
+            <option value="all">Everyone&apos;s tasks</option>
+            <option value={me}>My tasks</option>
             {state.people
               .filter((p) => p.id !== me)
               .map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.name}
+                  {p.name}&apos;s tasks
                 </option>
               ))}
-            <option value="none">Nobody yet</option>
+            <option value="none">Nobody&apos;s yet</option>
           </select>
           <select className="f" value={client} aria-label="Client" onChange={(e) => setClient(e.target.value)}>
             <option value="all">All clients</option>
@@ -203,44 +322,48 @@ export default function TasksPage() {
         </div>
       </div>
 
-      <div className="tk-board">
-        {TICKET_STATUSES.map((s) => {
-          const list = column(s);
-          const visible = s === "done" && !allDone ? list.slice(0, DONE_SHOWN) : list;
-          return (
-            <div
-              key={s}
-              className={`panel tk-col ${over === s ? "over" : ""}`}
-              onDragOver={(e) => {
-                e.preventDefault();
-                setOver(s);
-              }}
-              onDragLeave={() => setOver(null)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setOver(null);
-                const id = e.dataTransfer.getData("text/plain");
-                const t = state.tasks.find((x) => x.id === id);
-                if (t && t.status !== s) void updateTicket(id, { status: s });
-              }}
-            >
-              <div className="tk-col-head">
-                <StatusPill status={s} />
-                <span className="num muted">{list.length}</span>
+      {view === "person" ? (
+        <ByPerson tickets={shown} app={app} onOpen={(id) => openTask(id)} />
+      ) : (
+        <div className="tk-board">
+          {TICKET_STATUSES.map((s) => {
+            const list = column(s);
+            const visible = s === "done" && !allDone ? list.slice(0, DONE_SHOWN) : list;
+            return (
+              <div
+                key={s}
+                className={`panel tk-col ${over === s ? "over" : ""}`}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setOver(s);
+                }}
+                onDragLeave={() => setOver(null)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setOver(null);
+                  const id = e.dataTransfer.getData("text/plain");
+                  const t = state.tasks.find((x) => x.id === id);
+                  if (t && t.status !== s) void updateTicket(id, { status: s });
+                }}
+              >
+                <div className="tk-col-head">
+                  <StatusPill status={s} />
+                  <span className="num muted">{list.length}</span>
+                </div>
+                {visible.map((t) => (
+                  <TicketCard key={t.id} t={t} app={app} onOpen={() => openTask(t.id)} />
+                ))}
+                {list.length === 0 && <p className="muted tk-empty">{s === "open" ? "Nothing open." : "Nothing here."}</p>}
+                {s === "done" && list.length > DONE_SHOWN && (
+                  <button className="sg-more" onClick={() => setAllDone(!allDone)}>
+                    {allDone ? "Show fewer" : `Show all ${list.length}`}
+                  </button>
+                )}
               </div>
-              {visible.map((t) => (
-                <TicketCard key={t.id} t={t} app={app} onOpen={() => openTask(t.id)} />
-              ))}
-              {list.length === 0 && <p className="muted tk-empty">{s === "open" ? "Nothing open." : "Nothing here."}</p>}
-              {s === "done" && list.length > DONE_SHOWN && (
-                <button className="sg-more" onClick={() => setAllDone(!allDone)}>
-                  {allDone ? "Show fewer" : `Show all ${list.length}`}
-                </button>
-              )}
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
 
       {adding && (
         <TicketForm
@@ -254,7 +377,7 @@ export default function TasksPage() {
             status: "open",
             pri: "mid",
           }}
-          people={state.people}
+          people={assignable(state)}
           clients={state.projects}
           submit="Add"
           onSubmit={(input) => createTicket(input)}

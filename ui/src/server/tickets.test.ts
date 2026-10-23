@@ -240,3 +240,49 @@ describe("the words of a suggestion", () => {
     expect((await loadState(db, OWNER_ID, now)).tasks.find((t) => t.title === "Reply to Maya")!.description).toBe("Maya Chen asked in a direct message and is still waiting for Jeremy Moser's reply.");
   });
 });
+
+describe("who a ticket can be for", () => {
+  it("is anyone in Slack or in the assigner's Telegram chats too, who then join the team list and are told there", async () => {
+    await db.run("insert into slack_users (owner_id, id, name, is_bot, deleted) values ($1, 'UMAYA', 'Maya Chen', false, false)", [OWNER_ID]);
+    await db.run(
+      "insert into conversations (id, owner_id, source, external_id, from_name, ctx, direct, last_text, last_at) values ('telegram:42', $1, 'telegram', '42', 'Dana Whitfield', 'Direct message', true, 'Hi', $2)",
+      [alex, NOW],
+    );
+    for (const provider of ["slack", "telegram"])
+      await db.run("insert into connections (owner_id, provider, secret, label, connected_at) values ($1, $2, $3, 'Alex', $4)", [alex, provider, seal("a-login"), NOW]);
+
+    // Alex picks Maya from the team's Slack, and Dana from her own Telegram.
+    await act(alex, "createTicket", ticket({ title: "Send the brand assets", assignee: "slack:UMAYA", notify: ["slack"] }));
+    await act(alex, "createTicket", ticket({ title: "Confirm the shoot", assignee: "telegram:42", notify: ["telegram"] }));
+    expect(await db.query("select name, slack_user_id, telegram_id from team_members where owner_id = $1 and name in ('Maya Chen', 'Dana Whitfield') order by name", [OWNER_ID])).toEqual([
+      { name: "Dana Whitfield", slack_user_id: null, telegram_id: "42" },
+      { name: "Maya Chen", slack_user_id: "UMAYA", telegram_id: null },
+    ]);
+    expect(
+      (await db.query<{ source: string; target: string; to_name: string }>("select source, target, to_name from outbox where owner_id = $1 order by source", [alex])).map((o) => [
+        o.source,
+        o.target,
+        o.to_name,
+      ]),
+    ).toEqual([
+      ["slack", "UMAYA", "Maya Chen"],
+      ["telegram", "42", "Dana Whitfield"],
+    ]);
+    // Picked again, they are the same row: nobody is on the list twice.
+    await act(alex, "createTicket", ticket({ title: "And the logo", assignee: "slack:UMAYA" }));
+    expect((await db.query("select id from team_members where owner_id = $1 and slack_user_id = 'UMAYA'", [OWNER_ID])).length).toBe(1);
+    expect(await refused(alex, "createTicket", ticket({ assignee: "telegram:99" }))).toBe("That person is not one of your Telegram chats.");
+    expect(await refused(alex, "createTicket", ticket({ assignee: "slack:UNOBODY" }))).toBe("That person is no longer in Slack.");
+  });
+
+  it("starts a call's action item with the person Fathom named when they are in Slack", async () => {
+    await db.run("insert into slack_users (owner_id, id, name, is_bot, deleted) values ($1, 'UMAYA', 'Maya Chen', false, false)", [OWNER_ID]);
+    await db.run("insert into meetings (id, owner_id, external_id, title, started_at, action_items) values ('fathom:7', $1, '7', 'Weekly', $2, $3)", [
+      OWNER_ID,
+      NOW,
+      JSON.stringify([{ text: "Send the assets", who: "Maya Chen", mine: false, done: false }]),
+    ]);
+    await suggestion("s_call", { title: "Send the assets", src: ["meeting", "fathom:7"], key: "fathom:7:action:0" });
+    expect((await loadState(db, alex, now)).review.map((g) => [g.forName, g.assignee])).toEqual([["Maya Chen", "slack:UMAYA"]]);
+  });
+});
