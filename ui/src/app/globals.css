@@ -728,6 +728,9 @@ img.avatar { object-fit: cover; background: var(--surface-2); }
 .chip.etag-payment { background: var(--good-soft); color: var(--good); }
 .chip.etag-respond { background: var(--warn-soft); color: var(--warn); }
 .chip.etag-newsletter { background: var(--surface-2); color: var(--muted); border-color: var(--line); }
+.chip.etag-invite { background: var(--accent-soft); color: var(--accent); }
+.chip.etag-notification { background: var(--surface-2); color: var(--muted); border-color: var(--line); }
+.chip.etag-receipt { background: var(--surface-2); color: var(--good); border-color: var(--line); }
 .email-tools { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
 .email-tools input[type="search"] { flex: 1 1 200px; min-width: 0; }
 /* The views stay on one line each; on a narrow screen the row of them scrolls sideways. */

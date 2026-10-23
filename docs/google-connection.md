@@ -144,7 +144,13 @@ emails** beside the account. Both also end the login on Google's side.
   - **Newsletters:** mailings and Gmail's Promotions, Social and Forums tabs. Notices from
     the tools the team uses (Calendly, Slack, Zoom, Google and the like), receipts and
     invitations are not newsletters.
-  - **Other:** none of these. An email can have two tags, such as a person sending an invoice.
+  - **Invites:** calendar invitations and their answers.
+  - **Notifications:** notices from those tools, emails from no-reply and other automatic
+    addresses, and sign-in or security emails from a company address.
+  - **Receipts:** money already paid, refunded or paid out.
+  - **Other:** none of these: mostly emails from people where the account is only copied. An
+    email can have two tags, such as a person sending an invoice. A person's own email is never an
+    invite, a notification or a receipt.
 
   Tick several rows (or the box above the list for all of them) to mark them done, put them
   back, or set their priority at once. The Inbox has the same.

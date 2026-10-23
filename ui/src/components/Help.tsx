@@ -130,7 +130,7 @@ const GUIDES: Record<string, Guide> = {
   },
   emails: {
     title: "Emails",
-    intro: "Your Gmail, sorted into what needs you: emails to answer, money to pay, newsletters, and the rest.",
+    intro: "Your Gmail, sorted into what needs you: emails to answer and money to pay first, then newsletters, invitations, notices and receipts.",
     parts: [
       { head: FOR, body: <p>Seeing at a glance which emails need you, without going through the whole inbox in Gmail.</p> },
       {
@@ -153,7 +153,16 @@ const GUIDES: Record<string, Guide> = {
               <strong>Newsletters</strong>: mailings, and Gmail&apos;s Promotions, Social and Forums tabs. Notices from tools, receipts and invitations are not newsletters.
             </li>
             <li>
-              <strong>Other</strong>: everything else, such as notices from tools, calendar invitations, receipts, and emails you are only copied on.
+              <strong>Invites</strong>: calendar invitations and their answers. Answer them on the Calendar tab.
+            </li>
+            <li>
+              <strong>Notifications</strong>: notices from tools such as Slack, Calendly or Google, emails from no-reply addresses, and sign-in or security emails from a company.
+            </li>
+            <li>
+              <strong>Receipts</strong>: money already paid, refunded or paid out.
+            </li>
+            <li>
+              <strong>Other</strong>: what is left, mostly emails from people where you are only copied.
             </li>
           </ul>
         ),

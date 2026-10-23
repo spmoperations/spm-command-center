@@ -2,7 +2,7 @@ export type Source = "slack" | "telegram" | "gmail";
 /** Services a person connects themselves, from the Connections tab. */
 export type Provider = "slack" | "telegram" | "fathom" | "google";
 /** What an email is about, for the filter on the Emails tab (see core/email-tags). */
-export type EmailTag = "respond" | "payment" | "newsletter";
+export type EmailTag = "respond" | "payment" | "newsletter" | "invite" | "notification" | "receipt";
 export type Priority = "high" | "mid" | "low";
 /** Business line of a conversation: the agency or the consulting offer. */
 export type Line = "agency" | "consulting";

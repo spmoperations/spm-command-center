@@ -1,12 +1,13 @@
-// Tags on emails, for the views on the Emails tab: Must respond, Payments, Newsletters. Plain
-// rules on the subject, the text, who sent it and who it was to. No AI.
+// Tags on emails, for the views on the Emails tab: Must respond, Payments and Newsletters first,
+// then Invites, Notifications and Receipts for what is left that has a kind of its own. Plain rules
+// on the subject, the text, who sent it and who it was to. No AI.
 import type { EmailTag } from "./types";
 
-export const EMAIL_TAGS: EmailTag[] = ["respond", "payment", "newsletter"];
+export const EMAIL_TAGS: EmailTag[] = ["respond", "payment", "newsletter", "invite", "notification", "receipt"];
 /** The tag on one email. */
-export const EMAIL_TAG_NAME: Record<EmailTag, string> = { respond: "Must respond", payment: "Payment", newsletter: "Newsletter" };
+export const EMAIL_TAG_NAME: Record<EmailTag, string> = { respond: "Must respond", payment: "Payment", newsletter: "Newsletter", invite: "Invite", notification: "Notification", receipt: "Receipt" };
 /** The view of all the emails with that tag. */
-export const EMAIL_TAG_VIEW: Record<EmailTag, string> = { respond: "Must respond", payment: "Payments", newsletter: "Newsletters" };
+export const EMAIL_TAG_VIEW: Record<EmailTag, string> = { respond: "Must respond", payment: "Payments", newsletter: "Newsletters", invite: "Invites", notification: "Notifications", receipt: "Receipts" };
 
 /** Services whose emails are about money: card payments, banks, invoicing, payouts. Matched on the sender's domain. */
 const PAYMENT_SENDERS = [
@@ -68,6 +69,11 @@ export interface TaggedEmail {
 /** Addresses a company sends from, not a person: a tool's receipts, a help desk, a team inbox. */
 const ROLE_SENDER = /^(billing|receipts?|invoices?|invoicing|payments?|accounts?|accounting|orders?|support|help|helpdesk|care|info|news|newsletters?|updates?|notify|notifications?|alerts?|security|team|hello|hi|admin|system|automated|mailer|marketing|service|feedback|calendar-notification|drive-shares-dm-noreply|comments-noreply|no-?reply|do-?not-?reply)([+.-][^@]*)?@/i;
 
+/** Addresses no person writes from: a tool telling of something that happened. */
+const AUTOMATED = /^(no-?reply|do-?not-?reply|notifications?|notify|alerts?|calendar-notification|drive-shares-dm-noreply|comments-noreply|mailer(-daemon)?|automated|bounces?)([+.-][^@]*)?@/i;
+/** A sign-in, a code or a security warning: in a subject, from a company or an automatic address. */
+const SECURITY = /\b(sign[- ]?in|log[- ]?in|login code|verification code|verify your|security (alert|notice)|new device|password (reset|changed)|one[- ]time (code|password)|two-factor|2fa)\b/i;
+
 const domainOf = (email: string) => email.toLowerCase().split("@")[1] ?? "";
 const fromAny = (senders: string[], domains: string[]) => senders.some((s) => domains.some((d) => domainOf(s) === d || domainOf(s).endsWith(`.${d}`)));
 
@@ -98,5 +104,11 @@ export function emailTags(e: TaggedEmail): EmailTag[] {
   // A receipt from a billing address is something that happened, not something to read.
   const receipt = settled || (SETTLED.test(text) && billingSender);
   if (!tags.length && mailing && !receipt && !invitation && !fromAny(e.senders, NOTIFIERS)) tags.push("newsletter");
+  if (tags.length) return tags;
+  // What is left that has a kind of its own: an invitation, money already settled, or a notice.
+  // A person's own email is none of these, and stays in Other.
+  if (invitation) return ["invite"];
+  if (receipt) return ["receipt"];
+  if (fromAny(e.senders, NOTIFIERS) || AUTOMATED.test(latest) || (SECURITY.test(e.subject) && (ROLE_SENDER.test(latest) || e.bulk))) return ["notification"];
   return tags;
 }
