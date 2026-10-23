@@ -7,7 +7,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { Seg } from "@/components/bits";
-import { assignable, SourceBox, sourceApp, StatusPill, ticketName, TicketForm, Who } from "@/components/Tickets";
+import { assignable, reviewThisWeek, SourceBox, sourceApp, StatusPill, ticketName, TicketForm, Who } from "@/components/Tickets";
 import { conversationPage, PERSONAL_SIDE, MODE_NAME, TICKET_STATUS_NAME, TICKET_STATUSES } from "@/core/config";
 import { dueLabel, stamp } from "@/core/dates";
 import type { Task, TicketInput, TicketStatus } from "@/core/types";
@@ -285,7 +285,7 @@ export default function TasksPage() {
           <div className="muted" style={{ fontSize: 14 }}>
             {PERSONAL_SIDE && `${MODE_NAME[ui.mode]}: `}
             {open.length} open {open.length === 1 ? "ticket" : "tickets"}
-            {overdue > 0 && ` · ${overdue} overdue`} · <Link href="/review">{state.review.length} to review</Link>
+            {overdue > 0 && ` · ${overdue} overdue`} · <Link href="/review">{reviewThisWeek(state.review, app.now).length} to review this week</Link>
           </div>
         </div>
         <div className="tk-filters">

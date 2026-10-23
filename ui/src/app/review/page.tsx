@@ -6,9 +6,9 @@
 import Link from "next/link";
 import { useState } from "react";
 import { Seg } from "@/components/bits";
-import { assignable, defaultNotify, NotifyChoice, PersonPicker, SourceBox, ticketName, TicketForm, type Assignable } from "@/components/Tickets";
+import { assignable, defaultNotify, NotifyChoice, PersonPicker, reviewThisWeek, SourceBox, ticketName, TicketForm, type Assignable } from "@/components/Tickets";
 import { conversationPage, REJECT_REASONS, type RejectReason } from "@/core/config";
-import { stamp } from "@/core/dates";
+import { sinceMonday, stamp } from "@/core/dates";
 import type { ReviewItem, TicketInput } from "@/core/types";
 import { acceptReview, mergeReview, openConversation, rejectReview, reviewMany, showMeeting, useApp, type App } from "@/store/store";
 
@@ -41,7 +41,7 @@ function ReviewCard({ g, app, people, picked, onPick, clients }: { g: ReviewItem
         <span className="pill tk-new">New task</span>
         {g.looksDone && <span className="pill tk-done">Looks done already</span>}
         <span className="muted rv-when">
-          Found in {g.source.from}&apos;s {g.source.label.split(" · ")[0]} · {stamp(g.at, now)}
+          Found in {g.source.from}&apos;s {g.source.label.split(" · ")[0]} · {stamp(g.raisedAt, now)}
         </span>
       </div>
       <h3 className="rv-title">{g.title}</h3>
@@ -146,7 +146,11 @@ export default function ReviewPage() {
   const clients = state.projects;
   const people = assignable(state);
   const logins = state.people.filter((p) => p.login);
-  const shown = state.review.filter((g) => from === "all" || (from === "mine" ? g.mine : `user:${g.fromUser}` === from));
+  // Only what was said this week, since Monday.
+  const week = reviewThisWeek(state.review, app.now);
+  const older = state.review.length - week.length;
+  const monday = new Date(sinceMonday(app.now)).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+  const shown = week.filter((g) => from === "all" || (from === "mine" ? g.mine : `user:${g.fromUser}` === from));
   const ids = shown.filter((g) => picked.has(g.id)).map((g) => g.id);
   const all = shown.length > 0 && ids.length === shown.length;
   const pick = (id: string, on: boolean, range: boolean) => {
@@ -170,7 +174,8 @@ export default function ReviewPage() {
         <div>
           <h2>Review</h2>
           <div className="muted" style={{ fontSize: 14 }}>
-            {state.review.length} flagged from the team&apos;s chats, emails and calls. Accept what is worth doing: it goes on the <Link href="/tasks">board</Link>.
+            {week.length} raised this week, since {monday}, in the team&apos;s chats, emails and calls. Accept what is worth doing: it goes on the <Link href="/tasks">board</Link>.
+            {older > 0 && ` ${older} from before Monday ${older === 1 ? "is" : "are"} not shown.`}
           </div>
         </div>
         <Seg
@@ -228,7 +233,7 @@ export default function ReviewPage() {
 
       {shown.length === 0 ? (
         <div className="panel hint-panel">
-          <strong>Nothing to review.</strong> Requests in everyone&apos;s chats and emails, and action items from calls, show here as they come in.
+          <strong>Nothing to review this week.</strong> Requests in everyone&apos;s chats and emails, and action items from calls, show here as they come in.
         </div>
       ) : (
         <div className="rv-list">

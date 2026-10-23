@@ -6,9 +6,13 @@ import { useEffect, useState } from "react";
 import { Combo } from "@/components/Combo";
 import { Avatar } from "@/components/MessageText";
 import { PRIORITIES, PRIORITY_NAME, TICKET_PREFIX, TICKET_STATUS_NAME, TICKET_STATUSES } from "@/core/config";
-import type { AppState, SourceNote, TeamPerson, TicketInput, TicketStatus } from "@/core/types";
+import { sinceMonday } from "@/core/dates";
+import type { AppState, ReviewItem, SourceNote, TeamPerson, TicketInput, TicketStatus } from "@/core/types";
 
 export const ticketName = (n: number | null | undefined) => (n ? `${TICKET_PREFIX}-${n}` : "");
+
+/** What the Review tab shows: what was said this week, since Monday. Older suggestions are kept, not shown. */
+export const reviewThisWeek = (review: ReviewItem[], now: Date) => review.filter((g) => g.raisedAt >= sinceMonday(now));
 
 /** How a team member is told a ticket is theirs, unless the form says otherwise: Slack when they have it, else Telegram. */
 export function defaultNotify(people: TeamPerson[], assignee: string | null): NonNullable<TicketInput["notify"]> {

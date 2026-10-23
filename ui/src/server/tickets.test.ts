@@ -286,3 +286,18 @@ describe("who a ticket can be for", () => {
     expect((await loadState(db, alex, now)).review.map((g) => [g.forName, g.assignee])).toEqual([["Maya Chen", "slack:UMAYA"]]);
   });
 });
+
+describe("when a suggestion was raised", () => {
+  it("is when the message was sent or the call started, not when the check found it", async () => {
+    await suggestion("s_msg");
+    await db.run("insert into meetings (id, owner_id, external_id, title, started_at, action_items) values ('fathom:8', $1, '8', 'Weekly', $2, $3)", [
+      OWNER_ID,
+      NOW - 3 * 86_400_000,
+      JSON.stringify([{ text: "Send the assets", who: "Jeremy Moser", mine: true, done: false }]),
+    ]);
+    await suggestion("s_call", { title: "Send the assets", src: ["meeting", "fathom:8"], key: "fathom:8:action:0" });
+    const raised = Object.fromEntries((await loadState(db, alex, now)).review.map((g) => [g.id, g.raisedAt]));
+    // The seeded message from Maya was sent a minute before NOW; the call started three days before.
+    expect(raised).toEqual({ s_msg: NOW - 60_000, s_call: NOW - 3 * 86_400_000 });
+  });
+});

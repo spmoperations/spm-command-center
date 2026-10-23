@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addDays, clockWithZone, dueLabel, weekStart } from "./dates";
+import { addDays, clockWithZone, dueLabel, sinceMonday, weekStart } from "./dates";
 import { assignmentText, candidates, canAssign, canAssignInChat, fitFor, taskStatus } from "./delegation";
 import { clampInterval, describeInterval, isDue, JOBS, liveJobs, nextRunAt, waitUntil } from "./jobs";
 import { looksLikeRequest, requestDue, requestSummary, whereAsked } from "./requests";
@@ -283,6 +283,8 @@ describe("dates", () => {
     expect(addDays(now, 0)).toBe("2026-10-08");
     expect(addDays(now, -8)).toBe("2026-09-30");
     expect(weekStart(now)).toBe("2026-10-05");
+    // The Review tab's week: from Monday at midnight, where the page is looked at.
+    expect(new Date(sinceMonday(now)).toString()).toBe(new Date(2026, 9, 5).toString());
   });
 
   it("labels a due date relative to today", () => {

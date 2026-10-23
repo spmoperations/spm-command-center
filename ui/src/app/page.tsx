@@ -8,6 +8,7 @@ import { conversationPage, DEPARTMENTS, PRIORITY_RANK, SUGGESTED_TASKS, TARGETS 
 import { ago, daysInMonth, isoDay, parseDay, weekStart } from "@/core/dates";
 import { plainPreview } from "@/core/message-format";
 import { isMine } from "@/core/delegation";
+import { reviewThisWeek } from "@/components/Tickets";
 import { evalMetric, formatValue, STATUS_TEXT, type MetricEval } from "@/core/targets";
 import type { Task } from "@/core/types";
 import {
@@ -196,7 +197,7 @@ export default function TodayPage() {
 
   const clock = { day: now.getDate(), dim: daysInMonth(now) };
   const pace = state.metrics.filter((m) => !m.parent).map((m) => evalMetric(m, state.metrics, state.logs, clock));
-  const suggested = state.review.length;
+  const suggested = reviewThisWeek(state.review, now).length;
   const monthName = now.toLocaleString("en-US", { month: "long" });
 
   return (
@@ -279,7 +280,7 @@ export default function TodayPage() {
           )}
           {SUGGESTED_TASKS && suggested > 0 && (
             <div className="sg-foot">
-              {suggested} flagged from the team&apos;s chats and calls. <Link href="/review">Review</Link>
+              {suggested} raised this week in the team&apos;s chats and calls. <Link href="/review">Review</Link>
             </div>
           )}
         </div>

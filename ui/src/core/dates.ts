@@ -16,6 +16,9 @@ export function addDays(from: Date, n: number): string {
   return isoDay(d);
 }
 
+/** The moment this week began, Monday at midnight, where the page is looked at. */
+export const sinceMonday = (now: Date) => parseDay(weekStart(now)).getTime();
+
 /** Monday of the week `d` falls in. */
 export function weekStart(d: Date): string {
   const s = new Date(d);

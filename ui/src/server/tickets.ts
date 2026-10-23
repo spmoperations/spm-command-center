@@ -206,6 +206,8 @@ interface SuggestionRow extends SourceParts {
   delegable: boolean;
   created_at: number;
   from_name: string;
+  m_at: number | null;
+  mt_at: number | null;
 }
 
 const firstName = (name: string) => norm(name).split(" ")[0] ?? "";
@@ -242,7 +244,7 @@ function guessFor(g: SuggestionRow, people: TeamPerson[], slack: InSlack[] = [])
 
 const SUGGESTION_SQL = `select s.id, s.owner_id, s.title, s.why, s.project, s.pri, s.due, s.mode, s.src_type, s.src_id, s.dedupe_key, s.for_name, s.looks_done, s.delegable, s.created_at, u.name as from_name,
          c.source as c_source, c.ctx as c_ctx, c.from_name as c_from, c.external_id as c_chat, c.last_text as c_text,
-         m.body as m_body, mt.title as mt_title, mt.url as mt_url, mt.action_items as mt_items
+         m.body as m_body, m.at as m_at, mt.title as mt_title, mt.url as mt_url, mt.action_items as mt_items, mt.started_at as mt_at
   from suggestions s
   join users u on u.id = s.owner_id
   left join conversations c on s.src_type = 'message' and c.owner_id = s.owner_id and c.id = s.src_id
@@ -269,6 +271,7 @@ function toReview(g: SuggestionRow, viewer: string, people: TeamPerson[], slack:
     due: g.due,
     pri: g.pri,
     at: Number(g.created_at),
+    raisedAt: Number(g.m_at ?? g.mt_at ?? g.created_at),
     looksDone: g.looks_done ?? (item?.done ? "Marked done in Fathom." : null),
     src: g.src_type && g.src_id ? { type: g.src_type, id: g.src_id } : null,
     fromUser: g.owner_id,

@@ -187,7 +187,10 @@ export interface ReviewItem {
   client: string;
   due: string;
   pri: Priority;
+  /** When it was flagged. */
   at: number;
+  /** When it was said: the message, or the start of the call. The Review tab shows this week's. */
+  raisedAt: number;
   /** Why it may be done already, when something says so. */
   looksDone: string | null;
   src: TaskSource | null;
