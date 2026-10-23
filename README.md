@@ -181,7 +181,6 @@ To move to the hosted database: put the string in `ui/.env.local`, run `npm run 
 
 | What | What it needs |
 | --- | --- |
-| The AI check of flagged messages on the live site | An AI key with credit saved as the team's key (Connections). On 24 Oct 2026 the key saved on the live site still answered "credit balance is too low"; the second key, used on a developer's machine, has credit. Until then every flagged request still reaches the Review tab, marked "Not checked by the AI yet". |
 | Sending, fully proven | Switched on with `SENDING_ENABLED=true`. A reply into a thread has been sent and read back from Slack. An assignment by direct message and a post to a channel have only run against a fake Slack so far. |
 | Telegram on the live site, proven | Built and tested against a pretend Telegram. It needs the two app keys and `TELEGRAM_HOSTED=true` on the host, and has not yet been through a real login there. Pictures are kept in the database with no clean-up yet: about 100 KB each. |
 | Pictures from Slack, and sending them | The `files:read` permission (to show them) and `files:write` (to send them) on the Slack app, under User Token Scopes, then a reinstall. A workspace's own custom emoji show by name; their pictures would need `emoji:read`. |
