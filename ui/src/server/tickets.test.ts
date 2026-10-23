@@ -301,3 +301,15 @@ describe("when a suggestion was raised", () => {
     expect(raised).toEqual({ s_msg: NOW - 60_000, s_call: NOW - 3 * 86_400_000 });
   });
 });
+
+describe("the team's clients", () => {
+  it("keeps a client typed in once for the whole team, whatever its capitals, next to those tickets already name", async () => {
+    await act(alex, "addClient", "  Northwind   Labs ");
+    await act(OWNER_ID, "addClient", "northwind labs");
+    expect(await refused(alex, "addClient", "   ")).toBe("Type the client's name.");
+    await act(alex, "createTicket", ticket({ client: "Acme Co" }));
+    // Harbor Realty is the seeded task's; Northwind Labs was added by hand, once; Acme Co is on a ticket.
+    for (const who of [OWNER_ID, alex]) expect((await loadState(db, who, now)).clients).toEqual(["Acme Co", "Harbor Realty", "Northwind Labs"]);
+    expect(await db.query("select name from clients where owner_id = $1", [OWNER_ID])).toEqual([{ name: "Northwind Labs" }]);
+  });
+});

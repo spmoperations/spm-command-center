@@ -217,7 +217,7 @@ describe("the database change", () => {
 
 describe("every query", () => {
   // Tables holding one person's rows. Picking one out by id alone could reach someone else's.
-  const OWNED = "connections|jobs|slack_users|slack_channels|conversations|messages|meetings|team_members|tasks|suggestions|rules|metrics|metric_logs|focus_items|quick_links|outbox|media|telegram_chats|calendar_events|important|google_accounts|ticket_events";
+  const OWNED = "connections|jobs|slack_users|slack_channels|conversations|messages|meetings|team_members|tasks|suggestions|rules|metrics|metric_logs|focus_items|quick_links|outbox|media|telegram_chats|calendar_events|important|google_accounts|ticket_events|clients";
 
   it("names whose rows it reads or changes", () => {
     const files: string[] = [];

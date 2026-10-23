@@ -184,7 +184,7 @@ function TicketDetail({ t, app, onClose }: { t: Task; app: App; onClose(): void 
       heading={`${ticketName(t.number)} · ${t.title}`}
       initial={before}
       people={assignable(state)}
-      clients={state.projects}
+      clients={state.clients}
       submit="Save"
       assigned
       onSubmit={async (after) => {
@@ -378,7 +378,7 @@ export default function TasksPage() {
             pri: "mid",
           }}
           people={assignable(state)}
-          clients={state.projects}
+          clients={state.clients}
           submit="Add"
           onSubmit={(input) => createTicket(input)}
           onCancel={() => setAdding(false)}

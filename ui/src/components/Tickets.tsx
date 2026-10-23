@@ -2,11 +2,12 @@
 
 // What the board and the review share: the ticket form, who a ticket can be for, and where it came from.
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Combo } from "@/components/Combo";
 import { Avatar } from "@/components/MessageText";
 import { PRIORITIES, PRIORITY_NAME, TICKET_PREFIX, TICKET_STATUS_NAME, TICKET_STATUSES } from "@/core/config";
 import { sinceMonday } from "@/core/dates";
+import { addClient } from "@/store/store";
 import type { AppState, ReviewItem, SourceNote, TeamPerson, TicketInput, TicketStatus } from "@/core/types";
 
 export const ticketName = (n: number | null | undefined) => (n ? `${TICKET_PREFIX}-${n}` : "");
@@ -58,6 +59,137 @@ export function assignable(state: AppState): Assignable[] {
 export function whose(people: Assignable[], id: string | null): string {
   const p = people.find((x) => x.id === id);
   return p ? p.name : "Nobody yet";
+}
+
+/**
+ * The client a ticket is filed under, shown as a tag. Click it to change it, or × to take it off.
+ * Typing narrows the team's clients; Enter picks the highlighted one, or keeps a new name as a
+ * client of the team's, so it can be picked next time.
+ */
+export function ClientPicker({ value, clients, onChange, label = "Client" }: { value: string; clients: string[]; onChange(client: string): void; label?: string }) {
+  const listId = useId();
+  const box = useRef<HTMLInputElement>(null);
+  const list = useRef<HTMLUListElement>(null);
+  const [editing, setEditing] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [active, setActive] = useState(0);
+  const [place, setPlace] = useState<React.CSSProperties>({});
+  const words = typed.trim().toLowerCase();
+  const matches = words ? clients.filter((c) => c.toLowerCase().includes(words)) : clients;
+  const isNew = Boolean(words) && !clients.some((c) => c.toLowerCase() === words);
+  // What the list offers: the clients that match, then the typed name as a new one.
+  const options: { name: string; add: boolean }[] = [...matches.map((name) => ({ name, add: false })), ...(isNew ? [{ name: typed.trim().replace(/\s+/g, " "), add: true }] : [])];
+
+  const close = () => {
+    setOpen(false);
+    setEditing(false);
+    setTyped("");
+    setActive(0);
+  };
+  const show = () => {
+    const at = box.current?.getBoundingClientRect();
+    if (at) {
+      const width = Math.max(at.width, 240);
+      const below = window.innerHeight - at.bottom > 260 || at.top < 260;
+      setPlace(below ? { left: Math.max(8, at.left), width, top: at.bottom + 4 } : { left: Math.max(8, at.left), width, bottom: window.innerHeight - at.top + 4 });
+    }
+    setOpen(true);
+  };
+  const choose = (option: { name: string; add: boolean }) => {
+    if (option.add) void addClient(option.name);
+    onChange(option.name);
+    close();
+  };
+  // The list sits on the window: once the page moves it would no longer be under its box.
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: Event) => {
+      if (!(e.target instanceof Node) || !list.current?.contains(e.target)) close();
+    };
+    window.addEventListener("scroll", away, true);
+    window.addEventListener("resize", away);
+    return () => {
+      window.removeEventListener("scroll", away, true);
+      window.removeEventListener("resize", away);
+    };
+  }, [open]);
+  useEffect(() => {
+    if (editing) box.current?.focus();
+  }, [editing]);
+
+  if (value && !editing) {
+    return (
+      <span className="client-pick">
+        <span className="tag client-tag">
+          <button type="button" className="client-name" title="Change the client" onClick={() => setEditing(true)}>
+            {value}
+          </button>
+          <button type="button" aria-label={`Take ${value} off`} title="No client" onClick={() => onChange("")}>
+            ×
+          </button>
+        </span>
+      </span>
+    );
+  }
+  return (
+    <span className="client-pick">
+      <input
+        ref={box}
+        className="f"
+        role="combobox"
+        aria-label={label}
+        aria-expanded={open}
+        aria-controls={listId}
+        aria-autocomplete="list"
+        autoComplete="off"
+        placeholder={value || "Client: type or pick…"}
+        value={typed}
+        onFocus={show}
+        onBlur={close}
+        onChange={(e) => {
+          setTyped(e.target.value);
+          setActive(0);
+          if (!open) show();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+            e.preventDefault();
+            if (!open) show();
+            setActive((at) => (options.length ? (at + (e.key === "ArrowDown" ? 1 : -1) + options.length) % options.length : 0));
+          } else if (e.key === "Enter") {
+            // Enter picks or adds; it must not send the form the box sits in.
+            e.preventDefault();
+            const option = options[active] ?? (isNew ? options.at(-1) : undefined);
+            if (option) choose(option);
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            close();
+            box.current?.blur();
+          }
+        }}
+      />
+      {open && options.length > 0 && (
+        <ul className="combo-list" id={listId} role="listbox" ref={list} style={place}>
+          {options.map((option, k) => (
+            <li
+              key={`${option.add ? "+" : ""}${option.name}`}
+              role="option"
+              aria-selected={option.name === value}
+              className={`combo-option ${k === active ? "active" : ""}`}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                choose(option);
+              }}
+              onMouseEnter={() => setActive(k)}
+            >
+              {option.add ? `Add “${option.name}” as a new client` : option.name}
+            </li>
+          ))}
+        </ul>
+      )}
+    </span>
+  );
 }
 
 /** Who a ticket is for: type a few letters of anyone's name, or pick. */
@@ -211,10 +343,10 @@ export function TicketForm({
             <span className="label">Assigned to: whose task it is</span>
             <PersonPicker people={people} value={t.assignee} onChange={(assignee) => set({ assignee, notify: defaultNotify(people, assignee) })} />
           </label>
-          <label className="tk-field">
+          <div className="tk-field">
             <span className="label">Client</span>
-            <input className="f" list="tk-clients" value={t.client} placeholder="Client or project" onChange={(e) => set({ client: e.target.value })} />
-          </label>
+            <ClientPicker value={t.client} clients={clients} onChange={(client) => set({ client })} />
+          </div>
           <label className="tk-field">
             <span className="label">Due date</span>
             <input className="f" type="date" required value={t.due} onChange={(e) => set({ due: e.target.value })} />
@@ -240,11 +372,6 @@ export function TicketForm({
             </select>
           </label>
         </div>
-        <datalist id="tk-clients">
-          {clients.map((c) => (
-            <option key={c} value={c} />
-          ))}
-        </datalist>
         {(!assigned || t.assignee !== initial.assignee) && <NotifyChoice people={people} assignee={t.assignee} value={t.notify ?? []} onChange={(notify) => set({ notify })} />}
         {children}
         <div className="tk-form-foot">

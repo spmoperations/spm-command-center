@@ -43,6 +43,23 @@ export const ticketName = (n: number | null | undefined) => (n ? `${TICKET_PREFI
 /** The SQL that names everyone with a login on the team, the owner among them. Takes the team as $1. */
 const TEAM_USERS = "select id from users where id = $1 or (login_email is not null and password_hash is not null)";
 
+/** The team's clients: those added by name, and those tickets, calls and chats already name. Each once, whatever its capitals. */
+export async function teamClients(db: Db, viewer: string): Promise<string[]> {
+  const rows = await db.query<{ name: string }>(
+    `select name from clients where owner_id = $1
+     union all select project from tasks where owner_id = $1 and mode = 'professional'
+     union all select project from meetings where owner_id = $2
+     union all select project from conversations where owner_id = $2 and mode = 'professional'`,
+    [TEAM, viewer],
+  );
+  const seen = new Map<string, string>();
+  for (const { name } of rows) {
+    const clean = name?.trim();
+    if (clean && !seen.has(clean.toLowerCase())) seen.set(clean.toLowerCase(), clean);
+  }
+  return [...seen.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+}
+
 /** Everyone with a login on the team, the owner first. */
 export async function teamUsers(db: Db): Promise<{ id: string; name: string }[]> {
   return db.query<{ id: string; name: string }>(`select id, name from users where id in (${TEAM_USERS}) order by (id = $1) desc, created_at, id`, [TEAM]);
@@ -757,6 +774,12 @@ export const TICKET_ACTIONS: Record<string, (c: Ctx, ...args: any[]) => Promise<
   async rejectSuggestion(c, id: string, reason: RejectReason) {
     const g = await heldSuggestion(c, id);
     if (g) await reject(c, g, reason);
+  },
+  /** Keeps a client name for the team, so it can be picked next time. A name already there, in any capitals, is left as it is. */
+  async addClient(c, name: string) {
+    const clean = tidy(name, 120).replace(/\s+/g, " ");
+    if (!clean) throw new Error("Type the client's name.");
+    await c.db.run("insert into clients (owner_id, name, created_at) values ($1, $2, $3) on conflict do nothing", [TEAM, clean, c.now.getTime()]);
   },
   /** Puts back a suggestion the AI set aside as not a task. It is not asked about again. */
   async restoreSuggestion(c, id: string) {

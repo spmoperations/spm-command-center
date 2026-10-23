@@ -19,7 +19,7 @@ import { isUploadKey, telegramAvatarIds, type StoredPicture } from "./media";
 import { SLACK_FILES_SCOPE, SLACK_NEEDS_UPLOAD, SLACK_UPLOAD_SCOPE, type Fetch } from "./slack";
 import { hashPassword, MIN_PASSWORD, teamLogins } from "./team";
 import { telegramBlocked } from "./telegram";
-import { insertTicket, logEvent, reviewItems, setAsideItems, sourceNote, TEAM, teamPeople, teamSlack, teamTickets, TICKET_ACTIONS } from "./tickets";
+import { insertTicket, logEvent, reviewItems, setAsideItems, sourceNote, TEAM, teamClients, teamPeople, teamSlack, teamTickets, TICKET_ACTIONS } from "./tickets";
 import type { Db } from "./db";
 import { OWNER_ID } from "./owner";
 
@@ -415,6 +415,7 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     tasks,
     review: await reviewItems(db, ownerId, people),
     setAside: await setAsideItems(db, ownerId, people, now.getTime()),
+    clients: await teamClients(db, ownerId),
     people,
     teamSlack: (await teamSlack(db)).sort((a, b) => a.name.localeCompare(b.name)),
     suggestions: suggestions.map((g) => ({

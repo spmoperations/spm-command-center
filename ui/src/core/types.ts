@@ -476,6 +476,8 @@ export interface AppState {
   people: TeamPerson[];
   /** What the AI set aside as not a task lately, so anyone can put one back. */
   setAside: ReviewItem[];
+  /** Every client a ticket can be filed under: the team's list, and those that tickets, calls and chats already name. */
+  clients: string[];
   /** Everyone in the team's Slack, as any login on the team has read it: a ticket can go to any of them. */
   teamSlack: { id: string; name: string }[];
   meetings: Meeting[];

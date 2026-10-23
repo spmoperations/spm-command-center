@@ -6,7 +6,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { Seg } from "@/components/bits";
-import { assignable, defaultNotify, NotifyChoice, PersonPicker, reviewThisWeek, SourceBox, ticketName, TicketForm, type Assignable } from "@/components/Tickets";
+import { assignable, ClientPicker, defaultNotify, NotifyChoice, PersonPicker, reviewThisWeek, SourceBox, ticketName, TicketForm, type Assignable } from "@/components/Tickets";
 import { conversationPage, REJECT_REASONS, type RejectReason } from "@/core/config";
 import { sinceMonday, stamp } from "@/core/dates";
 import type { ReviewItem, TicketInput } from "@/core/types";
@@ -62,7 +62,7 @@ function ReviewCard({ g, app, people, picked, onPick, clients }: { g: ReviewItem
         </div>
         <div className="rv-field">
           <span className="label">Client</span>
-          <input className="f" list="rv-clients" value={card.client} placeholder="Client" aria-label="Client" onChange={(e) => set({ client: e.target.value })} />
+          <ClientPicker value={card.client} clients={clients} onChange={(client) => set({ client })} />
         </div>
         <div className="rv-field">
           <span className="label">Due</span>
@@ -153,7 +153,7 @@ export default function ReviewPage() {
   const [reason, setReason] = useState<RejectReason>("not_task");
   if (!app) return null;
   const { state } = app;
-  const clients = state.projects;
+  const clients = state.clients;
   const people = assignable(state);
   const logins = state.people.filter((p) => p.login);
   // Only what was said this week, since Monday.
@@ -239,12 +239,6 @@ export default function ReviewPage() {
           )}
         </div>
       )}
-
-      <datalist id="rv-clients">
-        {clients.map((c) => (
-          <option key={c} value={c} />
-        ))}
-      </datalist>
 
       {shown.length === 0 ? (
         <div className="panel hint-panel">

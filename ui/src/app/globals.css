@@ -915,6 +915,12 @@ select.f.tk-done { background: var(--good-soft); color: var(--good); }
 .tk-history summary { cursor: pointer; font-size: 13px; font-weight: 600; }
 .tk-history ol { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13px; }
 .person-tg { margin-top: 6px; max-width: 260px; }
+.client-pick { display: inline-flex; align-items: center; min-height: 32px; min-width: 0; }
+.client-pick input.f { width: 100%; min-width: 160px; }
+.tk-field .client-pick { display: flex; }
+.client-tag { padding: 3px 4px 3px 4px; font-size: 13px; }
+.client-tag .client-name { font-size: 13px; font-weight: 600; padding: 0 2px 0 6px; }
+.client-tag .client-name:hover { text-decoration: underline; background: none; }
 .rv-field { display: grid; gap: 3px; min-width: 160px; }
 .rv-field .label { font-size: 11.5px; }
 .rv-who { min-width: 260px; flex: 1 1 260px; max-width: 360px; }
