@@ -15,7 +15,7 @@ function Flow({ aiPaused }: { aiPaused: boolean }) {
   return (
     <ol className="help-flow" aria-label="From a message to a finished task">
       {steps.map((s, k) => (
-        <li key={s} className={s === "AI check" && aiPaused ? "paused" : ""} title={s === "AI check" && aiPaused ? "The AI check is not running right now" : undefined}>
+        <li key={s} className={s === "AI check" && aiPaused ? "paused" : ""} title={s === "AI check" && aiPaused ? "The AI check could not run last time" : undefined}>
           <span className="help-flow-n">{k + 1}</span>
           {s}
         </li>
@@ -262,8 +262,8 @@ const GUIDES: Record<string, Guide> = {
             </ul>
             <p>
               Every 30 minutes, an AI reads each new flagged message with the conversation around it and keeps only real tasks, with a clear title, who it is for, and how sure it is. It reads
-              at most 100 messages a day for each login, so it costs well under a dollar a day. If it cannot run (no AI key, or its account is out of credit), everything flagged still shows
-              here, marked &quot;Not checked by the AI yet&quot;. Only what was said this week, since Monday, is shown.
+              at most 100 messages a day for each login, so it costs well under a dollar a day. Action items from calls are never sent to the AI. If the AI can&apos;t be reached for a while,
+              everything flagged still shows here, marked &quot;Not checked by the AI yet&quot;, and it is checked on the next run. Only what was said this week, since Monday, is shown.
             </p>
           </>
         ),
@@ -414,7 +414,7 @@ function guideFor(pathname: string): string {
 export function HelpButton({ pathname }: { pathname: string }) {
   const [open, setOpen] = useState<string | null>(null);
   const app = useApp();
-  // The AI step shows as stopped when there is no key, or its last run failed (out of credit, say).
+  // The AI step shows as stopped when it cannot run, or its last run failed.
   const aiPaused = !app?.state.aiConfigured || app.state.jobStatus["task-check"]?.ok === false;
   useEffect(() => {
     if (!open) return;
