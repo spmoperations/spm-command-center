@@ -5,17 +5,41 @@
 //
 // Plain code decides what is sent: only what the rules flagged, cut to a few messages around it,
 // with keys and passwords taken out. The model only judges.
+//
+// What it may spend is capped: at most `dailyLimit()` messages a day for each login, whatever
+// arrives, and each run says what it used and roughly what that cost (Settings, Timers).
 import { SOURCE_NAME } from "@/core/config";
 import { isoDay } from "@/core/dates";
 import { redactSecrets } from "@/core/slack-text";
 import type { Source } from "@/core/types";
 import type { Candidate } from "@/prompts/task-check";
-import { aiKeys, checkCandidates, describeAiError, type TaskCheck, type Verdict } from "@/server/ai";
+import { aiKeys, checkCandidates, describeAiError, NoVerdicts, roughCost, type AiUsage, type CheckResult, type TaskCheck } from "@/server/ai";
+import { setting } from "@/server/app-keys";
 import { teamPeople } from "@/server/tickets";
 import type { JobContext, JobResult } from "./runner";
 
 /** Messages judged in one request: keeps each request small and its cost predictable. Set AI_CHECK_BATCH to lower it. */
 const BATCH = Number(process.env.AI_CHECK_BATCH ?? 20);
+
+/**
+ * The most messages checked in a day for one login: a ceiling on what the check can spend if a
+ * flood arrives or something goes wrong. About 7 a day are flagged now. Set AI_CHECK_DAILY to
+ * change it; 0 switches the check off. On the live site 100 (under a dollar a day); anywhere
+ * else, such as a developer's machine or a test copy, 20.
+ */
+export function dailyLimit(): number {
+  const set = setting("AI_CHECK_DAILY");
+  if (set) return Math.max(0, Math.floor(Number(set)) || 0);
+  return process.env.VERCEL ? 100 : 20;
+}
+
+/** What the check has sent today, kept in its bookmark. */
+interface Today {
+  day: string;
+  sent: number;
+  input: number;
+  output: number;
+}
 /** How much of the conversation goes with each message: what came before it, and what came after. */
 const BEFORE = 6;
 const AFTER = 4;
@@ -23,7 +47,7 @@ const MAX_LINE_LENGTH = 600;
 /** Below this the model is not sure enough that it is a real task, and it is set aside. */
 export const MIN_CONFIDENCE = 60;
 
-type Checker = (input: TaskCheck) => Promise<Verdict[]>;
+type Checker = (input: TaskCheck) => Promise<CheckResult>;
 
 /** The model, with this person's AI key: their own, else the team's (see app-keys.ts). */
 const withKeyOf =
@@ -44,13 +68,26 @@ interface Line {
 const where = (c: { source: Source; ctx: string; from_name: string; direct: boolean }) =>
   c.source === "gmail" ? `Gmail, from ${c.from_name}, subject: ${c.ctx}` : `${SOURCE_NAME[c.source]}, ${c.direct ? `direct message with ${c.from_name}` : c.ctx}`;
 
-export async function taskCheck({ db, ownerId, now }: JobContext, checker: Checker = withKeyOf(db, ownerId)): Promise<JobResult> {
+const dollars = (usage: AiUsage) => {
+  const cost = roughCost(usage);
+  return cost === null ? "" : `, about $${cost < 0.01 ? cost.toFixed(3) : cost.toFixed(2)}`;
+};
+const tokens = (usage: AiUsage) => `${usage.input.toLocaleString("en-US")} tokens read, ${usage.output.toLocaleString("en-US")} written${dollars(usage)}`;
+
+export async function taskCheck({ db, ownerId, now, cursor }: JobContext, checker: Checker = withKeyOf(db, ownerId)): Promise<JobResult> {
+  const day = isoDay(new Date(now));
+  const before = cursor.today as Today | undefined;
+  const today: Today = before?.day === day ? { ...before } : { day, sent: 0, input: 0, output: 0 };
+  const room = Math.min(BATCH, dailyLimit() - today.sent);
   // What the rules flagged and nobody has checked: the oldest first, so a backlog is worked through.
   const waiting = await db.query<{ id: string; src_id: string; dedupe_key: string }>(
     "select id, src_id, dedupe_key from suggestions where owner_id = $1 and status = 'new' and src_type = 'message' and dedupe_key like 'ask:%' and checked_at is null order by created_at, id limit $2",
     [ownerId, BATCH],
   );
   if (!waiting.length) return { items: 0, message: "Nothing new to check" };
+  if (room <= 0) {
+    return { items: 0, message: dailyLimit() ? `Today's limit of ${dailyLimit()} messages is reached; the rest wait for tomorrow. Today: ${tokens(today)}` : "Switched off (AI_CHECK_DAILY is 0)" };
+  }
 
   const [owner] = await db.query<{ name: string }>("select name from users where id = $1", [ownerId]);
   const me = owner?.name ?? "Owner";
@@ -84,15 +121,41 @@ export async function taskCheck({ db, ownerId, now }: JobContext, checker: Check
   }
   if (gone.length) await db.run("update suggestions set checked_at = $3 where owner_id = $1 and id in (select jsonb_array_elements_text($2::jsonb))", [ownerId, JSON.stringify(gone), now]);
   if (!candidates.length) return { items: 0, message: "Nothing new to check" };
+  // Only as many as today's limit has room for are sent; the rest wait, unchecked.
+  candidates.splice(room);
 
   const team = (await teamPeople(db)).map((p) => p.name);
-  let verdicts: Verdict[];
+  const used: AiUsage = { input: 0, output: 0 };
+  const verdicts: CheckResult["verdicts"] = [];
+  // Messages the model answered for none of, which are not sent again: they stay on the Review tab for a person.
+  const unjudged: string[] = [];
+  const ask = async (some: Candidate[]): Promise<void> => {
+    try {
+      const result = await checker({ ownerName: me, today: day, weekday: new Date(now).toLocaleDateString("en-US", { weekday: "long" }), team, candidates: some });
+      used.input += result.usage.input;
+      used.output += result.usage.output;
+      verdicts.push(...result.verdicts);
+    } catch (error) {
+      if (!(error instanceof NoVerdicts)) throw error;
+      used.input += error.usage.input;
+      used.output += error.usage.output;
+      // An answer cut short is asked again in two halves. Anything else, or a single message, is not asked again.
+      if (error.reason === "cut_short" && some.length > 1) {
+        const half = Math.ceil(some.length / 2);
+        await ask(some.slice(0, half));
+        await ask(some.slice(half));
+      } else unjudged.push(...some.map((c) => c.id));
+    }
+  };
   try {
-    verdicts = await checker({ ownerName: me, today: isoDay(new Date(now)), weekday: new Date(now).toLocaleDateString("en-US", { weekday: "long" }), team, candidates });
+    await ask(candidates);
   } catch (error) {
-    // Nothing is marked as checked, so the same messages are tried again on the next run.
+    // Nothing is marked as checked, so the same messages are tried again on the next run (an
+    // error such as no credit is not charged for).
     throw new Error(describeAiError(error));
   }
+  const total: Today = { day, sent: today.sent + candidates.length, input: today.input + used.input, output: today.output + used.output };
+  if (unjudged.length) await db.run("update suggestions set checked_at = $3 where owner_id = $1 and id in (select jsonb_array_elements_text($2::jsonb)) and status = 'new'", [ownerId, JSON.stringify(unjudged), now]);
 
   let kept = 0;
   let setAside = 0;
@@ -118,6 +181,14 @@ export async function taskCheck({ db, ownerId, now }: JobContext, checker: Check
     );
     kept++;
   }
-  // Anything the model did not answer for is tried again on the next run.
-  return { items: kept + setAside, message: `Checked ${kept + setAside}: ${kept} ${kept === 1 ? "task" : "tasks"}, ${setAside} set aside${sent.size ? `, ${sent.size} to try again` : ""}` };
+  // Anything the model left out of its answer is tried again on the next run.
+  const parts = [`${kept} ${kept === 1 ? "task" : "tasks"}`, `${setAside} set aside`];
+  if (unjudged.length) parts.push(`${unjudged.length} the AI could not judge`);
+  for (const id of unjudged) sent.delete(id);
+  if (sent.size) parts.push(`${sent.size} to try again`);
+  return {
+    items: kept + setAside,
+    message: `Checked ${kept + setAside}: ${parts.join(", ")}. This run: ${tokens(used)}. Today: ${total.sent} ${total.sent === 1 ? "message" : "messages"}, ${tokens(total)}`,
+    cursor: { ...cursor, today: total },
+  };
 }

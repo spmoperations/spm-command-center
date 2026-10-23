@@ -5,16 +5,17 @@
 
 import { useEffect, useState } from "react";
 import { INBOX_DAYS } from "@/core/config";
+import { useApp } from "@/store/store";
 
 type Guide = { title: string; intro: string; parts: { head: string; body: React.ReactNode }[]; flow?: boolean };
 
-/** The path from a message to a finished task, as five steps in a row. */
-function Flow() {
+/** The path from a message to a finished task, as five steps in a row. `aiPaused` marks the AI step when it cannot run. */
+function Flow({ aiPaused }: { aiPaused: boolean }) {
   const steps = ["Spotted", "AI check", "Review", "Board", "Told"];
   return (
     <ol className="help-flow" aria-label="From a message to a finished task">
       {steps.map((s, k) => (
-        <li key={s} className={s === "AI check" ? "paused" : ""}>
+        <li key={s} className={s === "AI check" && aiPaused ? "paused" : ""} title={s === "AI check" && aiPaused ? "The AI check is not running right now" : undefined}>
           <span className="help-flow-n">{k + 1}</span>
           {s}
         </li>
@@ -260,8 +261,9 @@ const GUIDES: Record<string, Guide> = {
               <li>an open action item from a recorded call.</li>
             </ul>
             <p>
-              An AI then reads each flagged message with the conversation around it and keeps only real tasks, with a clear title, who it is for, and how sure it is. The AI is paused while its account
-              is out of credit; until then everything flagged shows here, marked &quot;Not checked by the AI yet&quot;. Only what was said this week, since Monday, is shown.
+              Every 30 minutes, an AI reads each new flagged message with the conversation around it and keeps only real tasks, with a clear title, who it is for, and how sure it is. It reads
+              at most 100 messages a day for each login, so it costs well under a dollar a day. If it cannot run (no AI key, or its account is out of credit), everything flagged still shows
+              here, marked &quot;Not checked by the AI yet&quot;. Only what was said this week, since Monday, is shown.
             </p>
           </>
         ),
@@ -411,6 +413,9 @@ function guideFor(pathname: string): string {
 /** The button in the header, and the guide it opens for the tab on screen. */
 export function HelpButton({ pathname }: { pathname: string }) {
   const [open, setOpen] = useState<string | null>(null);
+  const app = useApp();
+  // The AI step shows as stopped when there is no key, or its last run failed (out of credit, say).
+  const aiPaused = !app?.state.aiConfigured || app.state.jobStatus["task-check"]?.ok === false;
   useEffect(() => {
     if (!open) return;
     const close = (e: KeyboardEvent) => e.key === "Escape" && setOpen(null);
@@ -434,7 +439,7 @@ export function HelpButton({ pathname }: { pathname: string }) {
             </div>
             <h2>{guide.title}</h2>
             <p className="help-intro">{guide.intro}</p>
-            {guide.flow && <Flow />}
+            {guide.flow && <Flow aiPaused={aiPaused} />}
             {guide.parts.map((part) => (
               <section key={part.head} className="help-part">
                 <h3>{part.head}</h3>

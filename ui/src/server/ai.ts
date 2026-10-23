@@ -4,6 +4,7 @@
 //
 // This file only makes the call. What the model is told is in `src/prompts/`.
 import Anthropic from "@anthropic-ai/sdk";
+import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { DEPTS } from "@/core/config";
@@ -16,9 +17,41 @@ export type { TaskSearch };
 export type TaskCheck = check.TaskCheck;
 
 // Telling a real task from small talk is a judgment, so the most capable current model makes it,
-// thinking as much as each request needs. Few messages reach it, so it costs little. Set
-// ANTHROPIC_MODEL to change it.
+// thinking as much as each request needs. Few messages reach it (about 7 a day), so it costs
+// little. Set ANTHROPIC_MODEL to change it.
 export const AI_MODEL = process.env.ANTHROPIC_MODEL ?? "claude-opus-5-5";
+
+/**
+ * How hard the model thinks. Telling a task from a chat line needs some thought, not a lot:
+ * medium, which is also this model's own default, written out so it never changes unseen.
+ */
+const CHECK_EFFORT = "medium" as const;
+
+/** What one request used, in tokens: what the model read, and what it wrote (its thinking included). */
+export interface AiUsage {
+  input: number;
+  output: number;
+}
+
+/** List prices in dollars per million tokens, to say roughly what a run cost. */
+const PRICE_PER_MILLION: Record<string, AiUsage> = { "claude-opus-5-5": { input: 4, output: 20 } };
+
+/** Roughly what `usage` cost in dollars, or null for a model whose price is not listed here. */
+export function roughCost(usage: AiUsage, model = AI_MODEL): number | null {
+  const price = PRICE_PER_MILLION[model];
+  return price ? (usage.input * price.input + usage.output * price.output) / 1_000_000 : null;
+}
+
+/** The model answered without verdicts: it declined, or its answer was cut short. What it used is still paid for. */
+export class NoVerdicts extends Error {
+  constructor(
+    message: string,
+    readonly reason: "declined" | "cut_short" | "unreadable",
+    readonly usage: AiUsage,
+  ) {
+    super(message);
+  }
+}
 
 /** The AI key this person's checks use: their own, else the team's, else the server's settings (see app-keys.ts). */
 export const aiKeys = async (db: Db, ownerId: string): Promise<AnthropicKeys | null> => (await keysForNew(db, ownerId, "anthropic"))?.keys ?? null;
@@ -42,6 +75,8 @@ export type FoundTask = z.infer<typeof FoundTasks>["tasks"][number];
 
 const clients = new Map<string, Anthropic>();
 function anthropic(keys: AnthropicKeys): Anthropic {
+  // Every test uses a pretend model, so a test can never spend money, whatever key is about.
+  if (process.env.VITEST) throw new Error("Tests never call the AI: give the job a pretend model.");
   // A key that is not tied to one workspace must name the workspace on every request.
   const key = `${keys.apiKey}:${keys.workspaceId ?? ""}`;
   let client = clients.get(key);
@@ -80,20 +115,36 @@ const Verdicts = z.object({
 
 export type Verdict = z.infer<typeof Verdicts>["verdicts"][number];
 
-/** Asks the model whether each flagged message is a real task. Throws the SDK's typed errors; the job turns them into a readable message. */
-export async function checkCandidates(input: check.TaskCheck, keys: AnthropicKeys): Promise<Verdict[]> {
-  const response = await anthropic(keys).messages.parse({
+export interface CheckResult {
+  verdicts: Verdict[];
+  usage: AiUsage;
+}
+
+/**
+ * Asks the model whether each flagged message is a real task. Throws the SDK's typed errors, which
+ * the job turns into a readable message, and `NoVerdicts` when it answered without any.
+ */
+export async function checkCandidates(input: check.TaskCheck, keys: AnthropicKeys): Promise<CheckResult> {
+  const response = await anthropic(keys).beta.messages.parse({
     model: AI_MODEL,
     max_tokens: 16000,
     thinking: { type: "adaptive" },
     system: check.SYSTEM,
     messages: [{ role: "user", content: check.message(input) }],
-    output_config: { format: zodOutputFormat(Verdicts) },
+    output_config: { format: betaZodOutputFormat(Verdicts), effort: CHECK_EFFORT },
+    // Should the model decline a batch, another model answers it in the same request, so the same
+    // messages are not sent again and again.
+    betas: ["server-side-fallback-2026-07-01"],
+    fallbacks: "default",
   });
-  if (response.stop_reason === "refusal") throw new Error("The model declined to read these messages.");
-  if (response.stop_reason === "max_tokens") throw new Error("The model's answer was cut short. Fewer messages go next time.");
-  if (!response.parsed_output) throw new Error("The model's answer could not be read.");
-  return response.parsed_output.verdicts;
+  const usage: AiUsage = {
+    input: response.usage.input_tokens + (response.usage.cache_creation_input_tokens ?? 0) + (response.usage.cache_read_input_tokens ?? 0),
+    output: response.usage.output_tokens,
+  };
+  if (response.stop_reason === "refusal") throw new NoVerdicts("The model declined to read these messages.", "declined", usage);
+  if (response.stop_reason === "max_tokens") throw new NoVerdicts("The model's answer was cut short.", "cut_short", usage);
+  if (!response.parsed_output) throw new NoVerdicts("The model's answer could not be read.", "unreadable", usage);
+  return { verdicts: response.parsed_output.verdicts, usage };
 }
 
 /** Checks an AI key before it is saved: asking which models it may use costs nothing. */

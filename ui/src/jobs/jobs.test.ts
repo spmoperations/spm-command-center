@@ -885,7 +885,12 @@ describe("runner", () => {
   it("does not run a check that cannot work yet, even when its key is there", async () => {
     process.env.ANTHROPIC_API_KEY = "sk-test";
     try {
-      expect((await tick(db, OWNER_ID, NOW)).map((r) => r.jobId)).toEqual(["outbox-retry"]);
+      // The AI check runs on its own timer once there is a key; with nothing flagged it asks the AI nothing.
+      // Finding tasks of its own (task-suggest) is switched off and never runs.
+      expect((await tick(db, OWNER_ID, NOW)).map((r) => [r.jobId, r.message])).toEqual([
+        ["task-check", "Nothing new to check"],
+        ["outbox-retry", expect.any(String)],
+      ]);
     } finally {
       delete process.env.ANTHROPIC_API_KEY;
     }

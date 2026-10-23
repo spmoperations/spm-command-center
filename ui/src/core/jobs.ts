@@ -1,5 +1,6 @@
 // The checks the Command Center runs. Each one is its own small script with its own timer,
-// set from Settings. Only `task-suggest` calls an AI model; everything else is plain code.
+// set from Settings. Only `task-check` (and `task-suggest`, which is off) calls an AI model;
+// everything else is plain code.
 // Listed in the order they run: sorting before the request finder, which uses the priority.
 import type { JobId, JobSetting, Provider } from "./types";
 
@@ -38,7 +39,9 @@ export const JOBS: JobDefinition[] = [
   { id: "inbox-rules", name: "Marks what is urgent, adds labels", tab: "Inbox", defaultMin: 60, minMin: 5, usesAI: false, needs: null, follows: ["slack-pull", "telegram-pull", "gmail-pull"], live: true },
   { id: "request-finder", name: "Finds messages that ask you for something", tab: "Tasks", defaultMin: 60, minMin: 5, usesAI: false, needs: null, follows: ["slack-pull", "telegram-pull", "gmail-pull"], live: true },
   // The AI reads what the request finder flagged and keeps only real tasks (see jobs/task-check).
-  { id: "task-check", name: "Checks each flagged message with AI: a real task or not", tab: "Tasks", defaultMin: 30, minMin: 5, usesAI: true, needs: "ai", follows: ["request-finder"], live: true },
+  // On a timer of its own, so what it may spend is easy to see: one request at most each time,
+  // and none when nothing is waiting.
+  { id: "task-check", name: "Checks each flagged message with AI: a real task or not", tab: "Tasks", defaultMin: 30, minMin: 5, usesAI: true, needs: "ai", live: true },
   // Finds tasks the rules cannot, but would repeat what the request finder and the AI check
   // already do. Off; set live to true to use it as well.
   { id: "task-suggest", name: "Finds other tasks in your messages", tab: "Tasks", defaultMin: 60, minMin: 15, usesAI: true, needs: "ai", live: false },

@@ -100,7 +100,7 @@ Off for now (see above). When it is on, the switch next to the title shows one s
 | `fathom-pull` | Reads new calls with notes, transcript and action items. Every open action item goes to the Review tab, with who Fathom gave it to | No |
 | `inbox-rules` | Applies the sorting rules after each message check, and clears the Slack and Telegram conversations whose latest message is the owner's (a new message from someone else brings one back; one restored by hand stays). Then clears any conversation with nothing new for 3 days (`INBOX_DAYS` in `ui/src/core/config.ts`): it moves to the cleared list, keeps its suggested task if a request is still waiting, and comes back when something new arrives or the owner restores it | No |
 | `request-finder` | After each message check, finds messages that ask the owner for something (a question, "can you", "please", "following up" and the like) and are still unanswered, and suggests a "Reply to" task. Drops the suggestion once he replies | No |
-| `task-check` | After the request finder: reads each message it flagged, with the few messages around it (keys and passwords taken out), and keeps only real tasks. Each kept one gets a clear title, a summary, who it is for, how sure the model is and whether it looks done already; what is under 60% sure is set aside, listed at the bottom of the Review tab, and can be put back. Model: `claude-opus-5-5` with adaptive thinking (`ANTHROPIC_MODEL` changes it), 20 messages per request. Until a message is checked it shows on the Review tab as "Not checked by the AI yet" | Yes |
+| `task-check` | Every 30 minutes, on its own timer: reads each message the request finder flagged, with the few messages around it (keys and passwords taken out), and keeps only real tasks. Each kept one gets a clear title, a summary, who it is for, how sure the model is and whether it looks done already; what is under 60% sure is set aside, listed at the bottom of the Review tab, and can be put back. Model: `claude-opus-5-5` with adaptive thinking at medium effort (`ANTHROPIC_MODEL` changes it), 20 messages per request, no request when nothing is waiting. At most 100 messages a day for each login on the live site and 20 anywhere else (`AI_CHECK_DAILY`; `0` switches it off). Each run's note in Settings says the tokens it used and roughly what they cost. An answer cut short is asked again in halves; a batch the model declines goes to another model in the same request (server-side fallback). Until a message is checked it shows on the Review tab as "Not checked by the AI yet" | Yes |
 | `task-suggest` | Finds other tasks in new messages from conversations the rules rated worth reading. Off | Yes |
 | `outbox-retry` | Sends what is waiting in the outbox | No |
 | `telegram-pull` | Reads new Telegram messages with their pictures, stickers and reactions. Runs only on a server that may use Telegram (see What is switched off) | No |
@@ -137,7 +137,7 @@ A check never runs twice at once, even if two servers start it together: the sec
 | `TICKER=off` | Checks run only when Run now is pressed. Remove it to run them on their timers. |
 | `SLACK_MAX_PAGES`, `SLACK_BACKFILL_DAYS`, `FATHOM_MAX_PAGES`, `FATHOM_BACKFILL_DAYS`, `AI_MAX_CONVERSATIONS` | How much one run may read. Kept small for development. |
 
-Anything that looks like an access key is stripped from message text before it is sent to the AI.
+Anything that looks like an access key is stripped from message text before it is sent to the AI. Tests never call the AI: the client refuses to start under Vitest, and every test gives the job a pretend model.
 
 ## How the code is laid out
 
@@ -181,7 +181,7 @@ To move to the hosted database: put the string in `ui/.env.local`, run `npm run 
 
 | What | What it needs |
 | --- | --- |
-| The AI check of flagged messages | Credit on the Claude account (the team's AI key). Built and tested against a pretend model; on 23 Oct 2026 the account answered "credit balance is too low". Until there is credit, every flagged request still reaches the Review tab, marked "Not checked by the AI yet". |
+| The AI check of flagged messages on the live site | An AI key with credit saved as the team's key (Connections). On 24 Oct 2026 the key saved on the live site still answered "credit balance is too low"; the second key, used on a developer's machine, has credit. Until then every flagged request still reaches the Review tab, marked "Not checked by the AI yet". |
 | Sending, fully proven | Switched on with `SENDING_ENABLED=true`. A reply into a thread has been sent and read back from Slack. An assignment by direct message and a post to a channel have only run against a fake Slack so far. |
 | Telegram on the live site, proven | Built and tested against a pretend Telegram. It needs the two app keys and `TELEGRAM_HOSTED=true` on the host, and has not yet been through a real login there. Pictures are kept in the database with no clean-up yet: about 100 KB each. |
 | Pictures from Slack, and sending them | The `files:read` permission (to show them) and `files:write` (to send them) on the Slack app, under User Token Scopes, then a reinstall. A workspace's own custom emoji show by name; their pictures would need `emoji:read`. |
