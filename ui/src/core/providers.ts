@@ -27,6 +27,8 @@ export const SLACK_USER_SCOPES = [
   "users:read", "users:read.email", "chat:write", "im:write", "search:read",
   // To show the pictures people send. Slack gives a picture only to an app that may read files.
   "files:read",
+  // To send a picture pasted into a reply. Slack takes one only from an app that may write files.
+  "files:write",
 ];
 
 /** The workspace the team is on, as Slack names it on its pages. */

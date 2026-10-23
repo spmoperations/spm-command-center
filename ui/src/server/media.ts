@@ -5,6 +5,11 @@
 // read through the logged-in account, one download each, so the ones worth showing are kept
 // in the database (the `media` table) and served from there. On a developer's machine that
 // is the local database, so they never leave it.
+//
+// A picture the owner pastes into a reply is kept in the same table, under "upload/", from the
+// moment it is added until long after it is sent: the reply shows it here.
+import crypto from "node:crypto";
+import { MOST_PICTURE_BYTES } from "@/core/config";
 import type { Db } from "./db";
 
 /** A picture or sticker of a message, as it is stored with the message. */
@@ -17,7 +22,7 @@ export interface StoredPicture {
   thumb?: string;
   url?: string;
   link?: string;
-  /** Telegram: where the picture is kept in the `media` table. */
+  /** Telegram, or a picture the owner added to a reply: where it is kept in the `media` table. */
   key?: string;
 }
 
@@ -109,4 +114,31 @@ export async function telegramAvatarIds(db: Db, ownerId: string): Promise<Set<st
 /** Removes every Telegram picture. Used when Telegram is disconnected and its chats are removed. */
 export async function forgetTelegramMedia(db: Db, ownerId: string): Promise<void> {
   await db.run("delete from media where owner_id = $1 and key like 'telegram/%'", [ownerId]);
+}
+
+// ---------- Pictures the owner adds to a reply ----------
+
+/** A picture added to a reply that was never sent is let go after this long. */
+const UNSENT_MS = 24 * 3_600_000;
+const UPLOAD = /^upload\/[A-Za-z0-9_-]{16,64}\.(jpg|png|gif|webp)$/;
+
+export const isUploadKey = (key: string | undefined): boolean => typeof key === "string" && UPLOAD.test(key);
+
+/** Keeps a picture the owner pasted or picked for a reply, until it is sent. Null when the bytes are not a picture, or too big. */
+export async function saveUpload(db: Db, ownerId: string, bytes: Buffer, now: number): Promise<{ key: string; mime: string } | null> {
+  const type = pictureType(bytes);
+  if (!type || bytes.length > MOST_PICTURE_BYTES) return null;
+  const key = `upload/${crypto.randomBytes(18).toString("base64url")}.${type.ext}`;
+  await put(db, ownerId, key, type.mime, bytes, now);
+  await forgetUnsentUploads(db, ownerId, now);
+  return { key, mime: type.mime };
+}
+
+/** Lets go of the pictures added to a reply over a day ago that no message carries: taken out again, or never sent. */
+export async function forgetUnsentUploads(db: Db, ownerId: string, now: number): Promise<void> {
+  await db.run(
+    `delete from media where owner_id = $1 and key like 'upload/%' and saved_at < $2
+     and not exists (select 1 from messages m where m.owner_id = $1 and m.attachments @> jsonb_build_array(jsonb_build_object('key', media.key)))`,
+    [ownerId, now - UNSENT_MS],
+  );
 }

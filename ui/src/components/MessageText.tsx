@@ -86,7 +86,7 @@ export function Pictures({ pictures, blocked }: { pictures: MessagePicture[]; bl
   return (
     <div className="pics">
       {pictures.map((p) =>
-        blocked || broken.includes(p.src) ? (
+        (blocked && !p.here) || broken.includes(p.src) ? (
           <span className="pic-missing" key={p.src}>
             <span>Picture: {p.name}</span>
             {p.link ? (

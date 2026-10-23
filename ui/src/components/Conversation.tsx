@@ -9,6 +9,7 @@ import { tidyEmailText } from "@/core/email-text";
 import { EMAIL_TAG_NAME } from "@/core/email-tags";
 import { Avatar, MessageText, Pictures, Reactions } from "@/components/MessageText";
 import { PrioritySelect } from "@/components/bits";
+import { NEEDS_UPLOAD, ReplyPictureList, useReplyPictures } from "@/components/ReplyPictures";
 import { INBOX_DAYS, LINE_NAME, MODE_NAME, MODES, PERSONAL_SIDE, PRIORITIES, PRIORITY_NAME, SOURCE_NAME } from "@/core/config";
 import { ago, stamp } from "@/core/dates";
 import { plainPreview } from "@/core/message-format";
@@ -167,14 +168,24 @@ function Thread({ c, app, draft, onDraft }: { c: Conversation; app: App; draft: 
     setPicked(key);
     field.current?.focus();
   };
-  const send = (markDone: boolean) => {
+  // Pictures go with a reply on Slack: pasted, dropped on the box, or picked.
+  const withPictures = c.source === "slack";
+  const pics = useReplyPictures(app.state.slackUploadAllowed);
+  const picker = useRef<HTMLInputElement>(null);
+  const send = async (markDone: boolean) => {
     const text = draft.trim();
-    if (!text) {
+    const pictures = pics.ready();
+    if (!pictures) return toast("Wait a moment: a picture is still being added.");
+    if (!text && !pictures.length) {
       toast("Write a reply first");
       return field.current?.focus();
     }
-    sendReply(c.id, text, markDone, into ? target : null);
+    const taken = pics.take();
     onDraft("");
+    if (await sendReply(c.id, text, markDone, into ? target : null, pictures)) return pics.letGo(taken);
+    // Not sent: the words and the pictures are back in the box, to try again.
+    onDraft(text);
+    pics.putBack(taken);
   };
 
   return (
@@ -182,7 +193,7 @@ function Thread({ c, app, draft, onDraft }: { c: Conversation; app: App; draft: 
       <div className={`bubbles ${c.source === "gmail" ? "emails" : ""}`} ref={box}>
         {groups.length === 0 && <p className="muted">No messages in this conversation yet.</p>}
         {checking && <p className="checking">{c.source === "telegram" ? "Checking Telegram for new messages and reactions…" : "Checking Slack for replies, pictures and reactions…"}</p>}
-        {slackPicturesBlocked(c, app) && c.thread.some((m) => m.attachments?.length) && (
+        {slackPicturesBlocked(c, app) && c.thread.some((m) => m.attachments?.some((p) => !p.here)) && (
           <p className="checking">Pictures from Slack cannot be shown here yet. The Slack app needs one more permission (files:read). Until then each one has a link that opens it in Slack.</p>
         )}
         {groups.map((g) => (
@@ -215,7 +226,17 @@ function Thread({ c, app, draft, onDraft }: { c: Conversation; app: App; draft: 
       {c.source === "gmail" ? (
         <EmailReply c={c} app={app} draft={draft} onDraft={onDraft} />
       ) : (
-        <div className="composer">
+        <div
+          className="composer"
+          onDragOver={(e) => {
+            if (withPictures && e.dataTransfer.types.includes("Files")) e.preventDefault();
+          }}
+          onDrop={(e) => {
+            if (!withPictures || !e.dataTransfer.files.length) return;
+            e.preventDefault();
+            if (!pics.add(Array.from(e.dataTransfer.files))) toast("Only pictures can be added to a reply.");
+          }}
+        >
           <label className="label" htmlFor={`reply-${c.id}`}>
             Reply on {where}
           </label>
@@ -241,22 +262,52 @@ function Thread({ c, app, draft, onDraft }: { c: Conversation; app: App; draft: 
             value={draft}
             placeholder="Write a reply…"
             onChange={(e) => onDraft(e.target.value)}
+            onPaste={(e) => {
+              // Words are pasted as words, even when the app they came from put a picture of them alongside, as Word and Excel do.
+              if (!withPictures || e.clipboardData.getData("text/plain")) return;
+              if (pics.add(Array.from(e.clipboardData.files))) e.preventDefault();
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
-                send(false);
+                void send(false);
               }
             }}
           />
+          {withPictures && <ReplyPictureList pictures={pics.pictures} onRemove={pics.remove} />}
           <div className="composer-row">
             <span className="hint">
               {app.state.sendingEnabled ? `⌘ + Enter to send. It goes out from your own ${SOURCE_NAME[c.source]} account.` : "⌘ + Enter to save. Sending is switched off, so replies wait in the outbox."}
+              {withPictures && app.state.slackUploadAllowed !== false && " Paste or drop a screenshot to send it too."}
             </span>
             <div className="btns">
-              <button className="btn" onClick={() => send(true)}>
+              {withPictures && (
+                <>
+                  <input
+                    ref={picker}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    hidden
+                    onChange={(e) => {
+                      pics.add(Array.from(e.target.files ?? []));
+                      e.target.value = "";
+                    }}
+                  />
+                  <button
+                    className="btn"
+                    type="button"
+                    title={app.state.slackUploadAllowed === false ? "Slack does not let the dashboard send pictures yet" : "Add a picture to this reply"}
+                    onClick={() => (app.state.slackUploadAllowed === false ? toast(NEEDS_UPLOAD) : picker.current?.click())}
+                  >
+                    Add picture
+                  </button>
+                </>
+              )}
+              <button className="btn" onClick={() => void send(true)}>
                 Send and mark done
               </button>
-              <button className="btn primary" onClick={() => send(false)}>
+              <button className="btn primary" onClick={() => void send(false)}>
                 Send
               </button>
             </div>

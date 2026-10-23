@@ -21,6 +21,16 @@ export interface MessagePicture {
   h?: number;
   /** The message's own page in its app, for when the picture cannot be shown here. */
   link?: string;
+  /** Kept by the dashboard itself (a picture the owner added to a reply), so it shows whatever the app allows. */
+  here?: boolean;
+}
+
+/** A picture added to a reply on screen: where it was kept when it was added, and its size for the screen. */
+export interface AddedPicture {
+  key: string;
+  name: string;
+  w?: number;
+  h?: number;
 }
 
 /** An emoji people put on a message. One the dashboard has no picture for reads ":name:". */
@@ -405,6 +415,8 @@ export interface AppState {
    * the people-and-channels check has asked Slack.
    */
   slackFilesAllowed: boolean | null;
+  /** Whether the connected Slack app may send pictures with a reply. Null until Slack has said. */
+  slackUploadAllowed: boolean | null;
   /** True where Telegram can be connected: its app keys are set, and this server may hold a Telegram login. */
   telegramAvailable: boolean;
   /** Why Telegram cannot be connected here, in a sentence for whoever sets the server up. Null when it can. */

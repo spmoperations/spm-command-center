@@ -54,6 +54,11 @@ export const PERSONAL_SIDE: boolean = false;
  */
 export const SUGGESTED_TASKS: boolean = false;
 
+/** The most one picture added to a reply may weigh: what one request to the live site can carry, with room to spare. */
+export const MOST_PICTURE_BYTES = 4 * 1024 * 1024;
+/** The most pictures that go with one Slack message. */
+export const MOST_PICTURES = 10;
+
 export const SOURCE_NAME: Record<Source, string> = { slack: "Slack", telegram: "Telegram", gmail: "Gmail" };
 /** The tab a conversation is read on: emails have a tab of their own. */
 export const conversationPage = (id: string) => (id.startsWith("gmail:") ? "/emails" : "/inbox");

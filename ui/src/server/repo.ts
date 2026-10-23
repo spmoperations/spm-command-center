@@ -1,22 +1,22 @@
 // Reads and writes for the dashboard. `loadState` builds what the screens show; `ACTIONS`
 // holds every change a person can make. Jobs write through their own modules in `src/jobs`.
 import crypto from "node:crypto";
-import { INBOX_DAYS, PERSONAL, PRIORITIES } from "@/core/config";
+import { INBOX_DAYS, MOST_PICTURES, PERSONAL, PRIORITIES } from "@/core/config";
 import { assignmentText, canAssignInChat, CHANNEL_PICK, SLACK_PICK, type AssignWhere } from "@/core/delegation";
 import { addDays, isoDay, monthKey, pad } from "@/core/dates";
 import { clampInterval, defaultJobSettings, JOBS } from "@/core/jobs";
 import { requestSummary } from "@/core/requests";
 import { applyRules } from "@/core/rules";
 import type {
-  AppState, Conversation, ConversationChange, FocusBoard, JobId, JobStatus, Meeting, MessagePicture, Metric, Mode, Person, Priority, Provider, Reaction, Rule, Source, Suggestion, Task, CalendarItem,
+  AddedPicture, AppState, Conversation, ConversationChange, FocusBoard, JobId, JobStatus, Meeting, MessagePicture, Metric, Mode, Person, Priority, Provider, Reaction, Rule, Source, Suggestion, Task, CalendarItem,
 } from "@/core/types";
 import { aiConfigured } from "./ai";
 import { emailTags, type TaggedEmail } from "@/core/email-tags";
 import { isEmailAddress, parseAddress, type Address } from "./gmail";
 import { hostedProblem, keysOnScreen } from "./app-keys";
 import { disconnectGoogle, googleAccounts, googleBlocked, googleCan } from "./google";
-import { telegramAvatarIds, type StoredPicture } from "./media";
-import { SLACK_FILES_SCOPE, type Fetch } from "./slack";
+import { isUploadKey, telegramAvatarIds, type StoredPicture } from "./media";
+import { SLACK_FILES_SCOPE, SLACK_NEEDS_UPLOAD, SLACK_UPLOAD_SCOPE, type Fetch } from "./slack";
 import { hashPassword, MIN_PASSWORD, teamLogins } from "./team";
 import { telegramBlocked } from "./telegram";
 import type { Db } from "./db";
@@ -79,6 +79,28 @@ interface MessageRow {
 /** Where the browser gets a message's picture from. The dashboard hands it over itself, to a signed-in person only. */
 const pictureUrl = (messageId: string, n: number, full = false) => `/api/media?m=${encodeURIComponent(messageId)}&n=${n}${full ? "&full=1" : ""}`;
 const avatarUrl = (id: string) => `/api/media?avatar=${encodeURIComponent(id)}`;
+
+/** How long after a reply was written its copy from Slack or Telegram can still arrive. */
+const COPY_DAYS = 7;
+
+/**
+ * A reply sent from here comes back from its app as a message of its own, with the app's id.
+ * Once it has, that copy is the one shown, so the reply is not there twice. Each copy stands for
+ * one reply: the same words, from the owner, in the same conversation, not before it was written.
+ */
+function backFromTheApp(messages: MessageRow[]): Set<string> {
+  const copies = messages.filter((m) => m.me && m.external_id);
+  const used = new Set<string>();
+  const shownOnce = new Set<string>();
+  for (const m of messages) {
+    if (!m.me || m.external_id || m.status !== "sent") continue;
+    const copy = copies.find((x) => !used.has(x.id) && x.conversation_id === m.conversation_id && x.body === m.body && Number(x.at) > Number(m.at) - 5 * 60_000 && Number(x.at) < Number(m.at) + COPY_DAYS * 86_400_000);
+    if (!copy) continue;
+    used.add(copy.id);
+    shownOnce.add(m.id);
+  }
+  return shownOnce;
+}
 interface TaskRow {
   id: string; title: string; description: string | null; mode: Mode; dept: string; project: string; pri: Priority; due: string; done: boolean; done_at: number | null;
   src_type: "message" | "meeting" | null; src_id: string | null; delegable: boolean;
@@ -164,7 +186,9 @@ async function loadConversations(db: Db, ownerId: string): Promise<Conversation[
   const threads = new Map<string, Conversation["thread"]>();
   // What an email thread's tags are worked out from: its emails from other people.
   const mail = new Map<string, TaggedEmail>();
+  const copied = backFromTheApp(messages);
   for (const m of messages) {
+    if (copied.has(m.id)) continue;
     if (m.email && !m.me) {
       const seen = mail.get(m.conversation_id) ?? { subject: "", texts: [], senders: [], bulk: true, tab: undefined, direct: false, answered: false };
       seen.texts.push(m.body);
@@ -177,7 +201,7 @@ async function loadConversations(db: Db, ownerId: string): Promise<Conversation[
     thread.push({
       me: m.me, text: m.body, at: Number(m.at), from: m.me ? undefined : m.sender_name, status: m.status === "failed" ? "queued" : (m.status ?? undefined), ts: m.external_id ?? undefined, thread: m.thread_ts ?? undefined,
       attachments: m.attachments?.length
-        ? m.attachments.map((a, n): MessagePicture => ({ kind: a.kind, name: a.name, w: a.w, h: a.h, src: pictureUrl(m.id, n), full: a.url && a.thumb ? pictureUrl(m.id, n, true) : undefined, link: a.link }))
+        ? m.attachments.map((a, n): MessagePicture => ({ kind: a.kind, name: a.name, w: a.w, h: a.h, src: pictureUrl(m.id, n), full: a.url && a.thumb ? pictureUrl(m.id, n, true) : undefined, link: a.link, here: isUploadKey(a.key) || undefined }))
         : undefined,
       reactions: m.reactions?.length ? m.reactions : undefined,
       avatar: !m.me && m.sender_id && telegram.has(m.conversation_id) && faces.has(m.sender_id) ? avatarUrl(m.sender_id) : undefined,
@@ -414,7 +438,7 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     logs,
     focus,
     links,
-    outbox: outbox.map((o) => ({ id: o.id, source: o.source, to: o.to_name, ctx: o.ctx, text: o.body, at: Number(o.created_at), status: o.status, conversationId: o.conversation_id ?? undefined, taskId: o.task_id ?? undefined, inThread: Boolean(o.after_id) || undefined })),
+    outbox: outbox.map((o) => ({ id: o.id, source: o.source, to: o.to_name, ctx: o.ctx, text: o.body || "(a picture)", at: Number(o.created_at), status: o.status, conversationId: o.conversation_id ?? undefined, taskId: o.task_id ?? undefined, inThread: Boolean(o.after_id) || undefined })),
     jobs: JOBS.map((def) => {
       const row = jobs.find((j) => j.job_id === def.id);
       return { id: def.id, intervalMin: row?.interval_min ?? def.defaultMin, enabled: row?.enabled ?? true };
@@ -439,6 +463,7 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     logins: ownerId === OWNER_ID ? await teamLogins(db) : [],
     sendingEnabled: sendingEnabled(),
     slackFilesAllowed: slackScopes ? slackScopes.split(",").includes(SLACK_FILES_SCOPE) : null,
+    slackUploadAllowed: slackScopes ? slackScopes.split(",").includes(SLACK_UPLOAD_SCOPE) : null,
     telegramAvailable: telegramNow === null,
     telegramBlocked: telegramNow,
     googleAvailable: googleNow === null,
@@ -632,6 +657,37 @@ async function replyTitle(c: ActionContext, lead: string, text: string) {
   return `${lead}: ${requestSummary(text, `@${owner?.name ?? ""}`)}`;
 }
 
+/** What a message with pictures and no words says, as the Slack check also has it. */
+const PICTURE_ONLY = "(sent a picture)";
+
+/** A number fit to be a picture's width or height on screen, or nothing. */
+const side = (v: unknown) => (typeof v === "number" && Number.isInteger(v) && v > 0 && v < 20_000 ? v : undefined);
+
+/**
+ * The pictures added to a reply on screen, checked: each was kept here for this person when it
+ * was added (see `saveUpload`), Slack may be sent them, and there are not too many.
+ */
+async function addedPictures(c: ActionContext, source: Source, given: unknown): Promise<StoredPicture[]> {
+  if (given === undefined || given === null || (Array.isArray(given) && !given.length)) return [];
+  if (!Array.isArray(given)) throw new Error("Those pictures could not be read. Add them again.");
+  if (source !== "slack") throw new Error("Pictures can only be sent on Slack for now.");
+  if (given.length > MOST_PICTURES) throw new Error(`At most ${MOST_PICTURES} pictures can go with one message.`);
+  const [slack] = await c.db.query<{ scopes: string | null }>("select scopes from connections where owner_id = $1 and provider = 'slack'", [c.ownerId]);
+  if (slack?.scopes && !slack.scopes.split(",").includes(SLACK_UPLOAD_SCOPE)) throw new Error(SLACK_NEEDS_UPLOAD);
+  const pictures = given as Partial<AddedPicture>[];
+  const keys = pictures.map((p) => p?.key);
+  if (!keys.every(isUploadKey) || new Set(keys).size !== keys.length) throw new Error("Those pictures could not be read. Add them again.");
+  const kept = await c.db.query<{ key: string }>("select key from media where owner_id = $1 and key in (select jsonb_array_elements_text($2::jsonb))", [c.ownerId, JSON.stringify(keys)]);
+  if (kept.length !== keys.length) throw new Error("A picture is no longer here. Add it again.");
+  return pictures.map((p, n) => ({
+    kind: "image",
+    name: (typeof p.name === "string" ? p.name.trim() : "").slice(0, 120) || `Picture ${n + 1}`,
+    w: side(p.w),
+    h: side(p.h),
+    key: keys[n] as string,
+  }));
+}
+
 /** Reads a conversation and holds it for this change, so two clicks on the same button cannot both act on it. */
 /** What an email waiting in the outbox needs to go out: see `rawEmail` and outbox.ts. */
 export interface EmailDetails {
@@ -735,11 +791,16 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
     await c.db.run("update conversations set mode = $1, manual_mode = true where owner_id = $2 and id = $3", [asMode(mode), c.ownerId, id]);
     await c.db.run("update suggestions set mode = $1 where owner_id = $2 and src_type = 'message' and src_id = $3 and status = 'new'", [asMode(mode), c.ownerId, id]);
   },
-  /** `thread` is the id of the message that started a thread: the reply then goes into that thread, as it would in Slack. */
-  async sendReply(c, id: string, text: string, markDone: boolean, thread?: string | null) {
+  /**
+   * `thread` is the id of the message that started a thread: the reply then goes into that thread, as it would in Slack.
+   * `pictures` were added to the reply on screen, and go with it (Slack only).
+   */
+  async sendReply(c, id: string, text: string, markDone: boolean, thread?: string | null, pictures?: AddedPicture[]) {
     const conv = await conversation(c, id);
     // An email is answered by email (see `replyEmail`).
-    if (conv.source === "gmail") return replyByEmail(c, conv, text, markDone, false);
+    if (conv.source === "gmail" && !pictures?.length) return replyByEmail(c, conv, text, markDone, false);
+    const added = await addedPictures(c, conv.source, pictures);
+    if (typeof text !== "string" || (!text.trim() && !added.length)) throw new Error("Write a reply first.");
     const [owner] = await c.db.query<{ name: string }>("select name from users where id = $1", [c.ownerId]);
     let threadTs: string | null = null;
     // A row that is one thread in a channel is answered in that thread, never beside it.
@@ -753,11 +814,15 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
       await c.db.run("update messages set thread_ts = $1 where owner_id = $3 and conversation_id = $2 and external_id = $1 and thread_ts is null", [thread, id, c.ownerId]);
     }
     const messageId = uid("m");
-    await c.db.run("insert into messages (id, conversation_id, owner_id, sender_name, me, body, at, status, scanned, asked, thread_ts) values ($1, $2, $3, $4, true, $5, $6, 'queued', true, true, $7)", [messageId, id, c.ownerId, owner?.name ?? "You", text, c.now.getTime(), threadTs]);
+    // The pictures go with the message: the conversation shows them, and the outbox sends them from there.
+    await c.db.run(
+      "insert into messages (id, conversation_id, owner_id, sender_name, me, body, at, status, scanned, asked, thread_ts, attachments) values ($1, $2, $3, $4, true, $5, $6, 'queued', true, true, $7, $8::jsonb)",
+      [messageId, id, c.ownerId, owner?.name ?? "You", text.trim() ? text : PICTURE_ONLY, c.now.getTime(), threadTs, JSON.stringify(added)],
+    );
     await c.db.run("update conversations set replied = true, done = done or $1, auto_done = auto_done and not $1 where owner_id = $3 and id = $2", [markDone, id, c.ownerId]);
     await c.db.run(
       "insert into outbox (id, owner_id, source, target, to_name, ctx, body, conversation_id, message_id, thread_ts, created_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
-      [uid("o"), c.ownerId, conv.source, conv.external_id, conv.from_name, conv.ctx, text, id, messageId, threadTs, c.now.getTime()],
+      [uid("o"), c.ownerId, conv.source, conv.external_id, conv.from_name, conv.ctx, text.trim() ? text : "", id, messageId, threadTs, c.now.getTime()],
     );
   },
   /** Answers an email: to whoever wrote last, or with `replyAll` also to everyone else on that email. */

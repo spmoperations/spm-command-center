@@ -9,7 +9,7 @@ import { isoDay, pad } from "@/core/dates";
 import { jobById } from "@/core/jobs";
 import { PROVIDER_NAME } from "@/core/providers";
 import type { AssignWhere } from "@/core/delegation";
-import type { AppState, ConversationChange, JobId, Mode, Person, Priority, Provider, Rule, Suggestion, Task } from "@/core/types";
+import type { AddedPicture, AppState, ConversationChange, JobId, Mode, Person, Priority, Provider, Rule, Suggestion, Task } from "@/core/types";
 
 export interface UiState {
   /** Which side of the dashboard is showing. Remembered in this browser. */
@@ -311,9 +311,23 @@ export async function addCalendarEvent(form: { account: string; title: string; s
   }
 }
 
-export function sendReply(id: string, text: string, markDone: boolean, thread: string | null = null) {
+/** Answers true once the reply is in the outbox. `pictures` were added to it with `addPicture`. */
+export function sendReply(id: string, text: string, markDone: boolean, thread: string | null = null, pictures: AddedPicture[] = []): Promise<boolean> {
   if (markDone) setUi({ openConversation: null });
-  void act("sendReply", [id, text, markDone, thread], app?.state.sendingEnabled ? "Reply sent" : "Reply saved. Sending is switched off, so it waits in the outbox.");
+  return act("sendReply", pictures.length ? [id, text, markDone, thread, pictures] : [id, text, markDone, thread], app?.state.sendingEnabled ? "Reply sent" : "Reply saved. Sending is switched off, so it waits in the outbox.");
+}
+
+/** Keeps a picture for a reply until the reply is sent. Answers where it is kept, or why it could not be. */
+export async function addPicture(picture: Blob): Promise<{ key: string } | { error: string }> {
+  try {
+    const res = await fetch("/api/media", { method: "POST", headers: { "Content-Type": picture.type }, body: picture });
+    const data = (await res.json().catch(() => ({ error: `The server answered ${res.status}` }))) as { key?: string; error?: string };
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+    if (res.status === 401) window.location.assign("/login");
+    return res.ok && data.key ? { key: data.key } : { error: data.error ?? `The server answered ${res.status}` };
+  } catch (error) {
+    return { error: (error as Error).message };
+  }
 }
 
 export const markConversationDone = (id: string) => void act("markConversationDone", [id], "Marked done", inInbox(id, { done: true }));

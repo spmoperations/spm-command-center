@@ -5,8 +5,9 @@
 // Either way the browser asks the dashboard, and only a signed-in person gets an answer.
 import { secretFor } from "./connections";
 import type { Db } from "./db";
-import { isPictureType, readPicture, readTelegramAvatar, type StoredPicture } from "./media";
-import { SLACK_FILES_HOST, SLACK_FILES_SCOPE, type Fetch } from "./slack";
+import { MOST_PICTURE_BYTES } from "@/core/config";
+import { isPictureType, isUploadKey, readPicture, readTelegramAvatar, saveUpload, type StoredPicture } from "./media";
+import { onSlackFiles, SLACK_FILES_SCOPE, type Fetch } from "./slack";
 
 export const SLACK_NEEDS_FILES =
   "Slack will not hand over this picture. The Slack app needs one more permission, files:read, and then has to be installed again.";
@@ -26,16 +27,6 @@ const none = (error = "There is no such picture.", status = 404) => Response.jso
 
 const kept = (found: { bytes: Buffer; mime: string } | null): Response => (found ? new Response(new Uint8Array(found.bytes), { headers: headers(found.mime) }) : none());
 
-/** The owner's token goes to Slack's file server and nowhere else. */
-function onSlack(address: string): boolean {
-  try {
-    const url = new URL(address);
-    return url.protocol === "https:" && url.hostname === SLACK_FILES_HOST;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * `avatar=<id>` is a Telegram profile picture. `m=<message id>&n=<which>` is a picture or
  * sticker of that message, and `full=1` asks for the full size where there is one.
@@ -53,11 +44,14 @@ export async function pictureResponse(db: Db, ownerId: string, query: URLSearchP
   );
   const found = row?.attachments?.[n];
   if (!found) return none();
+  // A picture the owner added to a reply is kept here, whichever app it goes to.
+  if (found.key && isUploadKey(found.key)) return kept(await readPicture(db, ownerId, found.key));
   // Only a key under this chat's own name is looked up, whatever the message row says.
   if (row.source === "telegram") return kept(found.key?.startsWith(`telegram/${row.chat}/`) ? await readPicture(db, ownerId, found.key) : null);
 
   const address = (query.get("full") && found.url) || found.thumb || found.url;
-  if (!address || !onSlack(address)) return none();
+  // The owner's token goes to Slack's file server and nowhere else.
+  if (!address || !onSlackFiles(address)) return none();
   // Known not to be allowed: say so without asking Slack every time a picture scrolls past.
   const [slack] = await db.query<{ scopes: string | null }>("select scopes from connections where owner_id = $1 and provider = 'slack'", [ownerId]);
   if (slack?.scopes && !slack.scopes.split(",").includes(SLACK_FILES_SCOPE)) return none(SLACK_NEEDS_FILES, 403);
@@ -68,4 +62,19 @@ export async function pictureResponse(db: Db, ownerId: string, query: URLSearchP
   const type = res.headers.get("content-type");
   if (res.status !== 200 || !isPictureType(type)) return none(SLACK_NEEDS_FILES, 403);
   return new Response(res.body, { headers: headers(type!.split(";")[0].trim().toLowerCase()) });
+}
+
+export const PICTURE_TOO_BIG = `That picture is too big to send. It can be at most ${MOST_PICTURE_BYTES / 1024 / 1024} MB.`;
+
+/**
+ * A picture pasted or picked for a reply, sent as its own bytes. It is kept until the reply
+ * goes (see `saveUpload`), and the answer says where, for the reply to name it.
+ */
+export async function uploadResponse(db: Db, ownerId: string, request: Request, now = Date.now()): Promise<Response> {
+  if (Number(request.headers.get("content-length") ?? 0) > MOST_PICTURE_BYTES) return none(PICTURE_TOO_BIG, 413);
+  const bytes = Buffer.from(await request.arrayBuffer());
+  if (bytes.length > MOST_PICTURE_BYTES) return none(PICTURE_TOO_BIG, 413);
+  const saved = await saveUpload(db, ownerId, bytes, now);
+  if (!saved) return none("Only a picture can be added: PNG, JPEG, GIF or WebP.", 415);
+  return Response.json({ key: saved.key });
 }

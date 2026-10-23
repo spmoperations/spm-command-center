@@ -234,6 +234,9 @@ export default function SlackSetupPage() {
             <strong>Pictures from Slack don&apos;t show:</strong> the app needs <code>files:read</code> under User Token Scopes. Add it, click Reinstall, and paste the new token if it changed.
           </li>
           <li>
+            <strong>Pictures can&apos;t be sent from the dashboard:</strong> the app needs <code>files:write</code> under User Token Scopes. Add it, click Reinstall, and paste the new token if it changed.
+          </li>
+          <li>
             <strong>Something else:</strong> send Shruti a screenshot in #spm-development.
           </li>
         </ul>

@@ -484,11 +484,7 @@ function ProviderCard({ provider, app }: { provider: Provider; app: App }) {
               )}
             </div>
 
-            {provider === "slack" && app.state.slackFilesAllowed === false && (
-              <div className="st-help">
-                <strong>Pictures from Slack are not shown yet.</strong> The Slack app is missing one permission. In Slack, open the app&apos;s page, go to OAuth &amp; Permissions, add <code>files:read</code> under <strong>User Token Scopes</strong>, then click Reinstall. If the User OAuth Token changed, disconnect here and paste the new one. Reactions already show.
-              </div>
-            )}
+            {provider === "slack" && (app.state.slackFilesAllowed === false || app.state.slackUploadAllowed === false) && <SlackFilesMissing read={app.state.slackFilesAllowed !== false} write={app.state.slackUploadAllowed !== false} />}
             <div className="st-help">{TURN_OFF[provider]}</div>
           </>
         ) : (
@@ -581,6 +577,24 @@ function KeyForm({ app }: { app: KeyApp }) {
         </div>
       )}
     </form>
+  );
+}
+
+/** What the Slack app may not do with pictures yet, and the one change in Slack that fixes it. */
+function SlackFilesMissing({ read, write }: { read: boolean; write: boolean }) {
+  const missing = [!read && "files:read", !write && "files:write"].filter(Boolean) as string[];
+  return (
+    <div className="st-help">
+      <strong>{!read && !write ? "Pictures from Slack are not shown, and pictures cannot be sent from here, yet." : !read ? "Pictures from Slack are not shown yet." : "Pictures cannot be sent to Slack from here yet."}</strong>{" "}
+      The Slack app is missing {missing.length === 1 ? "one permission" : "two permissions"}. In Slack, open the app&apos;s page, go to OAuth &amp; Permissions, add{" "}
+      {missing.map((scope, n) => (
+        <span key={scope}>
+          {n > 0 && " and "}
+          <code>{scope}</code>
+        </span>
+      ))}{" "}
+      under <strong>User Token Scopes</strong>, then click Reinstall. If the User OAuth Token changed, disconnect here and paste the new one.
+    </div>
   );
 }
 
