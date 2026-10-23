@@ -38,125 +38,201 @@ const TOLD = (
   </>
 );
 
+/** The four parts every guide has, in the same order, so each one reads the same way. */
+const FOR = "What this page is for";
+const FROM = "Where it comes from";
+const CAN = "What you can do";
+const KNOW = "Good to know";
+
 const GUIDES: Record<string, Guide> = {
   today: {
     title: "Today",
-    intro: "Your day at a glance: what needs an answer, what is due, and what you want to get done.",
+    intro: "The first page of the day: what needs an answer now, what is due, and what you want to get done.",
     parts: [
-      { head: "Needs a reply", body: <p>The most urgent messages still waiting for you: high priority and not answered yet. Click one to open it in the Inbox and reply.</p> },
-      { head: "Tasks due today", body: <p>Your tasks that are due today or overdue, and the ones you have given to someone that are due. Tick a task when it is done.</p> },
-      { head: "Focus", body: <p>A short list of what you want to get done today and this week. It is yours only: add a line, tick it off.</p> },
-      { head: "Quick links", body: <p>The links you open often, one click away.</p> },
-      { head: "Flagged this week", body: <p>How many requests and call action items were found this week. The Review link takes you to them.</p> },
-    ],
-  },
-  inbox: {
-    title: "Inbox",
-    intro: "Your Slack and Telegram conversations that need you, sorted by how urgent they are.",
-    parts: [
-      { head: "Priority", body: <p>Each conversation is High, Medium or Low, decided by the sorting rules in Settings. Change it by hand and your choice stays.</p> },
+      { head: FOR, body: <p>A short view of the day, so nothing urgent waits until you happen to open the right tab.</p> },
       {
-        head: "Replying",
-        body: (
-          <p>
-            Click <strong>Reply</strong> to read the conversation and answer. The answer goes from your own Slack or Telegram. In Slack you can answer inside a thread, and paste or drop a screenshot
-            to send it too.
-          </p>
-        ),
-      },
-      {
-        head: "What leaves the inbox",
-        body: (
-          <p>
-            A chat you have answered is cleared after the next check, and one with nothing new for {INBOX_DAYS} days is cleared by itself. A new message brings it back. You can look at what was
-            cleared, and put a chat back.
-          </p>
-        ),
-      },
-      {
-        head: "Make task, Assign, Done",
+        head: FROM,
         body: (
           <ul>
             <li>
-              <strong>Make task</strong> puts a task on the board for you, due today.
+              <strong>Needs a reply</strong>: the high-priority messages from the Inbox that nobody has answered yet.
             </li>
             <li>
-              <strong>Assign</strong> gives it to someone on the team and tells them on Slack.
+              <strong>Tasks due today</strong>: your tasks on the board that are due today or overdue, and the ones you gave to someone that are due.
             </li>
             <li>
-              <strong>Done</strong> clears the chat. A new message brings it back.
+              <strong>Focus</strong> and <strong>Quick links</strong>: what you type in yourself.
             </li>
           </ul>
         ),
       },
-      { head: "Several at once", body: <p>Tick the box on several rows, or the one above the list for all of them, to mark them done or set their priority together.</p> },
+      {
+        head: CAN,
+        body: (
+          <ul>
+            <li>Click a waiting message to open it in the Inbox and reply.</li>
+            <li>Tick a task when it is done.</li>
+            <li>Add a focus for today or for this week, tick it off, or remove it.</li>
+            <li>Add a quick link (the text to show and the address), or remove one.</li>
+          </ul>
+        ),
+      },
+      { head: KNOW, body: <p>Focus and quick links are yours only. The line about what was flagged this week links to the Review tab.</p> },
+    ],
+  },
+  inbox: {
+    title: "Inbox",
+    intro: "Every Slack and Telegram conversation that needs you, the most urgent first, answered without leaving the page.",
+    parts: [
+      { head: FOR, body: <p>One list instead of two apps: read a chat, answer it, turn it into a task, or hand it to someone.</p> },
+      {
+        head: FROM,
+        body: (
+          <p>
+            Your connected Slack and Telegram, checked about every 15 minutes (or straight away with Sync now in Settings): direct messages, group chats, the Slack channels you follow, and any message
+            that tags you. Each conversation is High, Medium or Low, set by the sorting rules and the Important list in Settings.
+          </p>
+        ),
+      },
+      {
+        head: CAN,
+        body: (
+          <ul>
+            <li>
+              <strong>Reply</strong>: read the whole conversation and answer, from your own Slack or Telegram. In Slack you can answer inside a thread, and paste or drop a screenshot to send it too.
+            </li>
+            <li>
+              <strong>Make task</strong>: puts a task on the board for you, due today, and clears the chat.
+            </li>
+            <li>
+              <strong>Assign</strong>: makes a task for someone on the team and tells them on Slack.
+            </li>
+            <li>
+              <strong>Done</strong>: clears the chat. Change its priority with the list beside it; your choice stays.
+            </li>
+            <li>Show only Slack or only Telegram, and tick several chats to mark them done or set their priority together.</li>
+            <li>
+              <strong>Restore</strong>: see what was cleared, read it, or put it back.
+            </li>
+          </ul>
+        ),
+      },
+      {
+        head: KNOW,
+        body: (
+          <p>
+            A chat you have answered is cleared after the next check, and one with nothing new for {INBOX_DAYS} days is cleared by itself. A new message brings it back. Pictures sent in Slack show
+            once the Slack app is allowed to read files.
+          </p>
+        ),
+      },
     ],
   },
   emails: {
     title: "Emails",
-    intro: "The emails that arrive in your connected Gmail, one row per conversation, from the day the account was connected.",
+    intro: "Your Gmail, sorted into what needs you: emails to answer, money to pay, newsletters, and the rest.",
     parts: [
+      { head: FOR, body: <p>Seeing at a glance which emails need you, without going through the whole inbox in Gmail.</p> },
+      {
+        head: FROM,
+        body: <p>Each Gmail account connected on the Connections tab. Emails come in from the day the account was connected, checked about every 15 minutes, one row per conversation.</p>,
+      },
       {
         head: "The views",
         body: (
           <ul>
             <li>
-              <strong>Must respond</strong>: a person wrote to you and is waiting for your answer.
+              <strong>Must respond</strong>: a person wrote to you, you are in To, it is in Gmail&apos;s Primary tab, and they wrote last. Company addresses (billing@, support@, no-reply@), payment
+              services and calendar invitations do not count. Answering clears it.
             </li>
             <li>
-              <strong>Payments</strong>: money still to pay: an invoice or bill, a payment due or failed, a subscription that renews or ends.
+              <strong>Payments</strong>: money still to pay: an invoice or bill, a payment due or overdue, a payment or card that failed, or a subscription about to renew or end. Receipts, refunds and
+              payouts are already settled, so they are not here.
             </li>
             <li>
-              <strong>Newsletters</strong>: mailings and Gmail&apos;s Promotions, Social and Forums tabs.
+              <strong>Newsletters</strong>: mailings, and Gmail&apos;s Promotions, Social and Forums tabs. Notices from tools, receipts and invitations are not newsletters.
             </li>
             <li>
-              <strong>Other</strong>: everything else.
+              <strong>Other</strong>: everything else, such as notices from tools, calendar invitations, receipts, and emails you are only copied on.
             </li>
           </ul>
         ),
       },
       {
-        head: "Reading and replying",
+        head: CAN,
         body: (
-          <p>
-            Click <strong>Reply</strong>: the email&apos;s text shows at once, then the email as it was sent. Your answer goes from your Gmail into the same conversation; <strong>Reply all</strong>{" "}
-            includes everyone on it. <strong>New email</strong> writes one from scratch, and <strong>Open in Gmail</strong> opens it there.
-          </p>
+          <ul>
+            <li>Search by sender, subject or words in the email, and pick one account when you have several.</li>
+            <li>
+              <strong>Reply</strong>: the email&apos;s text shows at once, then the email as it was sent. The answer goes from that Gmail account into the same conversation; <strong>Reply all</strong>{" "}
+              includes everyone on it.
+            </li>
+            <li>
+              <strong>New email</strong> writes one from scratch; <strong>Open in Gmail</strong> opens the conversation there.
+            </li>
+            <li>Mark done, set the priority, or tick several to do it to all of them.</li>
+          </ul>
         ),
       },
-      { head: "Several at once", body: <p>Tick several rows to mark them done, put them back, or set their priority together.</p> },
+      { head: KNOW, body: <p>Nothing is archived, deleted or marked as read in Gmail. Sorting is plain rules, the same for everyone.</p> },
     ],
   },
   meetings: {
     title: "Meetings",
-    intro: "Your recorded calls from Fathom: what was said, and what was agreed.",
+    intro: "Your recorded calls and what was agreed on them, and today's meetings to join.",
     parts: [
-      { head: "Each call", body: <p>The notes Fathom wrote, the action items, and the full transcript when you open it. Open the recording links to the call in Fathom.</p> },
-      { head: "Action items", body: <p>Each open action item goes to the Review tab, with the person Fathom gave it to, so it can become a task on the board.</p> },
-      { head: "Today's meetings", body: <p>With Google connected, today&apos;s meetings come first, each with its Join link.</p> },
+      { head: FOR, body: <p>Keeping what was said and promised on a call, so nothing agreed on a call is forgotten afterwards.</p> },
+      {
+        head: FROM,
+        body: (
+          <ul>
+            <li>
+              <strong>Fathom</strong>: each recorded call, with its notes, its action items and the full transcript.
+            </li>
+            <li>
+              <strong>Google Calendar</strong>: today&apos;s meetings, at the top, each with its Join link.
+            </li>
+          </ul>
+        ),
+      },
+      {
+        head: CAN,
+        body: (
+          <ul>
+            <li>Join today&apos;s meetings from their link.</li>
+            <li>Read a call&apos;s notes, and open its transcript.</li>
+            <li>Tick off your tasks from a call, and add or dismiss the ones suggested from it.</li>
+            <li>
+              <strong>Follow up</strong> on an item someone else took on the call: it adds a task to chase them.
+            </li>
+          </ul>
+        ),
+      },
+      { head: KNOW, body: <p>Every open action item from a call also goes to the Review tab, with the person Fathom gave it to, so it can become a task on the board.</p> },
     ],
   },
   calendar: {
     title: "Calendar",
-    intro: "Your Google Calendar, week by week, from last week to three weeks ahead.",
+    intro: "Your Google Calendar, week by week, and changes to it made right here.",
     parts: [
+      { head: FOR, body: <p>Seeing your weeks next to your messages and tasks, and adding or answering meetings without switching to Google.</p> },
+      { head: FROM, body: <p>The main calendar of each connected Google account, from last week to three weeks ahead, checked about every 30 minutes.</p> },
       {
-        head: "Adding an event",
+        head: CAN,
         body: (
-          <p>
-            Click <strong>New event</strong>, or an empty time, for a title, time, guests and a Google Meet link. Google sends the guests its invitation.
-          </p>
+          <ul>
+            <li>Move a week back or forward, and hide or show each account&apos;s calendar.</li>
+            <li>
+              <strong>New event</strong>, or click an empty time: a title, the date, the start time, how long, guests, a description and a Google Meet link. Google sends the guests its invitation.
+            </li>
+            <li>Click one of your own events to change it or delete it; the guests are told.</li>
+            <li>
+              For someone else&apos;s invitation, answer <strong>Yes</strong>, <strong>Maybe</strong> or <strong>No</strong>; Google tells the organizer.
+            </li>
+          </ul>
         ),
       },
-      {
-        head: "Changing one",
-        body: (
-          <p>
-            Click one of your own events to edit or delete it; the guests are told. For someone else&apos;s invitation, answer <strong>Going? Yes / Maybe / No</strong>.
-          </p>
-        ),
-      },
-      { head: "More than one account", body: <p>Each connected Google account has its own color, and can be hidden.</p> },
+      { head: KNOW, body: <p>Times show in your own timezone. Declined and cancelled events, and birthdays, are left out. A meeting not answered yet has a dashed outline.</p> },
     ],
   },
   review: {
@@ -164,25 +240,32 @@ const GUIDES: Record<string, Guide> = {
     intro: "What the Command Center found this week that might be a task, from everyone's chats, emails and calls. Nothing becomes a task until someone here says so.",
     flow: true,
     parts: [
+      { head: FOR, body: <p>Deciding, in one place, which of the requests and call action items are real tasks, who should do each, and by when.</p> },
       {
-        head: "Where these come from",
+        head: FROM,
         body: (
-          <p>
-            About every 15 minutes, messages that ask Jeremy or Alex for something and have no reply yet are spotted, along with action items from recorded calls. An AI then reads each message and
-            keeps only real tasks, with a clear title, who it is for, and how sure it is. The AI is paused while its account is out of credit: until then, everything spotted shows here, marked
-            &quot;Not checked by the AI yet&quot;.
-          </p>
+          <>
+            <p>About every 15 minutes, two things are flagged:</p>
+            <ul>
+              <li>a message to Jeremy or Alex, in Slack, Telegram or email, that asks for something and has had no reply;</li>
+              <li>an open action item from a recorded call.</li>
+            </ul>
+            <p>
+              An AI then reads each flagged message with the conversation around it and keeps only real tasks, with a clear title, who it is for, and how sure it is. The AI is paused while its account
+              is out of credit; until then everything flagged shows here, marked &quot;Not checked by the AI yet&quot;. Only what was said this week, since Monday, is shown.
+            </p>
+          </>
         ),
       },
       {
-        head: "What you can do with each card",
+        head: CAN,
         body: (
           <ul>
             <li>
               <strong>Accept</strong>: it becomes a numbered task on the board, for the person shown.
             </li>
             <li>
-              <strong>Edit</strong>: change the title, description, who it is for, the client, the due date or the status first.
+              <strong>Edit</strong>: change the title, description, who it is for, the client, the due date or the status first, then accept.
             </li>
             <li>
               <strong>Merge</strong>: it is the same as a task already on the board. Its words are added to that task, and no second task is made.
@@ -190,6 +273,8 @@ const GUIDES: Record<string, Guide> = {
             <li>
               <strong>Reject</strong>: say why: not a task, a duplicate, already done, the wrong person, chit-chat, or something else.
             </li>
+            <li>Tick several cards (shift-click for a range) to accept or reject them together. Accepting several messages nobody.</li>
+            <li>Show everyone&apos;s or only yours. A team login, such as Alex, can also show Jeremy&apos;s.</li>
           </ul>
         ),
       },
@@ -197,13 +282,13 @@ const GUIDES: Record<string, Guide> = {
         head: "Who it is for, and the client",
         body: (
           <p>
-            Type a name: anyone with a Command Center login, anyone on the team list, anyone in Slack, or anyone in your Telegram chats. Type a client and press Enter to add a new one; it can be
-            picked next time.
+            Type a name: anyone with a Command Center login, anyone on the team list, anyone in Slack, or anyone in your Telegram chats. The client is a tag: pick one, or type a new client and press
+            Enter to keep it for next time.
           </p>
         ),
       },
       { head: "How someone is told", body: TOLD },
-      { head: "Set aside by the AI", body: <p>What the AI decided is not a task is listed at the bottom. If it got one wrong, click Put back.</p> },
+      { head: KNOW, body: <p>What the AI decided is not a task is listed at the bottom, never deleted. If it got one wrong, click Put back.</p> },
     ],
   },
   tasks: {
@@ -211,35 +296,37 @@ const GUIDES: Record<string, Guide> = {
     intro: "The team's board: every task, who has it, and where it stands. Jeremy and Alex see the same board.",
     flow: true,
     parts: [
+      { head: FOR, body: <p>Keeping track of every task until it is done, and following up with whoever has it.</p> },
+      { head: FROM, body: <p>Tasks accepted on the Review tab, tasks made from a chat or a call, and tasks added here by hand. Each has a number, like SPM-12, to mention it in Slack.</p> },
       {
-        head: "The columns",
+        head: CAN,
         body: (
-          <p>
-            <strong>Open</strong>, <strong>In progress</strong>, <strong>Waiting</strong> (on someone else) and <strong>Done</strong>. Drag a task to another column, or change its status on the card.
-            Each task has a number, like SPM-12, to refer to it in Slack.
-          </p>
+          <ul>
+            <li>
+              <strong>By status</strong>: four columns, Open, In progress, Waiting (on someone else) and Done. Drag a task to another column, change its status on the card, or tick it done.
+            </li>
+            <li>
+              <strong>By person</strong>: each person&apos;s tasks together, with how many are open, overdue or waiting: the view for following up.
+            </li>
+            <li>Show everyone&apos;s tasks, yours, or one person&apos;s, and one client&apos;s.</li>
+            <li>Click a task to change anything about it, read the line it came from with a link to the original, see the messages sent about it, and its history.</li>
+            <li>
+              <strong>+ New task</strong> adds one by hand, for anyone, with a client and a due date.
+            </li>
+          </ul>
         ),
       },
-      { head: "By person", body: <p>Shows each person&apos;s tasks together, with how many are open, overdue or waiting: the easiest way to follow up with whoever has what.</p> },
-      {
-        head: "A task opened",
-        body: (
-          <p>
-            Click a task to change anything about it, read the line it came from with a link to the original, see the messages sent about it, and its history: who made it, who it went to, and what
-            changed.
-          </p>
-        ),
-      },
-      { head: "New task", body: <p>Adds one by hand, for anyone, with a client and a due date.</p> },
       { head: "How someone is told", body: TOLD },
+      { head: KNOW, body: <p>Every change is written in the task&apos;s history: who made it, who it went to, and what changed, by whom and when.</p> },
     ],
   },
   connections: {
     title: "Connections",
-    intro: "Where each person connects their own accounts. What you connect is yours: nobody else sees your messages.",
+    intro: "Where each person connects their own accounts, so the Command Center can read them and send replies as them.",
     parts: [
+      { head: FOR, body: <p>Linking your Slack, Telegram, Fathom and Google to the Command Center. What you connect is yours: nobody else on the team sees your messages.</p> },
       {
-        head: "The apps",
+        head: CAN,
         body: (
           <ul>
             <li>
@@ -249,27 +336,59 @@ const GUIDES: Record<string, Guide> = {
               <strong>Telegram</strong>: your phone number, then the code Telegram sends you.
             </li>
             <li>
-              <strong>Fathom</strong>: your Fathom API key; the steps show where to find it.
+              <strong>Fathom</strong>: paste your Fathom API key; the steps show where to find it.
             </li>
             <li>
-              <strong>Google</strong>: Connect Google, pick the account, Allow. Add more than one account if you use several.
+              <strong>Google</strong>: Connect Google, pick the account, Allow. Add another account the same way.
             </li>
+            <li>Each card has step-by-step instructions with pictures, and a Disconnect button.</li>
           </ul>
         ),
       },
-      { head: "Disconnecting", body: <p>Each card can be disconnected at any time. Nothing is changed in Slack, Telegram, Fathom or Gmail by disconnecting.</p> },
+      {
+        head: KNOW,
+        body: (
+          <p>
+            Every person on the team connects their own accounts. Disconnecting stops the reading; nothing is changed in Slack, Telegram, Fathom or Gmail. Disconnecting Google also ends the login on
+            Google&apos;s side.
+          </p>
+        ),
+      },
     ],
   },
   settings: {
     title: "Settings",
-    intro: "How often things are checked, who is on the team, and how messages are sorted.",
+    intro: "How the Command Center works for you and the team: how often it checks, what it follows, who is on the team, and how messages are sorted.",
     parts: [
-      { head: "Sync", body: <p>Each check runs on its own timer. Change how often, run one now, or click Sync now to run them all.</p> },
-      { head: "Slack channels", body: <p>The channels to follow. A message there shows in your Inbox; one that tags you always does.</p> },
-      { head: "Important", body: <p>Chats and people that always count as high priority.</p> },
-      { head: "Team and responsibilities", body: <p>The team list everyone assigns from, with each person&apos;s Slack and Telegram, so a task can reach them.</p> },
-      { head: "Team logins", body: <p>Jeremy only: who else can sign in to the Command Center, such as Alex.</p> },
-      { head: "Sorting rules", body: <p>The rules that decide how urgent a message is. They run top to bottom, and the first that matches wins.</p> },
+      { head: FOR, body: <p>Adjusting how things are picked up and sorted. Most of it is set once and left alone.</p> },
+      {
+        head: "The sections",
+        body: (
+          <ul>
+            <li>
+              <strong>Sync</strong>: each check (Slack, Telegram, Gmail, Calendar, Fathom, the request finder, the AI check, sending) has its own timer. Switch one off, change how many minutes between
+              runs, or run it now. Sync now runs them all.
+            </li>
+            <li>
+              <strong>Slack channels</strong>: which channels to follow. Direct and group messages, and any message that tags you, are always read.
+            </li>
+            <li>
+              <strong>Important</strong>: tick the Slack channels and people, and Telegram groups and people, that matter most. Their messages always come first, as High, marked Important.
+            </li>
+            <li>
+              <strong>Team logins</strong> (Jeremy only): who else can sign in, such as Alex. Add one with a name, email and password, set a new password, turn a login off, or remove it.
+            </li>
+            <li>
+              <strong>Team and responsibilities</strong>: the team list everyone assigns from, shared by the whole team. Pick each person&apos;s Slack account, and their Telegram, so a task can reach
+              them; add what they are responsible for.
+            </li>
+            <li>
+              <strong>Sorting rules</strong>: rules that decide how urgent a message is, such as &quot;anything in #client- channels is High&quot;. They run top to bottom; the first that matches wins.
+            </li>
+          </ul>
+        ),
+      },
+      { head: KNOW, body: <p>A priority you set by hand in the Inbox always wins over the rules.</p> },
     ],
   },
 };
