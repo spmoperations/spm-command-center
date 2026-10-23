@@ -24,8 +24,8 @@ const BATCH = Number(process.env.AI_CHECK_BATCH ?? 20);
 /**
  * The most messages checked in a day for one login: a ceiling on what the check can spend if a
  * flood arrives or something goes wrong. About 7 a day are flagged now. Set AI_CHECK_DAILY to
- * change it; 0 switches the check off. On the live site 100 (under a dollar a day); anywhere
- * else, such as a developer's machine or a test copy, 20.
+ * change it; 0 switches the check off. On the live site 100 (about 25 cents a day at most);
+ * anywhere else, such as a developer's machine or a test copy, 20.
  */
 export function dailyLimit(): number {
   const set = setting("AI_CHECK_DAILY");

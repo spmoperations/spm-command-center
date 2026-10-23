@@ -16,16 +16,17 @@ import type { Db } from "./db";
 export type { TaskSearch };
 export type TaskCheck = check.TaskCheck;
 
-// Telling a real task from small talk is a judgment, so the most capable current model makes it,
-// thinking as much as each request needs. Few messages reach it (about 7 a day), so it costs
-// little. Set ANTHROPIC_MODEL to change it.
-export const AI_MODEL = process.env.ANTHROPIC_MODEL ?? "claude-opus-5-5";
+// Telling a real task from small talk is a judgment, made by Claude Sonnet 5.5 with adaptive
+// thinking: half the price of Opus. Few messages reach it (about 7 a day). Set ANTHROPIC_MODEL
+// to change it.
+export const AI_MODEL = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-5-5";
 
+const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 /**
- * How hard the model thinks. Telling a task from a chat line needs some thought, not a lot:
- * medium, which is also this model's own default, written out so it never changes unseen.
+ * How hard the model thinks, written out so it never changes unseen. Set AI_CHECK_EFFORT to
+ * change it.
  */
-const CHECK_EFFORT = "medium" as const;
+const CHECK_EFFORT = EFFORTS.find((e) => e === process.env.AI_CHECK_EFFORT) ?? "medium";
 
 /** What one request used, in tokens: what the model read, and what it wrote (its thinking included). */
 export interface AiUsage {
@@ -34,7 +35,7 @@ export interface AiUsage {
 }
 
 /** List prices in dollars per million tokens, to say roughly what a run cost. */
-const PRICE_PER_MILLION: Record<string, AiUsage> = { "claude-opus-5-5": { input: 4, output: 20 } };
+const PRICE_PER_MILLION: Record<string, AiUsage> = { "claude-sonnet-5-5": { input: 2, output: 10 }, "claude-opus-5-5": { input: 4, output: 20 } };
 
 /** Roughly what `usage` cost in dollars, or null for a model whose price is not listed here. */
 export function roughCost(usage: AiUsage, model = AI_MODEL): number | null {

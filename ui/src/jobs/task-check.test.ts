@@ -95,7 +95,7 @@ describe("the AI check", () => {
     ]);
     expect(await taskCheck(ctx(), m.check)).toMatchObject({
       items: 2,
-      message: "Checked 2: 1 task, 1 set aside. This run: 2,000 tokens read, 400 written, about $0.02. Today: 2 messages, 2,000 tokens read, 400 written, about $0.02",
+      message: "Checked 2: 1 task, 1 set aside. This run: 2,000 tokens read, 400 written, about $0.008. Today: 2 messages, 2,000 tokens read, 400 written, about $0.008",
     });
     const s = await loadState(db, OWNER_ID, now);
     const real = s.review.find((g) => g.id === "s_real")!;
@@ -163,7 +163,7 @@ describe("what the AI check may spend", () => {
     expect([m.asked.map((a) => a.candidates.length), await checked()]).toEqual([[1], ["s_chat"]]);
     // The next run that day sends nothing.
     const later = await taskCheck({ ...ctx(), now: NOW + 3_600_000, cursor: first.cursor! }, m.check);
-    expect([m.asked.length, later.message]).toEqual([1, "Today's limit of 1 messages is reached; the rest wait for tomorrow. Today: 1,000 tokens read, 200 written, about $0.008"]);
+    expect([m.asked.length, later.message]).toEqual([1, "Today's limit of 1 messages is reached; the rest wait for tomorrow. Today: 1,000 tokens read, 200 written, about $0.004"]);
     // A new day starts again.
     await taskCheck({ ...ctx(), now: NOW + 86_400_000, cursor: first.cursor! }, m.check);
     expect(await checked()).toEqual(["s_chat", "s_real"]);
@@ -188,7 +188,7 @@ describe("what the AI check may spend", () => {
     };
     const run = await taskCheck(ctx(), check);
     expect(asked).toEqual([2, 1, 1]);
-    expect(run.message).toBe("Checked 1: 1 task, 0 set aside, 1 the AI could not judge. This run: 3,900 tokens read, 16,210 written, about $0.34. Today: 2 messages, 3,900 tokens read, 16,210 written, about $0.34");
+    expect(run.message).toBe("Checked 1: 1 task, 0 set aside, 1 the AI could not judge. This run: 3,900 tokens read, 16,210 written, about $0.17. Today: 2 messages, 3,900 tokens read, 16,210 written, about $0.17");
     // The one it could not judge stays on the Review tab for a person, and is not sent again.
     const review = (await loadState(db, OWNER_ID, now)).review;
     expect(review.filter((g) => g.id === "s_chat" || g.id === "s_real").map((g) => [g.id, g.confidence])).toEqual([["s_chat", 85], ["s_real", null]].sort());
