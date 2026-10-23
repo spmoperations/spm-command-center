@@ -940,3 +940,4 @@ select.f.tk-done { background: var(--good-soft); color: var(--good); }
   .tk-grid { grid-template-columns: minmax(0, 1fr); }
   .rv-acts { align-items: flex-start; }
 }
+.email-wait { display: grid; gap: 8px; padding: 12px 14px; font-size: 14.5px; overflow-wrap: anywhere; }

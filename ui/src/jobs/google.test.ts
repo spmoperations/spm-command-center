@@ -452,6 +452,23 @@ describe("the Google the checks use", () => {
     await expect(api.changes("1")).rejects.toBeInstanceOf(HistoryGone);
   });
 
+  it("asks Google for a token once an hour, not for every request, and again once Gmail turns it down", async () => {
+    await connected();
+    let issued = 0;
+    let accepted = "access-1";
+    const google = googleSays({
+      [TOKEN]: () => [200, { access_token: `access-${++issued}`, expires_in: 3599 }],
+      "https://gmail.googleapis.com/gmail/v1/users/me/profile": (_body, _url, headers) => (headers.get("authorization") === `Bearer ${accepted}` ? [200, { historyId: "7" }] : [401, { error: { message: "Invalid Credentials" } }]),
+    });
+    for (let k = 0; k < 3; k++) expect(await (await googleApi(db, OWNER_ID, JEREMY_MAIL, google.fetchImpl)).mailboxNow()).toBe("7");
+    expect(issued).toBe(1);
+    // Gmail stops taking it: that request fails, and the next one asks for a new token.
+    accepted = "access-2";
+    await expect((await googleApi(db, OWNER_ID, JEREMY_MAIL, google.fetchImpl)).mailboxNow()).rejects.toThrow();
+    expect(await (await googleApi(db, OWNER_ID, JEREMY_MAIL, google.fetchImpl)).mailboxNow()).toBe("7");
+    expect(issued).toBe(2);
+  });
+
   it("forgets only the account whose login Google has ended, and says to connect it again", async () => {
     await connected(JEREMY_MAIL);
     await connected(OPS_MAIL);
@@ -1096,6 +1113,31 @@ describe("an email shown as its sender laid it out", () => {
     // Another message id, or another row, gets nothing from Gmail.
     expect(await (await emailPageResponse(db, OWNER_ID, `gmail:${JEREMY_MAIL}:t1`, "not-here", opener(google))).text()).toContain("not in the dashboard any more");
     expect(await (await emailPageResponse(db, OWNER_ID, "slack:C1", "h1", opener(google))).text()).toContain("not in the dashboard any more");
+  });
+
+  it("reads an email from Gmail once, and shows it from memory when it is opened again", async () => {
+    await connected();
+    const fake = fakeGoogle();
+    fake.deliver(withHtml("<p>Hello <b>Jeremy</b></p>"));
+    await gmailPull(ctx(), [account()], opener(fake));
+    const message = await (await opener(fake)(JEREMY_MAIL)).message("h1");
+    const google = googleSays({
+      [TOKEN]: () => [200, { access_token: "access-1", expires_in: 3599 }],
+      "https://gmail.googleapis.com/gmail/v1/users/me/messages/h1": () => [200, message],
+    });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = google.fetchImpl as typeof fetch;
+    try {
+      for (let k = 0; k < 3; k++) {
+        const res = await emailPageResponse(db, OWNER_ID, `gmail:${JEREMY_MAIL}:t1`, "h1");
+        expect([res.status, res.headers.get("cache-control"), (await res.text()).includes("Hello <b>Jeremy</b>")]).toEqual([200, "private, max-age=3600", true]);
+      }
+      expect(google.calls.map((c) => new URL(c.url).pathname)).toEqual(["/token", "/gmail/v1/users/me/messages/h1"]);
+      // Still only for the owner's own rows: one that is not theirs gets nothing, kept or not.
+      expect(await (await emailPageResponse(db, "someone-else", `gmail:${JEREMY_MAIL}:t1`, "h1")).text()).toContain("not in the dashboard any more");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 
   it("leaves the written-out links out of the text an email row shows", () => {

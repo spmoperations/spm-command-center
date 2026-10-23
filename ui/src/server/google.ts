@@ -382,6 +382,16 @@ async function call(fetchImpl: Fetch, access: string, url: string, send?: { meth
 /** The most events one read of a calendar takes, over a few pages. */
 const MAX_EVENT_PAGES = 4;
 
+/**
+ * Access tokens Google handed out, kept in this server's memory until shortly before they run
+ * out (an hour), so opening an email asks Google once an hour instead of every time. Kept for
+ * each way of reaching Google: the tests' pretend Googles each start with none. A token is
+ * found by the login it came from, so connecting again never reuses an old one.
+ */
+const accessTokens = new WeakMap<Fetch, Map<string, { token: string; until: number }>>();
+/** A token is let go this long before Google says it runs out. */
+const TOKEN_MARGIN_MS = 2 * 60_000;
+
 /** A Google that reads one account with its saved login. Throws, in words for the person, when it cannot. */
 export async function googleApi(db: Db, ownerId: string, email: string, fetchImpl: Fetch = fetch): Promise<GoogleApi> {
   const saved = await savedLogin(db, ownerId, email);
@@ -390,24 +400,43 @@ export async function googleApi(db: Db, ownerId: string, email: string, fetchImp
   // them nothing is asked of Google, and the account stays as it is.
   const keys = await keysById(db, ownerId, "google", saved.keyId);
   if (!keys) throw new GoogleSaid(`The app keys ${email} was connected with are not here any more. Nothing was changed; put the same keys back to go on reading it.`);
-  const { status, body } = await form(fetchImpl, TOKEN_URL, {
-    client_id: keys.keys.clientId,
-    client_secret: keys.keys.clientSecret,
-    refresh_token: saved.login.refresh,
-    grant_type: "refresh_token",
-  });
-  if (status !== 200 || typeof body.access_token !== "string") {
-    if (body.error === "invalid_grant") {
-      // Signed out on Google's side: the password changed, access was removed, or it went unused for months.
-      await forgetLogin(db, ownerId, email);
-      throw new GoogleSaid(`Google has signed ${email} out. Connect it again.`);
+  let tokens = accessTokens.get(fetchImpl);
+  if (!tokens) accessTokens.set(fetchImpl, (tokens = new Map()));
+  const tokenKey = `${ownerId}\n${email}\n${crypto.createHash("sha256").update(saved.login.refresh).digest("base64url")}`;
+  const kept = tokens.get(tokenKey);
+  let access: string;
+  if (kept && kept.until > Date.now()) access = kept.token;
+  else {
+    const { status, body } = await form(fetchImpl, TOKEN_URL, {
+      client_id: keys.keys.clientId,
+      client_secret: keys.keys.clientSecret,
+      refresh_token: saved.login.refresh,
+      grant_type: "refresh_token",
+    });
+    if (status !== 200 || typeof body.access_token !== "string") {
+      tokens.delete(tokenKey);
+      if (body.error === "invalid_grant") {
+        // Signed out on Google's side: the password changed, access was removed, or it went unused for months.
+        await forgetLogin(db, ownerId, email);
+        throw new GoogleSaid(`Google has signed ${email} out. Connect it again.`);
+      }
+      throw new GoogleError(status, String(body.error_description ?? body.error ?? "could not refresh the login"));
     }
-    throw new GoogleError(status, String(body.error_description ?? body.error ?? "could not refresh the login"));
+    access = body.access_token;
+    tokens.set(tokenKey, { token: access, until: Date.now() + (Number(body.expires_in) || 3600) * 1000 - TOKEN_MARGIN_MS });
   }
-  const access = body.access_token;
-  const get = (url: string) => call(fetchImpl, access, url);
-  const post = (url: string, body: unknown) => call(fetchImpl, access, url, { method: "POST", body });
-  const patch = (url: string, body: unknown) => call(fetchImpl, access, url, { method: "PATCH", body });
+  /** A request with the token. One Google no longer accepts is let go, so the next request asks for a fresh one. */
+  const ask = async (url: string, send?: Parameters<typeof call>[3]) => {
+    try {
+      return await call(fetchImpl, access, url, send);
+    } catch (error) {
+      if (error instanceof GoogleError && error.status === 401) tokens.delete(tokenKey);
+      throw error;
+    }
+  };
+  const get = (url: string) => ask(url);
+  const post = (url: string, body: unknown) => ask(url, { method: "POST", body });
+  const patch = (url: string, body: unknown) => ask(url, { method: "PATCH", body });
   const eventUrl = (id: string) => `${CALENDAR}/events/${encodeURIComponent(id)}`;
   const at = (ms: number, timeZone: string) => ({ dateTime: new Date(ms).toISOString(), timeZone });
   const meetRequest = () => ({ conferenceData: { createRequest: { requestId: crypto.randomUUID(), conferenceSolutionKey: { type: "hangoutsMeet" } } } });
@@ -480,7 +509,7 @@ export async function googleApi(db: Db, ownerId: string, email: string, fetchImp
       return (await patch(`${eventUrl(id)}?conferenceDataVersion=1&sendUpdates=all`, body)) as CalendarEvent;
     },
     async deleteEvent(id) {
-      await call(fetchImpl, access, `${eventUrl(id)}?sendUpdates=all`, { method: "DELETE" });
+      await ask(`${eventUrl(id)}?sendUpdates=all`, { method: "DELETE" });
     },
     async respond(id, answer) {
       const current = (await get(eventUrl(id))) as CalendarEvent;

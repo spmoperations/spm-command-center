@@ -30,15 +30,37 @@ const EMAIL_TALLEST = 40_000;
 /** The most a wide email is shrunk to fit its frame. */
 const EMAIL_SMALLEST = 0.45;
 
+/** Where an email's page comes from: the dashboard, which reads it from Gmail. */
+const emailPageUrl = (c: Conversation, ts: string) => `/api/gmail/message?c=${encodeURIComponent(c.id)}&m=${encodeURIComponent(ts)}`;
+
+/** Emails asked for ahead of a click, each once. */
+const warmed = new Set<string>();
+
+/**
+ * Starts loading the email a row would open while the pointer is over it, so it is there, or
+ * nearly, by the time the row is clicked. The browser and the server both keep it a while.
+ */
+function warmEmail(c: Conversation): void {
+  if (c.source !== "gmail") return;
+  const newest = c.thread.filter((m) => m.ts && m.status !== "queued").at(-1);
+  if (!newest?.ts) return;
+  const url = emailPageUrl(c, newest.ts);
+  if (warmed.has(url)) return;
+  warmed.add(url);
+  void fetch(url, { credentials: "same-origin" }).catch(() => warmed.delete(url));
+}
+
 /**
  * An email as its sender laid it out: its formatting, pictures and links. It comes from Gmail
  * when it is opened, in a frame that can run nothing (see server/email-page.ts), and is as tall
- * as the email, so all of it shows with no scrolling inside.
+ * as the email, so all of it shows with no scrolling inside. Until it is there, the email's
+ * text shows in its place, so there is something to read at once.
  */
 function EmailFrame({ c, b }: { c: Conversation; b: ThreadMessage }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const watch = useRef<ResizeObserver | null>(null);
   const [height, setHeight] = useState(120);
+  const [shown, setShown] = useState(false);
   useEffect(() => () => watch.current?.disconnect(), []);
   const fit = () => {
     try {
@@ -58,33 +80,67 @@ function EmailFrame({ c, b }: { c: Conversation; b: ThreadMessage }) {
       // The height cannot be read: it keeps the one it has.
     }
   };
-  const loaded = () => {
-    fit();
-    const doc = frame.current?.contentDocument;
-    const win = doc?.defaultView as (Window & typeof globalThis) | null | undefined;
-    if (!doc || !win) return;
-    // Pictures and web fonts arrive after the page, and a narrower window makes it taller.
-    for (const img of Array.from(doc.images)) {
-      if (img.complete) continue;
-      img.addEventListener("load", fit);
-      img.addEventListener("error", fit);
+  /** The document the frame shows once its email has arrived: not the blank one it starts with. */
+  const arrived = () => {
+    try {
+      const doc = frame.current?.contentDocument;
+      return doc && doc.location.href !== "about:blank" && doc.readyState !== "loading" ? doc : null;
+    } catch {
+      return null;
     }
-    void doc.fonts?.ready.then(fit);
-    watch.current?.disconnect();
-    watch.current = new win.ResizeObserver(fit);
-    watch.current.observe(doc.documentElement);
   };
+  const settled = useRef<Document | null>(null);
+  /**
+   * Shows the email as soon as its words and layout are there, without waiting for every picture:
+   * those, and web fonts, fill in afterwards and the frame grows to fit. True once shown.
+   */
+  const show = () => {
+    const doc = arrived();
+    const win = doc?.defaultView as (Window & typeof globalThis) | null | undefined;
+    if (!doc || !win) return false;
+    if (settled.current !== doc) {
+      settled.current = doc;
+      for (const img of Array.from(doc.images)) {
+        if (img.complete) continue;
+        img.addEventListener("load", fit);
+        img.addEventListener("error", fit);
+      }
+      void doc.fonts?.ready.then(fit);
+      watch.current?.disconnect();
+      watch.current = new win.ResizeObserver(fit);
+      watch.current.observe(doc.documentElement);
+    }
+    fit();
+    setShown(true);
+    return true;
+  };
+  // The frame's own load waits for every picture in the email; looking a few times a second shows it sooner.
+  useEffect(() => {
+    if (shown) return;
+    const look = window.setInterval(() => show() && window.clearInterval(look), 100);
+    return () => window.clearInterval(look);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shown]);
   return (
-    <iframe
-      ref={frame}
-      className="email-frame"
-      title={`Email from ${b.me ? "you" : (b.from ?? c.from)}`}
-      src={`/api/gmail/message?c=${encodeURIComponent(c.id)}&m=${encodeURIComponent(b.ts ?? "")}`}
-      sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
-      referrerPolicy="no-referrer"
-      style={{ height }}
-      onLoad={loaded}
-    />
+    <>
+      {!shown && (
+        <div className="email-wait">
+          <MessageText text={tidyEmailText(b.text)} />
+          <p className="checking">Loading the email as it was sent…</p>
+        </div>
+      )}
+      <iframe
+        ref={frame}
+        className="email-frame"
+        title={`Email from ${b.me ? "you" : (b.from ?? c.from)}`}
+        src={emailPageUrl(c, b.ts ?? "")}
+        sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+        referrerPolicy="no-referrer"
+        // Hidden, but laid out at its full width, until it has loaded and been measured.
+        style={shown ? { height } : { height: 0, visibility: "hidden" }}
+        onLoad={() => void show()}
+      />
+    </>
   );
 }
 
@@ -568,7 +624,7 @@ export function MessageRow({ c, app, open, draft, onDraft, cleared, picked, onPi
   const last = c.thread[c.thread.length - 1];
   const canDelegate = c.mode === "professional";
   return (
-    <div className={`msg ${c.replied ? "replied" : ""} ${open || delegating ? "open" : ""} ${picked ? "picked" : ""}`} ref={row}>
+    <div className={`msg ${c.replied ? "replied" : ""} ${open || delegating ? "open" : ""} ${picked ? "picked" : ""}`} ref={row} onMouseEnter={() => warmEmail(c)} onFocus={() => warmEmail(c)}>
       <div className="msg-lead">
         {onPick && <input type="checkbox" className="pick" checked={Boolean(picked)} onChange={(e) => onPick(e.target.checked)} aria-label={`Select ${c.from}: ${c.ctx}`} />}
         <Avatar name={c.from} src={c.source === "telegram" ? c.avatar : app.state.avatars[c.from]} />
