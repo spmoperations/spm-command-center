@@ -4,14 +4,15 @@ import { connect, secretFor } from "./connections";
 import fs from "node:fs";
 import type { Db } from "./db";
 import { databaseHome, describeDbError, migrate, openDb, openRemote, splitStatements } from "./db";
-import { ageOutInbox, applyAction, clearAnswered, loadState, OWNER_ID } from "./repo";
+import { ageOutInbox, applyAction, clearAnswered, loadConversation, loadState, OWNER_ID, stampsFrom, stateUpdate } from "./repo";
 import { seal, unseal } from "./secrets";
-import { NOW, reset, seed, testDb } from "./testing";
+import { NOW, reset, seed, stateOpened, testDb } from "./testing";
 
 let db: Db;
 const now = new Date(NOW);
 const act = (type: string, ...args: unknown[]) => applyAction(db, type, args, OWNER_ID, now);
-const state = () => loadState(db, OWNER_ID, now);
+// What each conversation shows once it is opened: the inbox alone brings only a chat's newest messages.
+const state = () => stateOpened(db, OWNER_ID, now);
 
 beforeAll(async () => {
   db = await testDb();
@@ -680,6 +681,84 @@ describe("Slack threads", () => {
     expect(await db.query("select thread_ts from outbox")).toEqual([{ thread_ts: null }]);
     await expect(act("sendReply", "slack:C1", "Hello?", false, "1.000100")).rejects.toThrow("no longer in this conversation");
     expect(await db.query("select count(*)::int as n from outbox")).toEqual([{ n: 1 }]);
+  });
+});
+
+describe("reading only what changed", () => {
+  const message = (conversation: string, k: number, body: string) =>
+    db.run("insert into messages (id, conversation_id, owner_id, external_id, sender_name, body, at) values ($1, $2, $3, $4, 'Priya', $5, $6)", [`${conversation}:${k}.0`, conversation, OWNER_ID, `${k}.0`, body, NOW - 50_000 + k * 1000]);
+  // The parts an answer brings: those it leaves out stay on the page as they are.
+  const parts = async (have: Parameters<typeof stateUpdate>[2], when = now) => {
+    const answer = await stateUpdate(db, OWNER_ID, have, null, when);
+    return "unchanged" in answer ? "unchanged" : (["inbox", "calendar", "meetings"] as const).filter((p) => p in answer);
+  };
+
+  it("brings a chat's newest messages until it is opened, and the open one whole", async () => {
+    for (let k = 2; k <= 6; k++) await message("slack:C1", k, `update ${k}`);
+    const closed = (await loadState(db, OWNER_ID, now)).inbox.find((c) => c.id === "slack:C1")!;
+    expect([closed.partial, closed.thread.map((m) => m.text)]).toEqual([true, ["update 5", "update 6"]]);
+    const open = (await loadState(db, OWNER_ID, now, "slack:C1")).inbox.find((c) => c.id === "slack:C1")!;
+    expect([open.partial, open.thread.length]).toEqual([undefined, 6]);
+    expect(await loadConversation(db, OWNER_ID, "slack:C1")).toEqual(open);
+    expect(await loadConversation(db, OWNER_ID, "slack:nowhere")).toBeNull();
+    // A chat with fewer messages than that is whole already.
+    expect((await loadState(db, OWNER_ID, now)).inbox.find((c) => c.id === "slack:D1")!.partial).toBeUndefined();
+  });
+
+  it("brings an email thread whole: its tags are worked out from all of it", async () => {
+    await db.run("insert into conversations (id, owner_id, source, external_id, from_name, ctx, last_text, last_at) values ('gmail:a@x.com:t1', $1, 'gmail', 't1', 'Ana', 'Invoice 12', 'Paid, thanks', $2)", [OWNER_ID, NOW]);
+    for (let k = 1; k <= 3; k++) await message("gmail:a@x.com:t1", k, `email ${k}`);
+    const email = (await loadState(db, OWNER_ID, now)).inbox.find((c) => c.id === "gmail:a@x.com:t1")!;
+    expect([email.partial, email.thread.length]).toEqual([undefined, 3]);
+    // Its row's text is its latest email from someone else, taken from the emails rather than read twice.
+    await db.run("insert into messages (id, conversation_id, owner_id, external_id, sender_name, me, body, at) values ('gmail:a@x.com:t1:4.0', 'gmail:a@x.com:t1', $1, '4.0', 'Jeremy', true, 'Thanks!', $2)", [OWNER_ID, NOW]);
+    expect((await loadState(db, OWNER_ID, now)).inbox.find((c) => c.id === "gmail:a@x.com:t1")!.text).toBe("email 3");
+  });
+
+  it("answers in a few bytes when nothing changed, and leaves out each big part that did not", async () => {
+    const have = (await loadState(db, OWNER_ID, now)).stamps!;
+    expect(await stateUpdate(db, OWNER_ID, have, null, now)).toEqual({ unchanged: true, stamps: have });
+    // A timer running shows nothing new.
+    await db.run("insert into job_runs (owner_id, job_id, started_at, finished_at, ok) values ($1, 'slack-sync', $2, $2, true)", [OWNER_ID, NOW]);
+    expect(await parts(have)).toBe("unchanged");
+    // A new message: the inbox comes again, with the small part, and not the calendar or the calls.
+    await message("slack:D1", 2, "Also clip 5, please");
+    expect(await parts(have)).toEqual(["inbox"]);
+    // So does a change made on the page, and its reactions.
+    const after = (await loadState(db, OWNER_ID, now)).stamps!;
+    await act("markConversationDone", "slack:D1");
+    expect(await parts(after)).toEqual(["inbox"]);
+    const done = (await loadState(db, OWNER_ID, now)).stamps!;
+    await db.run("update messages set reactions = '[{\"emoji\":\"+1\",\"count\":1}]' where id = 'slack:D1:2.0'");
+    expect(await parts(done)).toEqual(["inbox"]);
+  });
+
+  it("notices what the team changed, a new call and a calendar change, each in its own part", async () => {
+    let have = (await loadState(db, OWNER_ID, now)).stamps!;
+    const next = async () => {
+      const answer = await stateUpdate(db, OWNER_ID, have, null, now);
+      have = answer.stamps!;
+      return answer;
+    };
+    // A ticket moved by someone else on the team: only the small part.
+    await db.run("update tasks set status = 'in_progress' where id = 't_hook'");
+    const moved = await next();
+    expect(["unchanged" in moved, "inbox" in moved, "tasks" in moved]).toEqual([false, false, true]);
+    await db.run("insert into meetings (id, owner_id, external_id, title, started_at) values ('m1', $1, 'f1', 'Harbor kickoff', $2)", [OWNER_ID, NOW]);
+    expect(Object.keys(await next()).filter((k) => ["inbox", "calendar", "meetings"].includes(k))).toEqual(["meetings"]);
+    await db.run("insert into calendar_events (owner_id, account, id, title, start_at, end_at, saved_at) values ($1, 'jeremy@example.com', 'e1', 'Standup', $2, $3, $2)", [OWNER_ID, NOW, NOW + 900_000]);
+    expect(Object.keys(await next()).filter((k) => ["inbox", "calendar", "meetings"].includes(k))).toEqual(["calendar"]);
+    // Saving the same event again on the next calendar check changes nothing on screen.
+    await db.run("update calendar_events set saved_at = $2 where owner_id = $1", [OWNER_ID, NOW + 60_000]);
+    expect(await next()).toMatchObject({ unchanged: true });
+  });
+
+  it("reads the small part again on a new day, and everything for stamps it does not know", async () => {
+    const have = (await loadState(db, OWNER_ID, now)).stamps!;
+    expect(await parts(have, new Date(NOW + 86_400_000))).toEqual([]);
+    expect(await parts(stampsFrom("not stamps"))).toEqual(["inbox", "calendar", "meetings"]);
+    expect(await parts(stampsFrom({ inbox: have.inbox, calendar: 7 }))).toEqual(["calendar", "meetings"]);
+    expect(stampsFrom(JSON.stringify(have))).toEqual(have);
   });
 });
 

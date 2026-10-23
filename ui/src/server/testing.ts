@@ -3,7 +3,8 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { openDb, openRemote, type Db } from "./db";
-import { ensureOwner, OWNER_ID } from "./repo";
+import type { AppState } from "@/core/types";
+import { ensureOwner, loadConversation, loadState, OWNER_ID } from "./repo";
 import type { SlackClient } from "./slack";
 import type { TelegramApi, TelegramChat, TelegramMessage } from "./telegram";
 
@@ -148,4 +149,13 @@ export function fakeTelegram(chatList: FakeTelegram["chatList"]): FakeTelegram {
     },
   };
   return fake;
+}
+
+/**
+ * The state with every conversation whole, as each one looks once it is opened. The inbox itself
+ * brings only each chat's newest messages (see `PREVIEW_SHOWN` in repo.ts).
+ */
+export async function stateOpened(db: Db, ownerId = OWNER_ID, now = new Date()): Promise<AppState> {
+  const state = await loadState(db, ownerId, now);
+  return { ...state, inbox: await Promise.all(state.inbox.map(async (c) => (c.partial ? ((await loadConversation(db, ownerId, c.id)) ?? c) : c))) };
 }

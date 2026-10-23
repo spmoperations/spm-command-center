@@ -8,10 +8,10 @@ import type { JobContext } from "@/jobs/runner";
 import type { AddedPicture } from "@/core/types";
 import type { Db } from "./db";
 import { pictureResponse, PICTURE_TOO_BIG, uploadResponse } from "./pictures";
-import { applyAction, loadState, OWNER_ID } from "./repo";
+import { applyAction, OWNER_ID } from "./repo";
 import { seal } from "./secrets";
 import { SLACK_NEEDS_UPLOAD, slackClient, SlackError } from "./slack";
-import { fakeSlack, NOW, reset, seed, testDb, TINY } from "./testing";
+import { fakeSlack, NOW, reset, seed, stateOpened, testDb, TINY } from "./testing";
 
 let db: Db;
 const ctx = (): JobContext => ({ db, ownerId: OWNER_ID, now: NOW, cursor: {} });
@@ -91,7 +91,7 @@ describe("a reply with pictures", () => {
     const two = await added(TINY.jpg);
     await reply("slack:C1", "Here it is", [{ key: one, name: "image.png", w: 1200, h: 800 }, { key: two, name: "Second take", w: 640, h: 480 }], "1.0");
 
-    const shown = (await loadState(db)).inbox.find((c) => c.id === "slack:C1")!.thread.at(-1)!;
+    const shown = (await stateOpened(db)).inbox.find((c) => c.id === "slack:C1")!.thread.at(-1)!;
     expect(shown).toMatchObject({ me: true, text: "Here it is", status: "queued", thread: "1.0" });
     expect(shown.attachments!.map((p) => [p.name, p.w, p.h, p.here])).toEqual([["image.png", 1200, 800, true], ["Second take", 640, 480, true]]);
     // Served by the dashboard, whatever Slack lets it read.
@@ -115,16 +115,16 @@ describe("a reply with pictures", () => {
     ]);
     expect(uploads).toEqual([["https://files.slack.com/upload/v1/u1", TINY.png.length], ["https://files.slack.com/upload/v1/u2", TINY.jpg.length]]);
     expect(await db.query("select status, last_error from outbox")).toEqual([{ status: "sent", last_error: null }]);
-    expect((await loadState(db)).inbox.find((c) => c.id === "slack:C1")!.thread.at(-1)).toMatchObject({ status: "sent" });
+    expect((await stateOpened(db)).inbox.find((c) => c.id === "slack:C1")!.thread.at(-1)).toMatchObject({ status: "sent" });
   });
 
   it("can be a picture alone, with no words", async () => {
     await slackConnected("channels:history,files:read,files:write");
     const key = await added(TINY.png);
     await reply("slack:D1", "  ", [{ key, name: "screen.png" }]);
-    const shown = (await loadState(db)).inbox.find((c) => c.id === "slack:D1")!.thread.at(-1)!;
+    const shown = (await stateOpened(db)).inbox.find((c) => c.id === "slack:D1")!.thread.at(-1)!;
     expect([shown.text, shown.attachments?.length]).toEqual(["(sent a picture)", 1]);
-    expect((await loadState(db)).outbox[0].text).toBe("(a picture)");
+    expect((await stateOpened(db)).outbox[0].text).toBe("(a picture)");
     process.env.SENDING_ENABLED = "true";
     const { slack, calls } = takesPictures();
     await outboxSend(ctx(), slack);
@@ -191,7 +191,7 @@ describe("a reply sent from here", () => {
     await applyAction(db, "sendReply", ["slack:D1", "On it.", false], OWNER_ID, new Date(NOW));
     await applyAction(db, "sendReply", ["slack:D1", "On it.", false], OWNER_ID, new Date(NOW + 1_000));
     await db.run("update messages set status = 'sent' where owner_id = $1 and me", [OWNER_ID]);
-    const mine = async () => (await loadState(db)).inbox.find((c) => c.id === "slack:D1")!.thread.filter((m) => m.me).map((m) => [m.text, m.ts ?? null]);
+    const mine = async () => (await stateOpened(db)).inbox.find((c) => c.id === "slack:D1")!.thread.filter((m) => m.me).map((m) => [m.text, m.ts ?? null]);
     expect(await mine()).toEqual([["On it.", null], ["On it.", null]]);
     // Slack's copy of the first one arrives: it stands in for one of the two, not both.
     await db.run("insert into messages (id, conversation_id, owner_id, external_id, sender_name, sender_id, me, body, at) values ('slack:D1:2.0', 'slack:D1', $1, '2.0', 'Jeremy', 'UJEREMY', true, 'On it.', $2)", [OWNER_ID, NOW + 2_000]);

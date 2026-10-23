@@ -119,6 +119,11 @@ export interface Conversation {
    */
   root?: string;
   thread: ThreadMessage[];
+  /**
+   * Only the newest messages are here, so the page loads quickly; the rest come when the
+   * conversation is opened. An email thread always comes whole.
+   */
+  partial?: boolean;
 }
 
 export interface TaskSource {
@@ -542,4 +547,18 @@ export interface AppState {
    * (the owner's), or the server's settings; and their own, when they saved some. Never a secret.
    */
   appKeys: Record<"google" | "telegram" | "anthropic" | "slack", AppKeysOnScreen>;
+  /** A fingerprint of each part as it was read, so the page can ask whether anything changed. */
+  stamps?: Stamps;
 }
+
+/**
+ * The parts of the data that are read again only when they changed: the conversations, the
+ * calendar, the calls, and everything else (which is small, and comes whenever any part does).
+ */
+export type StatePart = "inbox" | "calendar" | "meetings" | "rest";
+export type Stamps = Record<StatePart, string>;
+/** The big parts. An answer leaves out each one that has not changed since the page read it. */
+export type HeavyPart = Exclude<StatePart, "rest">;
+/** What the server answers when the page asks for what changed. */
+export type StateUpdate = Omit<AppState, HeavyPart> & Partial<Pick<AppState, HeavyPart>>;
+export type StateAnswer = StateUpdate | { unchanged: true; stamps: Stamps };

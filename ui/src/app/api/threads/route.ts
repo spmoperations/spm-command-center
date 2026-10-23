@@ -3,7 +3,7 @@ import { telegramRefresh } from "@/jobs/telegram";
 import { ready } from "@/server/boot";
 import { secretFor } from "@/server/connections";
 import { failed, fromDashboard, refused, signedInAs, signInFirst } from "@/server/http";
-import { loadState } from "@/server/repo";
+import { stampsFrom, stateUpdate } from "@/server/repo";
 import { RateLimited, slackClient } from "@/server/slack";
 import { telegramApi, telegramConnected } from "@/server/telegram";
 
@@ -20,9 +20,11 @@ export async function POST(request: Request) {
   const owner = await signedInAs(request);
   if (!owner) return signInFirst(request);
   try {
-    const { id } = (await request.json()) as { id?: unknown };
+    const { id, have } = (await request.json()) as { id?: unknown; have?: unknown };
     if (typeof id !== "string") return failed(new Error("Which conversation?"));
     const db = await ready();
+    // Only what changed comes back, with this conversation whole: it is the one open.
+    const fresh = () => stateUpdate(db, owner, stampsFrom(have), id);
     // An email is read whole by the Gmail check: there is nothing more to fetch when it is opened.
     if (id.startsWith("gmail:")) return Response.json({ added: 0 });
     if (id.startsWith("telegram:")) {
@@ -30,7 +32,7 @@ export async function POST(request: Request) {
       const telegram = await telegramApi(db, owner);
       try {
         const { added, changed } = await telegramRefresh({ db, ownerId: owner, now: Date.now() }, telegram, id);
-        return Response.json(added || changed ? { added, state: await loadState(db, owner) } : { added });
+        return Response.json(added || changed ? { added, state: await fresh() } : { added });
       } finally {
         await telegram.close();
       }
@@ -38,7 +40,7 @@ export async function POST(request: Request) {
     const token = await secretFor(db, owner, "slack");
     if (!token) return Response.json({ added: 0 });
     const { added, changed } = await slackReadThreads({ db, ownerId: owner }, slackClient(token), id);
-    return Response.json(added || changed ? { added, state: await loadState(db, owner) } : { added });
+    return Response.json(added || changed ? { added, state: await fresh() } : { added });
   } catch (error) {
     // Slack asking for a pause is not worth an error on screen: the threads come next time.
     if (error instanceof RateLimited) return Response.json({ added: 0 });

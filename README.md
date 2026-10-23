@@ -150,7 +150,7 @@ Anything that looks like an access key is stripped from message text before it i
 | `ui/src/prompts/` | Every instruction given to an AI model, one file per prompt, with a README that lists them |
 | `ui/src/app/api/` | The routes the screens call |
 | `ui/src/app/`, `ui/src/components/` | One folder per tab, and the shared pieces |
-| `ui/src/store/store.ts` | The browser's copy of the data: reads `/api/state`, sends each action to the server |
+| `ui/src/store/store.ts` | The browser's copy of the data: reads `/api/state`, sends each action to the server, and asks for what changed while the page is on screen |
 
 ## Database
 
@@ -167,6 +167,7 @@ To move to the hosted database: put the string in `ui/.env.local`, run `npm run 
 - **Locked tables.** Supabase serves every table in the `public` schema through a public web API. `0002_row_level_security.sql` switches row level security on with no policies, so that API returns nothing. The app connects as the database owner and is not affected. Every new table needs the same line.
 - **Data does not move** between the two homes. A new database starts empty: the connections are read again from `.env.local`, and Run now pulls the messages and calls again.
 - **Both paths are tested.** `npm test` uses PGlite directly; `npm run test:hosted` runs the same tests through the hosted driver against a local stand-in server.
+- **Reading only what changed.** Supabase's Free plan counts every byte read out of the database (5 GB a month). An open page asks once a minute whether anything changed: the database works out a short fingerprint of each part (the conversations, the calendar, the calls, the rest) and only those few bytes come back. A part is read again only when its fingerprint changed. A page in a background tab asks nothing; one nobody has touched for 10 minutes asks every 5. A chat brings only its two newest messages until it is opened (`/api/conversation` reads the rest); an email thread always comes whole. The fingerprints leave out when each timer last ran, so Settings and Connections read the small part every time, and a page in use reads everything every 30 minutes. See `stateStamps` in `ui/src/server/repo.ts`.
 
 ## Ground rules
 

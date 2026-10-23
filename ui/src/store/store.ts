@@ -9,7 +9,7 @@ import { isoDay, pad } from "@/core/dates";
 import { jobById } from "@/core/jobs";
 import { PROVIDER_NAME } from "@/core/providers";
 import type { AssignWhere } from "@/core/delegation";
-import type { AddedPicture, AppState, ConversationChange, JobId, Mode, Person, Priority, Provider, Rule, Suggestion, Task, TicketInput } from "@/core/types";
+import type { AddedPicture, AppState, Conversation, ConversationChange, JobId, Mode, Person, Priority, Provider, Rule, Stamps, StateAnswer, Suggestion, Task, TicketInput } from "@/core/types";
 import type { RejectReason } from "@/core/config";
 
 export interface UiState {
@@ -38,7 +38,27 @@ export interface App {
   today: string;
 }
 
-const REFRESH_MS = 60_000;
+/**
+ * While someone is using the page, it asks this often whether anything changed. The question
+ * and its answer are a few bytes; only what changed is read, so a quiet inbox costs next to
+ * nothing. A page in a tab or window nobody is looking at asks nothing.
+ */
+const CHECK_MS = 60_000;
+/** After this long with no click, key or scroll, the page may just be left open on a screen: it asks less often. */
+const IDLE_AFTER_MS = 10 * 60_000;
+const IDLE_CHECK_MS = 5 * 60_000;
+/** Everything is read again this often while someone is using the page, in case a check missed something. */
+const FULL_MS = 30 * 60_000;
+/** Pages showing when each timer last ran, which the check leaves out (it changes every few minutes): they read it each time. */
+const TIMER_PAGES = ["/settings", "/connections"];
+
+/** The data as the server last sent it, before the screen's own changes (see `act`). */
+let raw: AppState | null = null;
+/** What `raw` was read with, so the server can say what changed since. */
+let stamps: Stamps | null = null;
+let lastRead = 0;
+let lastFull = 0;
+let lastActive = Date.now();
 
 let app: App | null = null;
 let ui: UiState = { mode: "professional", openConversation: null, openTask: null, openMeetings: [], toast: null, running: [], saving: 0, syncing: false, checking: [] };
@@ -70,11 +90,32 @@ function inMyTimezone(state: AppState): AppState {
   };
 }
 
-function setState(state: AppState) {
+/** Shows the data in `raw`, as of now. Changes the screen made on its own, ahead of the server, are dropped. */
+function render() {
+  if (!raw) return;
   const now = new Date();
-  const mine = inMyTimezone(state);
+  const mine = inMyTimezone(raw);
   app = { state: PERSONAL_SIDE ? mine : oneSide(mine), ui, now, today: isoDay(now) };
   emit();
+}
+
+/**
+ * Takes in what the server sent: everything, or only the parts that changed (the others stay as
+ * they are), or word that nothing did.
+ */
+function setState(answer: StateAnswer) {
+  if ("unchanged" in answer) {
+    stamps = answer.stamps;
+    // A change on its way keeps what the screen shows meanwhile. Otherwise the time moves on.
+    if (ui.saving === 0) render();
+    return;
+  }
+  if (!raw && !(answer.inbox && answer.calendar && answer.meetings)) return void refresh(true);
+  raw = { ...raw, ...answer } as AppState;
+  stamps = answer.stamps ?? null;
+  render();
+  // The open conversation came with only its newest messages (an answer that did not know it was open): fetch the rest.
+  if (ui.openConversation) void loadWhole(ui.openConversation);
 }
 
 function setUi(patch: Partial<UiState>) {
@@ -101,12 +142,45 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
   return data as T;
 }
 
-/** Reads the latest data from the server. */
-export async function refresh(): Promise<void> {
+/** What the page has, for the server to answer with what changed since; and the conversation open on it, which comes whole. */
+const known = (): { have?: Stamps; open?: string } => ({ have: raw && stamps ? stamps : undefined, open: ui.openConversation ?? undefined });
+
+/** Reads what changed on the server since the last read. `whole` reads everything again. */
+export async function refresh(whole = false): Promise<void> {
+  const now = Date.now();
+  lastRead = now;
+  const all = whole || !raw || !stamps || (now - lastFull > FULL_MS && now - lastActive < IDLE_AFTER_MS);
+  const { have, open } = known();
+  const query = new URLSearchParams();
+  // The timers' last runs are not in the check: on the pages that show them, the small part is always read.
+  if (!all && have) query.set("have", JSON.stringify(TIMER_PAGES.some((p) => window.location.pathname.startsWith(p)) ? { ...have, rest: "" } : have));
+  if (open) query.set("open", open);
   try {
-    setState(await request<AppState>("/api/state"));
+    const answer = await request<StateAnswer>(`/api/state${query.size ? `?${query}` : ""}`);
+    if (all) lastFull = Date.now();
+    setState(answer);
   } catch (error) {
     toast(`Could not load the dashboard: ${(error as Error).message}`);
+  }
+}
+
+// Conversations being fetched whole right now.
+const fetching = new Set<string>();
+
+/** Fetches the rest of a conversation that came with only its newest messages, once it is opened. */
+async function loadWhole(id: string) {
+  if (!raw?.inbox.find((c) => c.id === id)?.partial || fetching.has(id)) return;
+  fetching.add(id);
+  try {
+    const { conversation } = await request<{ conversation: Conversation | null }>(`/api/conversation?id=${encodeURIComponent(id)}`);
+    // Only over the short copy it was fetched for: a newer read may have brought it whole meanwhile.
+    if (!conversation || !raw?.inbox.some((c) => c.id === id && c.partial)) return;
+    raw = { ...raw, inbox: raw.inbox.map((c) => (c.id === id ? conversation : c)) };
+    render();
+  } catch {
+    // The newest messages stay on screen; the next read brings the rest.
+  } finally {
+    fetching.delete(id);
   }
 }
 
@@ -128,10 +202,24 @@ function start() {
   if (started) return;
   started = true;
   ui = { ...ui, mode: rememberedMode() };
-  void refresh();
-  // New messages and calls arrive on the server's timers; this picks them up.
-  setInterval(() => void refresh(), REFRESH_MS);
-  window.addEventListener("focus", () => void refresh());
+  void refresh(true);
+  // New messages and calls arrive on the server's timers; this picks them up, but only while
+  // the page is on screen (see CHECK_MS).
+  const idle = () => Date.now() - lastActive > IDLE_AFTER_MS;
+  setInterval(() => {
+    if (document.visibilityState === "visible" && Date.now() - lastRead >= (idle() ? IDLE_CHECK_MS : CHECK_MS)) void refresh();
+  }, 15_000);
+  // Back on the page after a while away: look at once.
+  const back = () => {
+    if (document.visibilityState === "visible" && Date.now() - lastRead > 30_000) void refresh();
+  };
+  document.addEventListener("visibilitychange", back);
+  const active = () => {
+    const wasIdle = idle();
+    lastActive = Date.now();
+    if (wasIdle) back();
+  };
+  for (const type of ["pointerdown", "keydown", "wheel", "touchstart"]) window.addEventListener(type, active, { passive: true });
 }
 
 const subscribe = (l: () => void) => {
@@ -191,7 +279,7 @@ async function act(type: string, args: unknown[], done?: string, show?: (state: 
     emit();
   }
   try {
-    setState(await request<AppState>("/api/action", { type, args }));
+    setState(await request<StateAnswer>("/api/action", { type, args, ...known() }));
     if (done) toast(done);
     return true;
   } catch (error) {
@@ -211,7 +299,10 @@ const inSuggestions = (id: string, patch: Partial<Suggestion>) => (s: AppState):
 
 // ---------- Inbox ----------
 
-export const openConversation = (id: string | null) => setUi({ openConversation: id });
+export function openConversation(id: string | null) {
+  setUi({ openConversation: id });
+  if (id) void loadWhole(id);
+}
 
 // When each conversation's threads were last read, so opening and closing it does not ask Slack every time.
 const threadsRead = new Map<string, number>();
@@ -226,7 +317,7 @@ export async function readThreads(id: string) {
   threadsRead.set(id, Date.now());
   setUi({ checking: [...ui.checking, id] });
   try {
-    const { state } = await request<{ added: number; state?: AppState }>("/api/threads", { id });
+    const { state } = await request<{ added: number; state?: StateAnswer }>("/api/threads", { id, have: known().have });
     if (state) setState(state);
   } catch {
     // Not worth interrupting the person: what is already on screen stays, and it is tried again later.
@@ -252,7 +343,7 @@ export function replyEmail(id: string, text: string, markDone: boolean, replyAll
 /** A new email from one of the connected Google accounts. Resolves to an error message, or null once it is on its way. */
 export async function composeEmail(account: string, to: string, cc: string, subject: string, body: string): Promise<string | null> {
   try {
-    setState(await request<AppState>("/api/action", { type: "composeEmail", args: [account, to, cc, subject, body] }));
+    setState(await request<StateAnswer>("/api/action", { type: "composeEmail", args: [account, to, cc, subject, body], ...known() }));
     toast(app?.state.sendingEnabled ? "Email sent" : "Email saved. Sending is switched off, so it waits in the outbox.");
     return null;
   } catch (error) {

@@ -247,6 +247,7 @@ function Thread({ c, app, draft, onDraft }: { c: Conversation; app: App; draft: 
   return (
     <div className="thread">
       <div className={`bubbles ${c.source === "gmail" ? "emails" : ""}`} ref={box}>
+        {c.partial && <p className="checking">Loading the earlier messages…</p>}
         {groups.length === 0 && <p className="muted">No messages in this conversation yet.</p>}
         {checking && <p className="checking">{c.source === "telegram" ? "Checking Telegram for new messages and reactions…" : "Checking Slack for replies, pictures and reactions…"}</p>}
         {slackPicturesBlocked(c, app) && c.thread.some((m) => m.attachments?.some((p) => !p.here)) && (

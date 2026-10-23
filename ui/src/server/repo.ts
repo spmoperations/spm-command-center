@@ -8,7 +8,8 @@ import { clampInterval, defaultJobSettings, JOBS } from "@/core/jobs";
 import { requestSummary } from "@/core/requests";
 import { applyRules } from "@/core/rules";
 import type {
-  AddedPicture, AppState, Conversation, ConversationChange, FocusBoard, JobId, JobStatus, Meeting, MessagePicture, Metric, Mode, Person, Priority, Provider, Reaction, Rule, Source, Suggestion, CalendarItem,
+  AddedPicture, AppState, Conversation, ConversationChange, FocusBoard, HeavyPart, JobId, JobStatus, Meeting, MessagePicture, Metric, Mode, Person, Priority, Provider, Reaction, Rule, Source, Stamps,
+  StateAnswer, StatePart, StateUpdate, Suggestion, CalendarItem,
 } from "@/core/types";
 import { aiConfigured } from "./ai";
 import { emailTags, type TaggedEmail } from "@/core/email-tags";
@@ -19,7 +20,7 @@ import { isUploadKey, telegramAvatarIds, type StoredPicture } from "./media";
 import { SLACK_FILES_SCOPE, SLACK_NEEDS_UPLOAD, SLACK_UPLOAD_SCOPE, type Fetch } from "./slack";
 import { hashPassword, MIN_PASSWORD, teamLogins } from "./team";
 import { telegramBlocked } from "./telegram";
-import { insertTicket, logEvent, reviewItems, setAsideItems, sourceNote, TEAM, teamClients, teamPeople, teamSlack, teamTickets, TICKET_ACTIONS } from "./tickets";
+import { insertTicket, logEvent, reviewItems, setAsideItems, sourceNote, TEAM, teamClients, teamPeople, teamSlack, teamTickets, teamUsersSql, TICKET_ACTIONS } from "./tickets";
 import type { Db } from "./db";
 import { OWNER_ID } from "./owner";
 
@@ -109,6 +110,11 @@ interface RuleRow { id: string; kind: "priority" | "label"; source: Rule["source
 const GROUPS_SHOWN = 30;
 const REPLIES_SHOWN = 40;
 const MESSAGES_SHOWN = 150;
+/**
+ * How many of a chat's messages come with the inbox until it is opened: enough for its row.
+ * The rest come when it is opened, so the inbox is small to read every time something changes.
+ */
+const PREVIEW_SHOWN = 2;
 
 const toRule = (r: RuleRow): Rule => ({ id: r.id, source: r.source, when: r.match_on, op: r.op, value: r.value, pri: r.pri ?? undefined, line: r.line ?? undefined, mode: r.mode ?? undefined });
 
@@ -143,31 +149,63 @@ export async function importantConversations(db: Db, ownerId: string): Promise<S
   return new Set(rows.map((r) => r.id));
 }
 
-async function loadConversations(db: Db, ownerId: string): Promise<Conversation[]> {
+/**
+ * The conversations the inbox shows. `open` is the one open on the page, which comes whole; the
+ * other chats bring only their newest messages (see `PREVIEW_SHOWN`). `only` reads that one alone.
+ */
+async function loadConversations(db: Db, ownerId: string, { open = null, only = null }: { open?: string | null; only?: string | null } = {}): Promise<Conversation[]> {
   // Both reads go out together. Only the newest part of each conversation is fetched: a busy
   // channel can hold thousands of messages. A thread counts as one group and is kept whole
   // (its first message and its newest replies), so a reply never shows without what it answers.
+  // An email thread is always whole: its tags are worked out from all of it.
   const [rows, messages, important] = await Promise.all([
-    db.query<ConversationRow>(`select * from conversations where owner_id = $1 and id in (${SHOWN})`, [ownerId]),
-    db.query<MessageRow>(
+    // An email row's text is the text of an email in it, which comes whole below: it is not read twice.
+    db.query<ConversationRow>(
+      `select id, source, external_id, thread_ts, from_name, ctx, direct, tagged, last_at, pri, line, mode, project, done, auto_done, replied, manual_pri, manual_mode,
+              case when source = 'gmail' and exists (select 1 from messages m where m.owner_id = $1 and m.conversation_id = c.id) then '' else last_text end as last_text
+       from conversations c where owner_id = $1 and id in (${SHOWN}) and ($2::text is null or id = $2)`,
+      [ownerId, only],
+    ),
+    db.query<MessageRow & { in_window: number }>(
       `with grouped as (
          select m.*, coalesce(m.thread_ts, m.external_id, m.id) as grp,
                 max(m.at) over (partition by m.conversation_id, coalesce(m.thread_ts, m.external_id, m.id)) as grp_at
-         from messages m where m.owner_id = $1 and m.conversation_id in (${SHOWN})
+         from messages m where m.owner_id = $1 and m.conversation_id in (${SHOWN}) and ($6::text is null or m.conversation_id = $6)
        ), ranked as (
          select g.*,
                 dense_rank() over (partition by conversation_id order by grp_at desc, grp desc) as grp_rank,
                 row_number() over (partition by conversation_id, grp order by at desc, id desc) as in_grp,
                 row_number() over (partition by conversation_id order by grp_at desc, at desc, id desc) as overall
          from grouped g
+       ), windowed as (
+         select r.*, count(*) over (partition by conversation_id) as in_window from ranked r
+         where grp_rank <= $2 and overall <= $4 and (in_grp <= $3 or external_id = grp)
        )
-       select id, conversation_id, sender_name, sender_id, me, body, at, status, external_id, thread_ts, attachments, reactions, email from ranked
-       where grp_rank <= $2 and overall <= $4 and (in_grp <= $3 or external_id = grp)
+       select id, conversation_id, sender_name, sender_id, me, body, at, status, external_id, thread_ts, attachments, reactions, email, in_window from windowed
+       where conversation_id = $5 or conversation_id like 'gmail:%' or overall <= $7
        order by at, id`,
-      [ownerId, GROUPS_SHOWN, REPLIES_SHOWN, MESSAGES_SHOWN],
+      [ownerId, GROUPS_SHOWN, REPLIES_SHOWN, MESSAGES_SHOWN, only ?? open ?? "", only, PREVIEW_SHOWN],
     ),
     importantConversations(db, ownerId),
   ]);
+  // How many messages each conversation would show whole, to tell which ones came cut short.
+  const whole = new Map<string, number>();
+  const sent = new Map<string, number>();
+  // An email row's text, as `refreshConversation` keeps it: its latest email from someone else, else its latest.
+  const emailText = new Map<string, { incoming?: string; latest: string }>();
+  for (const m of messages) {
+    whole.set(m.conversation_id, Number(m.in_window));
+    sent.set(m.conversation_id, (sent.get(m.conversation_id) ?? 0) + 1);
+    if (!m.conversation_id.startsWith("gmail:")) continue;
+    const text = emailText.get(m.conversation_id) ?? { latest: "" };
+    text.latest = m.body;
+    if (!m.me) text.incoming = m.body;
+    emailText.set(m.conversation_id, text);
+  }
+  const textOf = (r: ConversationRow) => {
+    const email = r.source === "gmail" ? emailText.get(r.id) : undefined;
+    return email ? (email.incoming ?? email.latest) : r.last_text;
+  };
   // Telegram's profile pictures are kept by the dashboard. Slack's are addresses, in `avatars`.
   const telegram = new Set(rows.filter((r) => r.source === "telegram").map((r) => r.id));
   const faces = telegram.size ? await telegramAvatarIds(db, ownerId) : new Set<string>();
@@ -199,17 +237,25 @@ async function loadConversations(db: Db, ownerId: string): Promise<Conversation[
   return rows.map((r) => {
     const thread = threads.get(r.id) ?? [];
     return {
-      id: r.id, source: r.source, from: r.from_name, ctx: r.ctx, direct: r.direct, tagged: r.tagged, text: r.last_text, at: r.last_at,
+      id: r.id, source: r.source, from: r.from_name, ctx: r.ctx, direct: r.direct, tagged: r.tagged, text: textOf(r), at: r.last_at,
       pri: r.pri, line: r.line, mode: r.mode, project: r.project, done: r.done, replied: r.replied, manualPri: r.manual_pri || undefined, manualMode: r.manual_mode || undefined,
       root: r.thread_ts ?? undefined,
       important: important.has(r.id) || undefined,
-      tags: r.source === "gmail" ? emailTags({ ...(mail.get(r.id) ?? { texts: [r.last_text], senders: [], bulk: false }), subject: r.ctx, direct: r.direct, answered: r.replied }) : undefined,
+      tags: r.source === "gmail" ? emailTags({ ...(mail.get(r.id) ?? { texts: [textOf(r)], senders: [], bulk: false }), subject: r.ctx, direct: r.direct, answered: r.replied }) : undefined,
       autoCleared: (r.done && r.auto_done) || undefined,
       // A one-to-one chat shows the other person. A group shows whoever wrote last.
       avatar: r.source !== "telegram" ? undefined : r.direct && faces.has(r.external_id) ? avatarUrl(r.external_id) : thread.findLast((m) => !m.me)?.avatar,
       thread,
+      // Counted before the copies of the dashboard's own replies are left out (see `backFromTheApp`).
+      partial: (sent.get(r.id) ?? 0) < (whole.get(r.id) ?? 0) || undefined,
     };
   });
+}
+
+/** One conversation, whole, for when it is opened on the page. */
+export async function loadConversation(db: Db, ownerId: string, id: string): Promise<Conversation | null> {
+  const [found] = await loadConversations(db, ownerId, { only: id });
+  return found ?? null;
 }
 
 interface MeetingRow {
@@ -305,7 +351,89 @@ async function loadJobStatus(db: Db, ownerId: string): Promise<AppState["jobStat
   return status;
 }
 
-export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): Promise<AppState> {
+/** The fingerprint of some rows: each row's own, put in order, so the order they are read in does not matter. */
+const rowsHash = (row: string, from: string) => `(select md5(coalesce(string_agg(h, '' order by h), '')) from (select md5((${row})::text) as h ${from}) x)`;
+
+const PARTS: StatePart[] = ["inbox", "calendar", "meetings", "rest"];
+const HEAVY: HeavyPart[] = ["inbox", "calendar", "meetings"];
+
+/**
+ * A fingerprint of each part of the data, worked out by the database, so only a few bytes come
+ * back. Each covers what its part shows: while it stays the same, so does the part. Left out:
+ * when each timer last ran, which changes every few minutes; the page reads that now and then.
+ */
+export async function stateStamps(db: Db, ownerId: string, now = new Date()): Promise<Stamps> {
+  const [row] = await db.query<Stamps>(
+    `select
+       md5(concat(
+         ${rowsHash("c", "from conversations c where c.owner_id = $1")},
+         ${rowsHash("m", `from messages m where m.owner_id = $1 and m.conversation_id in (${SHOWN})`)},
+         ${rowsHash("row(i.source, i.kind, i.external_id)", "from important i where i.owner_id = $1")},
+         ${rowsHash("d.key", "from media d where d.owner_id = $1 and d.key like 'telegram/avatar/%' and d.mime <> ''")}
+       )) as inbox,
+       ${rowsHash(
+         "row(e.account, e.id, e.title, e.start_at, e.end_at, e.all_day, e.kind, e.location, e.link, e.html_link, e.organizer, e.attendees, e.response, e.mine, e.description, e.recurring)",
+         "from calendar_events e where e.owner_id = $1",
+       )} as calendar,
+       ${rowsHash("row(t.id, t.title, t.started_at, t.duration_min, t.who, t.place, t.project, t.url, md5(t.summary), t.action_items, jsonb_array_length(t.transcript))", "from meetings t where t.owner_id = $1")} as meetings,
+       md5(concat(
+         $3::text,
+         ${rowsHash("k", "from tasks k where k.owner_id = $2")},
+         ${rowsHash("row(v.id, v.at)", "from ticket_events v where v.owner_id = $2")},
+         ${rowsHash("g", `from suggestions g where g.owner_id in (${teamUsersSql("$2")})`)},
+         ${rowsHash("row(o.id, o.status, o.body, o.to_name, o.ctx, o.created_at, o.conversation_id, o.task_id, o.after_id)", "from outbox o where o.owner_id = $1")},
+         ${rowsHash("p", "from team_members p where p.owner_id = $2")},
+         ${rowsHash("n", "from clients n where n.owner_id = $2")},
+         ${rowsHash("row(x.provider, x.label, x.connected_at, x.scopes)", "from connections x where x.owner_id = $1")},
+         ${rowsHash("row(a.email, a.scopes, a.connected_at)", "from google_accounts a where a.owner_id = $1")},
+         ${rowsHash("row(u.id, u.name)", `from users u where u.id in (${teamUsersSql("$2")})`)}
+       )) as rest`,
+    [ownerId, TEAM, isoDay(now)],
+  );
+  return { inbox: row.inbox, calendar: row.calendar, meetings: row.meetings, rest: row.rest };
+}
+
+/**
+ * Everything the screens show, read fresh. `open` is the conversation open on the page: it comes
+ * whole, where the other chats bring only their newest messages.
+ */
+export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date(), open: string | null = null): Promise<AppState> {
+  return (await readState(db, ownerId, now, open, new Set(), await stateStamps(db, ownerId, now))) as AppState;
+}
+
+/**
+ * What changed since the page read the data with the stamps `have`: `unchanged`, in a few
+ * bytes, when nothing did. Otherwise everything small, and each big part (the inbox, the
+ * calendar, the calls) only if it changed. Without `have`, everything.
+ */
+export async function stateUpdate(db: Db, ownerId: string, have: Partial<Stamps> | null, open: string | null = null, now = new Date()): Promise<StateAnswer> {
+  // The stamps are worked out before anything is read: a change made in between is then newer
+  // than the stamps, and the next check reads it.
+  const stamps = await stateStamps(db, ownerId, now);
+  if (have && PARTS.every((p) => have[p] === stamps[p])) return { unchanged: true, stamps };
+  return readState(db, ownerId, now, open, new Set(have ? HEAVY.filter((p) => have[p] === stamps[p]) : []), stamps);
+}
+
+/** The stamps a page sent, as far as they are stamps: anything else counts as none. */
+export function stampsFrom(value: unknown): Partial<Stamps> | null {
+  let parsed = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const have: Partial<Stamps> = {};
+  for (const part of PARTS) {
+    const stamp = (parsed as Record<string, unknown>)[part];
+    if (typeof stamp === "string") have[part] = stamp;
+  }
+  return have;
+}
+
+async function readState(db: Db, ownerId: string, now: Date, open: string | null, skip: Set<HeavyPart>, stamps: Stamps): Promise<StateUpdate> {
   const month = monthKey(now);
   const today = isoDay(now);
   // Telegram may be used on this server at all (each login has the keys it was made with).
@@ -364,9 +492,9 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
       "select distinct project from (select project from tasks where owner_id = $2 union select project from meetings where owner_id = $1 union select project from conversations where owner_id = $1) p where project <> '' order by project",
       [ownerId, TEAM],
     ),
-    loadConversations(db, ownerId),
-    loadMeetings(db, ownerId),
-    loadCalendar(db, ownerId),
+    skip.has("inbox") ? undefined : loadConversations(db, ownerId, { open }),
+    skip.has("meetings") ? undefined : loadMeetings(db, ownerId),
+    skip.has("calendar") ? undefined : loadCalendar(db, ownerId),
     googleAccounts(db, ownerId),
     db.query<{ source: "slack" | "telegram"; kind: "chat" | "person"; external_id: string; name: string }>("select source, kind, external_id, name from important where owner_id = $1 order by lower(name)", [ownerId]),
     telegramHere ? db.query<{ id: string; name: string; kind: "group" | "channel" }>("select id, name, kind from telegram_chats where owner_id = $1 order by lower(name)", [ownerId]) : Promise.resolve([]),
@@ -409,7 +537,7 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     return row ? { connected: true, connectedAt: Number(row.connected_at), label: row.label ?? undefined } : { connected: false };
   };
 
-  return {
+  const state: StateUpdate = {
     month,
     inbox,
     tasks,
@@ -468,7 +596,11 @@ export async function loadState(db: Db, ownerId = OWNER_ID, now = new Date()): P
     googleAllows: { gmail: allows("gmail"), send: allows("send"), calendar: allows("calendar"), addEvents: allows("addEvents") },
     localData: !process.env.DATABASE_URL,
     aiConfigured: ai,
+    stamps,
   };
+  // A part left out is not there at all, so the page keeps the copy it has.
+  for (const part of skip) delete state[part];
+  return state;
 }
 
 // ---------- Sorting ----------

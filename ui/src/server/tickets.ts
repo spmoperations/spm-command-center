@@ -40,8 +40,9 @@ const shortDay = (iso: string) =>
 
 export const ticketName = (n: number | null | undefined) => (n ? `${TICKET_PREFIX}-${n}` : "");
 
-/** The SQL that names everyone with a login on the team, the owner among them. Takes the team as $1. */
-const TEAM_USERS = "select id from users where id = $1 or (login_email is not null and password_hash is not null)";
+/** The SQL that names everyone with a login on the team, the owner among them, with the team as the parameter `team` (such as "$1"). */
+export const teamUsersSql = (team: string) => `select id from users where id = ${team} or (login_email is not null and password_hash is not null)`;
+const TEAM_USERS = teamUsersSql("$1");
 
 /** The team's clients: those added by name, and those tickets, calls and chats already name. Each once, whatever its capitals. */
 export async function teamClients(db: Db, viewer: string): Promise<string[]> {

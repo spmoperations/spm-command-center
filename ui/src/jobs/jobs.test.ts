@@ -1,15 +1,16 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { mentionsUser, reactionEmoji, redactSecrets, slackReactions, slackToText, slackTsToMs } from "@/core/slack-text";
+import type { AppState } from "@/core/types";
 import { FIELDS, message, SYSTEM } from "@/prompts/task-finder";
 import type { FoundTask } from "@/server/ai";
 import { connect } from "@/server/connections";
 import type { Db } from "@/server/db";
 import type { FathomMeeting } from "@/server/fathom";
-import { loadState, OWNER_ID } from "@/server/repo";
+import { OWNER_ID } from "@/server/repo";
 import { pictureResponse, SLACK_NEEDS_FILES } from "@/server/pictures";
 import { seal } from "@/server/secrets";
 import { RateLimited, slackClient } from "@/server/slack";
-import { fakeSlack, NOW, reset, seed, testDb, TINY } from "@/server/testing";
+import { fakeSlack, NOW, reset, seed, stateOpened, testDb, TINY } from "@/server/testing";
 import { fathomPull, toMeeting } from "./fathom";
 import { outboxSend } from "./outbox";
 import { requestFinder } from "./request-finder";
@@ -114,7 +115,7 @@ describe("Slack jobs", () => {
     await db.run("update slack_channels set selected = true where id = 'C1'");
     const result = await slackDirectorySync(ctx(), directory());
     expect(result.items).toBe(6);
-    const s = await loadState(db);
+    const s = await stateOpened(db);
     expect(s.channels).toEqual([{ id: "C2", name: "ops", kind: "private", selected: false }, { id: "C1", name: "sales", kind: "public", selected: true }]);
     expect(s.slackPeople.map((p) => p.name)).toEqual(["Jeremy Moser", "Maya Chen"]);
   });
@@ -126,7 +127,7 @@ describe("Slack jobs", () => {
     expect(result).toMatchObject({ items: 3, cursor: { lastTs: `${T - 30}.000100` } });
     expect(result.message).toBe("3 new messages in 2 conversations. 1 in channels that are not ticked in Settings were left out");
 
-    const inbox = (await loadState(db)).inbox;
+    const inbox = (await stateOpened(db)).inbox;
     // A message that tags the owner in a channel is a row of its own, named after the message.
     const tag = `slack:C2:${T - 30}.000100`;
     expect(inbox.map((c) => c.id).sort()).toEqual([tag, "slack:D1"]);
@@ -158,7 +159,7 @@ describe("Slack jobs", () => {
         "conversations.replies": () => ({ messages: thread }),
       });
     // The thread is an inbox row of its own, named after the message that started it.
-    const inThread = async () => (await loadState(db)).inbox.find((c) => c.id === `slack:C2:${first}`)!.thread;
+    const inThread = async () => (await stateOpened(db)).inbox.find((c) => c.id === `slack:C2:${first}`)!.thread;
 
     it("reads the whole thread when the owner is tagged in a reply: the message it answers and the replies around it", async () => {
       await slackDirectorySync(ctx(), directory());
@@ -225,13 +226,13 @@ describe("Slack jobs", () => {
         ],
         { [a]: threadA, [b]: threadB },
       );
-    const row = async (id: string) => (await loadState(db)).inbox.find((c) => c.id === id);
+    const row = async (id: string) => (await stateOpened(db)).inbox.find((c) => c.id === id);
     const act = async (type: string, args: unknown[]) => (await import("@/server/repo")).applyAction(db, type, args, OWNER_ID, new Date(NOW));
 
     it("shows two threads in the same channel as two rows, each with its own messages", async () => {
       await slackDirectorySync(ctx(), directory());
       await slackPull(ctx(), twoThreads());
-      const inOps = (await loadState(db)).inbox.filter((c) => c.ctx === "#ops").sort((x, y) => x.at - y.at);
+      const inOps = (await stateOpened(db)).inbox.filter((c) => c.ctx === "#ops").sort((x, y) => x.at - y.at);
       expect(inOps.map((c) => [c.id, c.root, c.tagged, c.thread.map((m) => m.text)])).toEqual([
         [`slack:C2:${a}`, a, true, ["Launch plan is in the doc", "@Jeremy Moser can you approve the budget?"]],
         [`slack:C2:${b}`, b, true, ["Venue options attached", "@Jeremy Moser which venue do you prefer?"]],
@@ -244,7 +245,7 @@ describe("Slack jobs", () => {
       await slackDirectorySync(ctx(), directory());
       await slackPull(ctx(), twoThreads());
       await requestFinder(ctx());
-      expect((await loadState(db)).suggestions.filter((g) => g.status === "new").map((g) => g.src?.id).sort()).toEqual([`slack:C2:${a}`, `slack:C2:${b}`]);
+      expect((await stateOpened(db)).suggestions.filter((g) => g.status === "new").map((g) => g.src?.id).sort()).toEqual([`slack:C2:${a}`, `slack:C2:${b}`]);
 
       await act("sendReply", [`slack:C2:${a}`, "Approved.", true]);
       const [one, two] = [(await row(`slack:C2:${a}`))!, (await row(`slack:C2:${b}`))!];
@@ -253,7 +254,7 @@ describe("Slack jobs", () => {
       expect(await db.query("select target, thread_ts, body from outbox")).toEqual([{ target: "C2", thread_ts: a, body: "Approved." }]);
       // The answered thread's suggestion is settled. The other one is still waiting.
       await requestFinder(ctx());
-      expect((await loadState(db)).suggestions.filter((g) => g.status === "new").map((g) => g.src?.id)).toEqual([`slack:C2:${b}`]);
+      expect((await stateOpened(db)).suggestions.filter((g) => g.status === "new").map((g) => g.src?.id)).toEqual([`slack:C2:${b}`]);
     });
 
     it("makes a single message that tags the owner a row, answers under it, and lets later replies join it", async () => {
@@ -274,7 +275,7 @@ describe("Slack jobs", () => {
       const result = await slackPull(ctx({ lastTs: lone, threadItems: true }), next);
       expect(result.message).toBe("1 new message in 1 conversation");
       expect((await row(id))!.thread.map((m) => m.text)).toEqual(["@Jeremy Moser are you in tomorrow?", "Yes, from 10.", "Great, see you then"]);
-      expect((await loadState(db)).inbox.filter((c) => c.ctx === "#ops")).toHaveLength(1);
+      expect((await stateOpened(db)).inbox.filter((c) => c.ctx === "#ops")).toHaveLength(1);
     });
 
     it("keeps the rest of a followed channel in the channel's own row, and moves a thread out once someone tags the owner in it", async () => {
@@ -370,22 +371,22 @@ describe("Slack jobs", () => {
       "users.conversations": () => ({ channels: [] }),
     });
     await slackDirectorySync(ctx(), withPictures);
-    expect((await loadState(db)).avatars).toEqual({ "Jeremy Moser": "https://pics.example/jeremy-72.png", "Maya Chen": "https://pics.example/maya-48.png" });
+    expect((await stateOpened(db)).avatars).toEqual({ "Jeremy Moser": "https://pics.example/jeremy-72.png", "Maya Chen": "https://pics.example/maya-48.png" });
   });
 
   it("notes what the Slack app may do, so the dashboard knows whether it can show pictures", async () => {
     await db.run("insert into connections (owner_id, provider, secret, label, connected_at) values ($1, 'slack', $2, 'jeremy · SPM', $3)", [OWNER_ID, seal("xoxp-test-token"), NOW]);
-    expect((await loadState(db)).slackFilesAllowed).toBeNull();
+    expect((await stateOpened(db)).slackFilesAllowed).toBeNull();
     await slackDirectorySync(ctx(), { ...directory(), scopes: () => ["channels:history", "search:read"] });
-    expect((await loadState(db)).slackFilesAllowed).toBe(false);
+    expect((await stateOpened(db)).slackFilesAllowed).toBe(false);
     await slackDirectorySync(ctx(), { ...directory(), scopes: () => ["channels:history", "search:read", "files:read"] });
-    expect((await loadState(db)).slackFilesAllowed).toBe(true);
+    expect((await stateOpened(db)).slackFilesAllowed).toBe(true);
     // Opening a conversation asks Slack something too, so a permission added since is noticed there.
     await db.run("insert into conversations (id, owner_id, source, external_id, from_name, ctx, last_at) values ('slack:C9', $1, 'slack', 'C9', 'Maya Chen', '#plans', $2)", [OWNER_ID, NOW]);
     await db.run("insert into messages (id, conversation_id, owner_id, external_id, sender_name, body, at) values ('slack:C9:1.0', 'slack:C9', $1, '1.0', 'Maya Chen', 'Hello', $2)", [OWNER_ID, NOW]);
     const opened = { ...fakeSlack({ "conversations.history": () => ({ messages: [{ ts: "1.0", user: "U1", text: "Hello" }] }) }), scopes: () => ["channels:history"] };
     expect(await slackReadThreads({ db, ownerId: OWNER_ID }, opened, "slack:C9")).toEqual({ added: 0, changed: 1 });
-    expect((await loadState(db)).slackFilesAllowed).toBe(false);
+    expect((await stateOpened(db)).slackFilesAllowed).toBe(false);
     expect(await slackReadThreads({ db, ownerId: OWNER_ID }, opened, "slack:C9")).toEqual({ added: 0, changed: 0 });
     // The real client reads it from what Slack sends back with every answer.
     const client = slackClient("xoxp-test-token", async () => new Response(JSON.stringify({ ok: true }), { headers: { "x-oauth-scopes": "channels:history, files:read" } }));
@@ -401,7 +402,7 @@ describe("Slack jobs", () => {
     const first = fakeSlack({ ...directoryRoutes, ...lookUps });
     await slackDirectorySync(ctx(), first);
     expect(first.calls.filter(([m]) => m === "users.info").map(([, p]) => p.user).sort()).toEqual(["UEXT", "UGONE"]);
-    expect((await loadState(db)).avatars).toEqual({ "Dana Okafor": "https://pics.example/dana.png" });
+    expect((await stateOpened(db)).avatars).toEqual({ "Dana Okafor": "https://pics.example/dana.png" });
     const second = fakeSlack({ ...directoryRoutes, ...lookUps });
     await slackDirectorySync(ctx(), second);
     expect(second.calls.filter(([m]) => m === "users.info")).toEqual([]);
@@ -432,7 +433,7 @@ describe("Slack jobs", () => {
         ["conversations.history", { channel: "C2", oldest: first, inclusive: true, limit: 200 }],
         ["conversations.replies", { channel: "C2", ts: first, limit: 200 }],
       ]);
-      const thread = (await loadState(db)).inbox.find((c) => c.id === "slack:C2")!.thread;
+      const thread = (await stateOpened(db)).inbox.find((c) => c.id === "slack:C2")!.thread;
       expect(thread.map((m) => [m.text, m.thread])).toEqual([["Who signs off the pay change?", first], ["Finance says it needs an owner", first], ["Lunch is here", undefined]]);
     });
 
@@ -458,7 +459,7 @@ describe("Slack jobs", () => {
     it("shows the pictures and reactions on messages already here, and leaves a video out", async () => {
       await setUp();
       expect(await slackReadThreads({ db, ownerId: OWNER_ID }, withExtras([{ name: "+1", users: ["U1", "UME"], count: 2 }, { name: "partyparrot", users: ["U1"], count: 1 }]), "slack:C2")).toEqual({ added: 0, changed: 1 });
-      const lunch = (await loadState(db)).inbox.find((c) => c.id === "slack:C2")!.thread.find((m) => m.text === "Lunch is here")!;
+      const lunch = (await stateOpened(db)).inbox.find((c) => c.id === "slack:C2")!.thread.find((m) => m.text === "Lunch is here")!;
       const at = `/api/media?m=${encodeURIComponent(`slack:C2:${plain}`)}&n=0`;
       expect(lunch.attachments).toEqual([{ kind: "image", name: "Board photo", w: 1600, h: 1200, src: at, full: `${at}&full=1`, link: board.permalink }]);
       // The owner's own reaction is picked out. A workspace's own emoji has no picture, so it is named.
@@ -468,7 +469,7 @@ describe("Slack jobs", () => {
     it("follows a reaction that is added or taken away later", async () => {
       await setUp();
       await slackReadThreads({ db, ownerId: OWNER_ID }, withExtras([{ name: "eyes", users: ["U1"], count: 1 }]), "slack:C2");
-      const reactions = async () => (await loadState(db)).inbox.find((c) => c.id === "slack:C2")!.thread.find((m) => m.text === "Lunch is here")!.reactions;
+      const reactions = async () => (await stateOpened(db)).inbox.find((c) => c.id === "slack:C2")!.thread.find((m) => m.text === "Lunch is here")!.reactions;
       expect(await reactions()).toEqual([{ emoji: "👀", count: 1 }]);
       expect(await slackReadThreads({ db, ownerId: OWNER_ID }, withExtras([{ name: "eyes", users: ["U1", "UME"], count: 2 }]), "slack:C2")).toEqual({ added: 0, changed: 1 });
       expect(await reactions()).toEqual([{ emoji: "👀", count: 2, mine: true }]);
@@ -499,7 +500,7 @@ describe("Slack jobs", () => {
         await pictureResponse(db, OWNER_ID, query("&full=1"), slackFiles(png));
         // The smaller copy for the conversation, the full picture when asked. A redirect is never followed.
         expect(asked).toEqual([[board.thumb_720, "Bearer xoxp-test-token", "manual"], [board.url_private, "Bearer xoxp-test-token", "manual"]]);
-        expect((await loadState(db)).slackFilesAllowed).toBe(true);
+        expect((await stateOpened(db)).slackFilesAllowed).toBe(true);
       });
 
       it("does not ask Slack at all while the app is known not to have the permission", async () => {
@@ -507,12 +508,12 @@ describe("Slack jobs", () => {
         const res = await pictureResponse(db, OWNER_ID, query(), slackFiles(png));
         expect([res.status, ((await res.json()) as { error: string }).error]).toEqual([403, SLACK_NEEDS_FILES]);
         expect(asked).toEqual([]);
-        expect((await loadState(db)).slackFilesAllowed).toBe(false);
+        expect((await stateOpened(db)).slackFilesAllowed).toBe(false);
       });
 
       it("passes on nothing that is not a picture: Slack's login page, or a file of another kind", async () => {
         await ready(null);
-        expect((await loadState(db)).slackFilesAllowed).toBeNull();
+        expect((await stateOpened(db)).slackFilesAllowed).toBeNull();
         const login = await pictureResponse(db, OWNER_ID, query(), slackFiles(() => new Response(null, { status: 302, headers: { location: "https://slack.com/signin" } })));
         const page = await pictureResponse(db, OWNER_ID, query(), slackFiles(() => new Response("<html>", { status: 200, headers: { "content-type": "text/html; charset=utf-8" } })));
         const drawing = await pictureResponse(db, OWNER_ID, query(), slackFiles(() => new Response("<svg onload='x()'/>", { status: 200, headers: { "content-type": "image/svg+xml" } })));
@@ -541,7 +542,7 @@ describe("Slack jobs", () => {
     await slackDirectorySync(ctx(), withApp);
     const card = { ts: `${T - 10}.000100`, channel: { id: "D2", is_im: true }, user: "UBOT", text: "", attachments: [{ title: "New comment on Roadmap" }] };
     await slackPull(ctx(), messaging([card]));
-    expect((await loadState(db)).inbox[0]).toMatchObject({ from: "Notion", ctx: "App notification", direct: false, text: "New comment on Roadmap" });
+    expect((await stateOpened(db)).inbox[0]).toMatchObject({ from: "Notion", ctx: "App notification", direct: false, text: "New comment on Roadmap" });
   });
 
   it("looks up the names of people who are tagged but are not in the member list", async () => {
@@ -552,7 +553,7 @@ describe("Slack jobs", () => {
       "users.info": ({ user }) => ({ user: { id: user, real_name: "Aleksandra Zupan" } }),
     });
     await slackPull(ctx(), slack);
-    expect((await loadState(db)).inbox[0].text).toBe("ask @Aleksandra Zupan about the invoice");
+    expect((await stateOpened(db)).inbox[0].text).toBe("ask @Aleksandra Zupan about the invoice");
     expect(slack.calls.filter(([m]) => m === "users.info")).toHaveLength(1);
   });
 
@@ -571,12 +572,12 @@ describe("Slack jobs", () => {
 
     const mine = [match(T + 10, { id: "D1", is_im: true }, "UME", "Swapping it today")];
     const second = await slackPull(ctx(first.cursor), messaging(mine));
-    let dm = (await loadState(db)).inbox.find((c) => c.id === "slack:D1")!;
+    let dm = (await stateOpened(db)).inbox.find((c) => c.id === "slack:D1")!;
     expect(dm).toMatchObject({ replied: true, done: true, text: "Can we swap the hook?" });
 
     const theirs = [match(T + 20, { id: "D1", is_im: true }, "U1", "Thanks, one more thing")];
     await slackPull(ctx(second.cursor), messaging(theirs));
-    dm = (await loadState(db)).inbox.find((c) => c.id === "slack:D1")!;
+    dm = (await stateOpened(db)).inbox.find((c) => c.id === "slack:D1")!;
     expect(dm).toMatchObject({ replied: false, done: false, text: "Thanks, one more thing" });
   });
 });
@@ -609,12 +610,12 @@ describe("Fathom job", () => {
     const first = await fathomPull(ctx(), "key", fathom([call]));
     expect(first).toMatchObject({ items: 1, cursor: { createdAfter: "2026-10-07T10:00:00Z" } });
     await fathomPull(ctx(), "key", fathom([call]));
-    const s = await loadState(db, OWNER_ID, new Date(NOW));
+    const s = await stateOpened(db, OWNER_ID, new Date(NOW));
     expect(s.meetings).toHaveLength(1);
     expect(s.meetings[0]).toMatchObject({ title: "Weekly check-in", transcriptLines: 2, transcript: [] });
     // The moment it started goes to the page, which shows it in the timezone of whoever is looking.
     expect(s.meetings[0].at).toBe(Date.parse("2026-10-07T09:00:00Z"));
-    const found = (s: Awaited<ReturnType<typeof loadState>>) => s.review.map((g) => [g.title, g.src?.id, g.due, g.forName, g.assignee, g.source.label, g.source.quote]).sort();
+    const found = (s: AppState) => s.review.map((g) => [g.title, g.src?.id, g.due, g.forName, g.assignee, g.source.label, g.source.quote]).sort();
     expect(found(s)).toEqual([
       // Jeremy's own: his. Maya's: named, and for nobody on the team list until she is on it.
       ["Send the September report", "fathom:42", "2026-10-09", null, `user:${OWNER_ID}`, "Fathom · Weekly check-in", "Send the September report"],
@@ -622,7 +623,7 @@ describe("Fathom job", () => {
     ]);
     // Once Maya is on the team list, her item would go to her.
     await db.run("insert into team_members (id, owner_id, name, role) values ('u_maya', $1, 'Maya Chen', 'Client')", [OWNER_ID]);
-    expect(found(await loadState(db, OWNER_ID, new Date(NOW))).map((g) => g[4])).toEqual([`user:${OWNER_ID}`, "member:u_maya"]);
+    expect(found(await stateOpened(db, OWNER_ID, new Date(NOW))).map((g) => g[4])).toEqual([`user:${OWNER_ID}`, "member:u_maya"]);
   });
 
   it("stops with a wait time when Fathom says slow down", async () => {
@@ -648,7 +649,7 @@ describe("task finder", () => {
     expect(asked).toEqual(["slack:D1"]); // #sales is Low and not a direct message
     expect(sent).not.toContain("xoxp-"); // a key pasted in the chat is not passed on
     expect(result.items).toBe(2);
-    const suggestions = (await loadState(db, OWNER_ID, new Date(NOW))).suggestions;
+    const suggestions = (await stateOpened(db, OWNER_ID, new Date(NOW))).suggestions;
     expect(suggestions.map((g) => [g.title, g.due]).sort()).toEqual([["Old date", "2026-10-11"], ["Swap the hook on clip 4", "2026-10-09"]]);
     expect(await db.query("select count(*)::int as n from messages where conversation_id = 'slack:D1' and not scanned")).toEqual([{ n: 0 }]);
   });
@@ -697,7 +698,7 @@ describe("the task finder's prompt", () => {
 
 describe("request finder", () => {
   beforeEach(() => seed(db));
-  const suggestions = async () => (await loadState(db, OWNER_ID, new Date(NOW))).suggestions;
+  const suggestions = async () => (await stateOpened(db, OWNER_ID, new Date(NOW))).suggestions;
   const say = (id: string, conversation: string, sender: string, body: string, at: number, me = false) =>
     db.run("insert into messages (id, conversation_id, owner_id, sender_name, me, body, at) values ($1, $2, $3, $4, $5, $6, $7)", [id, conversation, OWNER_ID, sender, me, body, at]);
 
@@ -787,7 +788,7 @@ describe("outbox", () => {
       { status: "sent", last_error: null },
       { status: "queued", last_error: "Rene Park has no Slack account linked in Settings" },
     ]);
-    expect((await loadState(db)).inbox.find((c) => c.id === "slack:D1")!.thread.at(-1)).toMatchObject({ me: true, status: "sent" });
+    expect((await stateOpened(db)).inbox.find((c) => c.id === "slack:D1")!.thread.at(-1)).toMatchObject({ me: true, status: "sent" });
   });
 
   it("posts an assignment made in the chat to that channel, tagging the person, and marks it sent in the thread", async () => {
@@ -798,7 +799,7 @@ describe("outbox", () => {
     const slack = sender();
     expect((await outboxSend(ctx(), slack)).items).toBe(1);
     expect(slack.calls).toEqual([["chat.postMessage", { channel: "C1", text: "<@ULUIS> new task for you: From Priya: Booked 2 more discovery calls for tomorrow.\nDue Fri, Oct 9 · Low priority\n\nBefore Friday please." }]]);
-    expect((await loadState(db)).inbox.find((c) => c.id === "slack:C1")!.thread.at(-1)).toMatchObject({ me: true, status: "sent" });
+    expect((await stateOpened(db)).inbox.find((c) => c.id === "slack:C1")!.thread.at(-1)).toMatchObject({ me: true, status: "sent" });
   });
 
   it("posts a task's description as a reply in the thread under its announcement", async () => {
@@ -872,7 +873,7 @@ describe("runner", () => {
   it("records a job that cannot run yet without counting it as a run", async () => {
     const run = await runJob(db, "slack-pull", OWNER_ID, NOW);
     expect(run).toMatchObject({ ok: false, message: "Slack is not connected" });
-    expect((await loadState(db)).jobStatus["slack-pull"]).toMatchObject({ ok: false, lastRunAt: null, message: "Slack is not connected" });
+    expect((await stateOpened(db)).jobStatus["slack-pull"]).toMatchObject({ ok: false, lastRunAt: null, message: "Slack is not connected" });
   });
 
   it("runs only what is due, skips sources that are not connected, and waits out the timer", async () => {
@@ -912,18 +913,18 @@ describe("runner", () => {
     await seed(db);
     const run = await runJob(db, "inbox-rules", OWNER_ID, NOW);
     expect(run).toMatchObject({ ok: true, items: 1, message: "1 re-sorted" });
-    expect((await loadState(db)).inbox.find((c) => c.id === "slack:D1")!.pri).toBe("mid");
+    expect((await stateOpened(db)).inbox.find((c) => c.id === "slack:D1")!.pri).toBe("mid");
   });
 
   it("clears what has had nothing new for three days in the same pass, and keeps the request that is still waiting", async () => {
     await seed(db);
     await requestFinder(ctx());
-    const waiting = async () => (await loadState(db, OWNER_ID, new Date(NOW))).suggestions.filter((g) => g.status === "new").map((g) => g.src?.id);
+    const waiting = async () => (await stateOpened(db, OWNER_ID, new Date(NOW))).suggestions.filter((g) => g.status === "new").map((g) => g.src?.id);
     expect(await waiting()).toEqual(["slack:D1"]);
 
     const later = NOW + 4 * 86_400_000;
     expect(await runJob(db, "inbox-rules", OWNER_ID, later)).toMatchObject({ ok: true, message: "1 re-sorted, 2 older than 3 days cleared" });
-    const inbox = (await loadState(db)).inbox;
+    const inbox = (await stateOpened(db)).inbox;
     expect(inbox.map((c) => [c.id, c.done, c.autoCleared]).sort()).toEqual([["slack:C1", true, true], ["slack:D1", true, true]]);
     // Growing old is not the same as being dealt with: the suggested reply is still there.
     await requestFinder({ db, ownerId: OWNER_ID, now: later, cursor: {} });
@@ -938,7 +939,7 @@ describe("runner", () => {
     await seed(db);
     const later = NOW + 4 * 86_400_000;
     await runJob(db, "inbox-rules", OWNER_ID, later);
-    expect((await loadState(db)).inbox.find((c) => c.id === "slack:D1")).toMatchObject({ done: true, autoCleared: true });
+    expect((await stateOpened(db)).inbox.find((c) => c.id === "slack:D1")).toMatchObject({ done: true, autoCleared: true });
 
     const ts = `${Math.floor(later / 1000)}.000100`;
     const slack = fakeSlack({
@@ -946,11 +947,11 @@ describe("runner", () => {
       "users.info": () => ({ user: { id: "U1", profile: { real_name: "Maya Chen" } } }),
     });
     await slackPull({ db, ownerId: OWNER_ID, now: later, cursor: { lastTs: `${Math.floor(later / 1000) - 10}.000000`, threadItems: true } }, slack);
-    const row = (await loadState(db)).inbox.find((c) => c.id === "slack:D1")!;
+    const row = (await stateOpened(db)).inbox.find((c) => c.id === "slack:D1")!;
     expect([row.done, row.autoCleared, row.text]).toEqual([false, undefined, "Any news on the hook?"]);
     // New again, it is left alone on the next pass.
     expect((await runJob(db, "inbox-rules", OWNER_ID, later + 60_000)).message).not.toContain("cleared");
-    expect((await loadState(db)).inbox.find((c) => c.id === "slack:D1")!.done).toBe(false);
+    expect((await stateOpened(db)).inbox.find((c) => c.id === "slack:D1")!.done).toBe(false);
   });
 
   it("holds a job back for as long as a service asks", async () => {
@@ -963,7 +964,7 @@ describe("runner", () => {
     } finally {
       globalThis.fetch = real;
     }
-    expect((await loadState(db)).jobStatus["slack-directory-sync"]).toMatchObject({ notBefore: NOW + 120_000 });
+    expect((await stateOpened(db)).jobStatus["slack-directory-sync"]).toMatchObject({ notBefore: NOW + 120_000 });
     expect((await tick(db, OWNER_ID, NOW + 60_000)).map((r) => r.jobId)).not.toContain("slack-directory-sync");
     expect(new RateLimited("Slack", 1).message).toBe("Slack asked us to wait 1 seconds");
   });
