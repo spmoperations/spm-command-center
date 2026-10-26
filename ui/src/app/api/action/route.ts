@@ -16,7 +16,11 @@ export async function POST(request: Request) {
     const db = await ready();
     await applyAction(db, type, args ?? [], owner);
     if (SENDS.has(type) && sendingEnabled()) await runJob(db, "outbox-retry", owner);
-    return Response.json(await stateUpdate(db, owner, stampsFrom(have), typeof open === "string" ? open : null));
+    // The small part always comes back after a change: some settings (timers, channels, rules)
+    // are not in its fingerprint, and the page must show the change at once.
+    const known = stampsFrom(have);
+    if (known) delete known.rest;
+    return Response.json(await stateUpdate(db, owner, known, typeof open === "string" ? open : null));
   } catch (error) {
     return failed(error);
   }

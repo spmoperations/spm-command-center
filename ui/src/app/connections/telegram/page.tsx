@@ -89,8 +89,8 @@ export default function TelegramSetupPage() {
             <h3>Pick what matters</h3>
           </div>
           <p className="st-help">
-            Your one-to-one chats come in, and messages in groups that mention you. In <Link href="/settings#important">Settings, Important</Link>, tick the groups and people whose messages go to the
-            top of your inbox.
+            Only the chats you tick come in. In <Link href="/settings#telegram">Settings, Telegram chats</Link>, tick the people, groups and channels you want on the dashboard: nothing else is
+            read. Then, in <Link href="/settings#important">Settings, Important</Link>, tick the ones whose messages go to the top of your inbox.
           </p>
         </li>
       </ol>

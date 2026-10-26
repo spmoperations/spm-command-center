@@ -90,8 +90,8 @@ const GUIDES: Record<string, Guide> = {
         head: FROM,
         body: (
           <p>
-            Your connected Slack and Telegram, checked about every 15 minutes (or straight away with Sync now in Settings): direct messages, group chats, the Slack channels you follow, and any message
-            that tags you. Each conversation is High, Medium or Low, set by the sorting rules and the Important list in Settings.
+            Your connected Slack and Telegram, checked about every 15 minutes (or straight away with Sync now in Settings). From Slack: direct messages, group chats, the channels you follow, and any
+            message that tags you. From Telegram: only the chats you tick in Settings. Each conversation is High, Medium or Low, set by the sorting rules and the Important list in Settings.
           </p>
         ),
       },
@@ -383,6 +383,10 @@ const GUIDES: Record<string, Guide> = {
             </li>
             <li>
               <strong>Slack channels</strong>: which channels to follow. Direct and group messages, and any message that tags you, are always read.
+            </li>
+            <li>
+              <strong>Telegram chats</strong>: which of your Telegram chats come in, people and groups alike. Only ticked chats are read, and a new chat waits unticked. Unticking one removes it and its
+              messages from the dashboard; Telegram itself is not touched.
             </li>
             <li>
               <strong>Important</strong>: tick the Slack channels and people, and Telegram groups and people, that matter most. Their messages always come first, as High, marked Important.

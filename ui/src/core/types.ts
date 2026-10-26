@@ -509,7 +509,8 @@ export interface AppState {
   /** What is ticked as important in Settings. */
   important: ImportantPick[];
   /** The Telegram groups and channels, and the people, there are to tick. Empty where Telegram is not used. */
-  telegramChats: { id: string; name: string; kind: "group" | "channel" }[];
+  /** The connected Telegram account's chats, and whether each is ticked to come in (see jobs/telegram.ts). */
+  telegramChats: { id: string; name: string; kind: "group" | "channel" | "direct"; synced: boolean; lastAt: number | null }[];
   telegramPeople: { id: string; name: string }[];
   /** Profile picture addresses by the name a person's messages carry. A name with no entry gets initials. */
   avatars: Record<string, string>;

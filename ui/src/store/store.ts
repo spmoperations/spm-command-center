@@ -544,6 +544,22 @@ export const clearManualPriorities = () => void act("clearManualPriorities", [],
 export const setJobInterval = (id: JobId, minutes: number) => void act("setJobInterval", [id, minutes]);
 export const setJobEnabled = (id: JobId, enabled: boolean) => void act("setJobEnabled", [id, enabled]);
 export const setChannelSelected = (id: string, selected: boolean) => void act("setChannelSelected", [id, selected]);
+
+/** Ticks or unticks Telegram chats to come in. Unticked, a chat and its messages leave the dashboard at once. */
+export function setTelegramSync(ids: string[], on: boolean, name?: string) {
+  const what = name ?? `${ids.length} ${ids.length === 1 ? "chat" : "chats"}`;
+  const one = ids.length === 1;
+  void act(
+    "setTelegramSync",
+    [ids, on],
+    on ? `${what} ${one ? "comes" : "come"} in from the next check, starting with the last few days` : `${what} no longer ${one ? "comes" : "come"} in. ${one ? "Its" : "Their"} messages were removed from the dashboard.`,
+    (s) => ({
+      ...s,
+      telegramChats: s.telegramChats.map((c) => (ids.includes(c.id) ? { ...c, synced: on } : c)),
+      inbox: on ? s.inbox : s.inbox.filter((c) => c.source !== "telegram" || !ids.includes(c.id.slice("telegram:".length))),
+    }),
+  );
+}
 /** Ticks something as important: its messages go to the top of the inbox. */
 export const setImportant = (source: "slack" | "telegram", kind: "chat" | "person", id: string, name: string, on: boolean) =>
   void act("setImportant", [source, kind, id, name, on], on ? `${name} is important: its messages go to the top of the inbox` : `${name} is no longer important`);

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { Seg } from "@/components/bits";
 import { Combo } from "@/components/Combo";
 import { DEPARTMENTS, DEPTS, LINE_NAME, liveSources, PERSONAL_SIDE, PRIORITY_NAME, SOURCE_NAME } from "@/core/config";
 import { ago } from "@/core/dates";
@@ -11,7 +12,7 @@ import { ruleHits } from "@/core/rules";
 import type { JobSetting, Line, Person, Priority, Rule, Source, TeamLogin } from "@/core/types";
 import {
   addHandle, addPerson, addRule, addTeamLogin, clearManualPriorities, deleteRule, moveRule, removeHandle, removePerson, runJobNow, setPersonTelegram,
-  removeTeamLogin, setChannelSelected, setImportant, setJobEnabled, setJobInterval, setTeamPassword, syncNow, toast, togglePersonDept, turnOffTeamLogin, useApp, type App, type RuleKind,
+  removeTeamLogin, setChannelSelected, setImportant, setJobEnabled, setJobInterval, setTeamPassword, setTelegramSync, syncNow, toast, togglePersonDept, turnOffTeamLogin, useApp, type App, type RuleKind,
 } from "@/store/store";
 
 function IntervalInput({ setting }: { setting: JobSetting }) {
@@ -145,6 +146,98 @@ function Channels({ app }: { app: App }) {
   );
 }
 
+type TelegramKind = "all" | "direct" | "group";
+
+/**
+ * Which Telegram chats come in, for the signed-in person's own account. Only ticked ones do; a
+ * new chat shows here unticked. Unticking one removes it and its messages from the dashboard.
+ */
+function TelegramChats({ app }: { app: App }) {
+  const { state } = app;
+  const [filter, setFilter] = useState("");
+  const [kind, setKind] = useState<TelegramKind>("all");
+  const [onlyTicked, setOnlyTicked] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  if (!state.telegramAvailable || !state.connections.telegram.connected) return null;
+  const words = filter.trim().toLowerCase();
+  // The chats written in most recently first: those are the ones worth deciding on.
+  const shown = [...state.telegramChats]
+    .sort((a, b) => (b.lastAt ?? 0) - (a.lastAt ?? 0) || a.name.localeCompare(b.name))
+    .filter((c) => (!words || c.name.toLowerCase().includes(words)) && (kind === "all" || (kind === "direct") === (c.kind === "direct")) && (!onlyTicked || c.synced));
+  const ticked = state.telegramChats.filter((c) => c.synced).length;
+  const off = shown.filter((c) => !c.synced);
+  const on = shown.filter((c) => c.synced);
+  return (
+    <div className="panel set-sec" id="telegram">
+      <div className="panel-head">
+        <h3>Telegram chats</h3>
+        <span className="muted" style={{ fontSize: 13 }}>
+          {ticked} of {state.telegramChats.length} come in
+        </span>
+      </div>
+      <p className="set-intro">
+        Only the chats ticked here come in: a person, a group (everything in it) or a channel. A new chat shows here unticked, so nothing new comes in until you tick it. Unticking a chat removes it and
+        its messages from the dashboard at once; Telegram itself is not touched. A chat you tick comes in from the next check, starting with its last few days.
+      </p>
+      {state.telegramChats.length === 0 ? (
+        <p className="empty">This list fills in once Telegram has been read.</p>
+      ) : (
+        <>
+          <div className="imp-tools">
+            <input className="f" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Find a person, group or channel" aria-label="Find a Telegram chat" />
+            <Seg<TelegramKind> value={kind} label="Which chats" onChange={setKind} options={[["all", "All"], ["direct", "People"], ["group", "Groups and channels"]]} />
+            <label className="inline-check">
+              <input type="checkbox" checked={onlyTicked} onChange={(e) => setOnlyTicked(e.target.checked)} /> Only ticked
+            </label>
+          </div>
+          <div className="tg-bulk">
+            {off.length > 0 && (
+              <button className="linkbtn" onClick={() => setTelegramSync(off.map((c) => c.id), true)}>
+                Tick all {off.length} shown
+              </button>
+            )}
+            {on.length > 0 &&
+              (confirming ? (
+                <span>
+                  Untick {on.length}? {on.length === 1 ? "Its" : "Their"} messages leave the dashboard.{" "}
+                  <button
+                    className="btn bad"
+                    onClick={() => {
+                      setConfirming(false);
+                      setTelegramSync(on.map((c) => c.id), false);
+                    }}
+                  >
+                    Untick {on.length}
+                  </button>{" "}
+                  <button className="linkbtn" onClick={() => setConfirming(false)}>
+                    Cancel
+                  </button>
+                </span>
+              ) : (
+                <button className="linkbtn" onClick={() => setConfirming(true)}>
+                  Untick all {on.length} shown
+                </button>
+              ))}
+          </div>
+          <ul className="channel-list tg-list">
+            {shown.map((c) => (
+              <li key={c.id}>
+                <label>
+                  <input type="checkbox" checked={c.synced} onChange={(e) => setTelegramSync([c.id], e.target.checked, c.name)} />
+                  <span>{c.name}</span>
+                  <span className="chip">{c.kind === "direct" ? "Person" : c.kind === "channel" ? "Channel" : "Group"}</span>
+                  {c.lastAt != null && <span className="muted tg-when">{ago(c.lastAt, app.now.getTime())} ago</span>}
+                </label>
+              </li>
+            ))}
+            {shown.length === 0 && <li className="muted">{onlyTicked && !words ? "Nothing ticked here yet." : "Nothing matches that."}</li>}
+          </ul>
+        </>
+      )}
+    </div>
+  );
+}
+
 type ImportantTab = "slack-chat" | "slack-person" | "telegram-chat" | "telegram-person";
 
 /**
@@ -160,7 +253,7 @@ function Important({ app }: { app: App }) {
   const lists: Record<ImportantTab, { source: "slack" | "telegram"; kind: "chat" | "person"; label: string; find: string; items: { id: string; name: string; note?: string }[] }> = {
     "slack-chat": { source: "slack", kind: "chat", label: "Slack channels", find: "Find a channel", items: state.channels.map((c) => ({ id: c.id, name: `#${c.name}`, note: c.kind === "private" ? "Private" : undefined })) },
     "slack-person": { source: "slack", kind: "person", label: "Slack people", find: "Find a person", items: state.slackPeople },
-    "telegram-chat": { source: "telegram", kind: "chat", label: "Telegram groups", find: "Find a group or channel", items: state.telegramChats.map((c) => ({ id: c.id, name: c.name, note: c.kind === "channel" ? "Channel" : undefined })) },
+    "telegram-chat": { source: "telegram", kind: "chat", label: "Telegram groups", find: "Find a group or channel", items: state.telegramChats.filter((c) => c.kind !== "direct").map((c) => ({ id: c.id, name: c.name, note: c.kind === "channel" ? "Channel" : undefined })) },
     "telegram-person": { source: "telegram", kind: "person", label: "Telegram people", find: "Find a person", items: state.telegramPeople },
   };
   const tabs = (Object.keys(lists) as ImportantTab[]).filter((t) => telegram || lists[t].source === "slack");
@@ -631,6 +724,7 @@ export default function SettingsPage() {
         <a href="#timers">Sync</a>
         <a href="#important">Important</a>
         <a href="#channels">Channels</a>
+        {app.state.telegramAvailable && app.state.connections.telegram.connected && <a href="#telegram">Telegram chats</a>}
         <a href="#team">Team</a>
         {app.state.me.isOwner && <a href="#logins">Team logins</a>}
         <a href="#urgent">What is urgent</a>
@@ -640,6 +734,7 @@ export default function SettingsPage() {
       <Timers app={app} />
       <Important app={app} />
       <Channels app={app} />
+      <TelegramChats app={app} />
       <Team app={app} />
       {app.state.me.isOwner && <TeamLogins app={app} />}
 

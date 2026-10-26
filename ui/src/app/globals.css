@@ -548,6 +548,9 @@ a.btn:hover { color: var(--accent); }
 .channel-list label { display: flex; gap: 8px; align-items: center; padding: 5px 0; font-size: 14px; cursor: pointer; min-width: 0; }
 .channel-list label input { flex: none; }
 .channel-list label span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tg-list { max-height: 420px; }
+.tg-list .tg-when { font-size: 12px; margin-left: auto; white-space: nowrap; }
+.tg-bulk { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 0 16px 10px; font-size: 13.5px; }
 .set-add { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.6fr) auto; }
 .btn:disabled { opacity: 0.5; cursor: default; }
 

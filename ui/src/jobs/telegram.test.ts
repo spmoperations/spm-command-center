@@ -41,6 +41,14 @@ const account = (): FakeTelegram =>
     { id: "777000", name: "Telegram", kind: "service", topId: 6, messages: [said(6, "Login code: 12345. Do not give this code to anyone.", { sender: "Telegram" })] },
   ]);
 
+/** Ticks these chats to come in, as a person would under Settings → Telegram chats. */
+async function tick(telegram: FakeTelegram, ids = telegram.chatList.filter((c) => ["direct", "group", "channel"].includes(c.kind)).map((c) => c.id)): Promise<FakeTelegram> {
+  for (const c of telegram.chatList.filter((x) => ids.includes(x.id))) {
+    await db.run("insert into telegram_chats (owner_id, id, name, kind, seen_at, synced) values ($1, $2, $3, $4, $5, true) on conflict (owner_id, id) do update set synced = true", [OWNER_ID, c.id, c.name, c.kind, NOW]);
+  }
+  return telegram;
+}
+
 /** The app keys are set, as on a server that has them. */
 function withKeys() {
   process.env.TELEGRAM_API_ID = "12345";
@@ -345,23 +353,73 @@ describe("the Telegram login request", () => {
 });
 
 describe("Telegram job", () => {
-  it("brings in one-to-one chats and group messages addressed to the owner, and leaves the rest alone", async () => {
-    const telegram = account();
-    const result = await telegramPull(ctx(), telegram);
-    expect(result).toMatchObject({ items: 5, message: "5 new messages in 2 chats. 1 group with nothing addressed to you was left out", cursor: { seen: { "501": 3, "-701": 9, "-702": 4 } } });
-    // Channels, bots, Saved Messages and Telegram's own account are never even opened.
-    expect(telegram.read).toEqual(["501", "-701", "-702"]);
+  const listed = () => db.query<{ id: string; kind: string; synced: boolean }>("select id, kind, synced from telegram_chats where owner_id = $1 order by id", [OWNER_ID]);
+  const inbox = async () => (await stateOpened(db, OWNER_ID, new Date(NOW))).inbox.filter((c) => c.source === "telegram");
 
-    const inbox = (await stateOpened(db, OWNER_ID, new Date(NOW))).inbox.filter((c) => c.source === "telegram");
-    expect(inbox.map((c) => c.id).sort()).toEqual(["telegram:-701", "telegram:501"]);
-    const direct = inbox.find((c) => c.id === "telegram:501")!;
+  it("brings in only the chats ticked in Settings, and lists the rest, people too, unticked", async () => {
+    const telegram = account();
+    const first = await telegramPull(ctx(), telegram);
+    expect(first).toMatchObject({ items: 0, message: "0 new messages in 0 chats. 4 chats that are not ticked were left out" });
+    // Nothing is opened until it is ticked. Bots, Saved Messages and Telegram's own account are never listed.
+    expect(telegram.read).toEqual([]);
+    expect(await listed()).toEqual([
+      { id: "-1009", kind: "channel", synced: false },
+      { id: "-701", kind: "group", synced: false },
+      { id: "-702", kind: "group", synced: false },
+      { id: "501", kind: "direct", synced: false },
+    ]);
+
+    await applyAction(db, "setTelegramSync", [["501", "-701"], true], OWNER_ID, new Date(NOW));
+    const second = await telegramPull(ctx(first.cursor), telegram);
+    expect(second).toMatchObject({ items: 5, message: "5 new messages in 2 chats. 2 chats that are not ticked were left out" });
+    expect(telegram.read).toEqual(["501", "-701"]);
+    const chats = await inbox();
+    expect(chats.map((c) => c.id).sort()).toEqual(["telegram:-701", "telegram:501"]);
+    const direct = chats.find((c) => c.id === "telegram:501")!;
     expect(direct).toMatchObject({ from: "Dana Whitfield", ctx: "Direct message", direct: true, tagged: false, text: "Can you send the deck first?", replied: false });
     expect(direct.thread.map((m) => [m.me, m.text])).toEqual([[false, "Are we still on for Thursday?"], [true, "Yes, 3pm works"], [false, "Can you send the deck first?"]]);
-    expect(inbox.find((c) => c.id === "telegram:-701")).toMatchObject({ from: "Sam Ortiz", ctx: "Launch crew", direct: false, tagged: true, text: "Can you confirm the date?" });
+    // A ticked group comes in whole: the message nobody tagged anyone in too.
+    expect(chats.find((c) => c.id === "telegram:-701")!.thread.map((m) => m.text)).toEqual(["Lunch?", "Can you confirm the date?"]);
+  });
+
+  it("starts a chat that is already on the dashboard ticked, so nothing disappears", async () => {
+    await db.run("insert into conversations (id, owner_id, source, external_id, from_name, ctx, direct, last_text, last_at) values ('telegram:501', $1, 'telegram', '501', 'Dana Whitfield', 'Direct message', true, 'Hello', $2)", [OWNER_ID, NOW - DAY]);
+    await telegramPull(ctx(), account());
+    expect((await listed()).filter((c) => c.synced).map((c) => c.id)).toEqual(["501"]);
+    expect((await inbox()).find((c) => c.id === "telegram:501")!.thread.map((m) => m.text)).toContain("Can you send the deck first?");
+  });
+
+  it("takes a chat off the dashboard when it is unticked, and brings its last few days back when ticked again", async () => {
+    const telegram = await tick(account(), ["501"]);
+    const first = await telegramPull(ctx(), telegram);
+    await db.run("insert into media (owner_id, key, mime, bytes, saved_at) values ($1, 'telegram/501/3', 'image/png', $2, $3), ($1, 'telegram/5012/1', 'image/png', $2, $3)", [OWNER_ID, TINY.png, NOW]);
+    await db.run(
+      "insert into suggestions (id, owner_id, title, dept, pri, due, src_type, src_id, dedupe_key, created_at) values ('s_dana', $1, 'Send Dana the deck', 'Operations', 'mid', '2026-10-09', 'message', 'telegram:501', 'ask:telegram:501:3', $2)",
+      [OWNER_ID, NOW],
+    );
+
+    await applyAction(db, "setTelegramSync", [["501"], false], OWNER_ID, new Date(NOW));
+    expect(await inbox()).toEqual([]);
+    expect(await db.query("select count(*)::int as n from messages where conversation_id = 'telegram:501'")).toEqual([{ n: 0 }]);
+    // Its pictures go, and only its own. A profile picture is the person's, kept for wherever else they write.
+    expect((await db.query<{ key: string }>("select key from media where owner_id = $1 order by key", [OWNER_ID])).map((r) => r.key)).toEqual(["telegram/5012/1", "telegram/avatar/501"]);
+    expect(await db.query("select status, reason from suggestions where id = 's_dana'")).toEqual([{ status: "dismissed", reason: "chat_off" }]);
+
+    // While unticked it is not opened, and its bookmark goes.
+    telegram.read.length = 0;
+    telegram.chatList[0].messages.push(said(4, "Hello again"));
+    telegram.chatList[0].topId = 4;
+    const off = await telegramPull(ctx(first.cursor), telegram);
+    expect([telegram.read, (off.cursor!.seen as Record<string, number>)["501"]]).toEqual([[], undefined]);
+
+    await applyAction(db, "setTelegramSync", [["501"], true], OWNER_ID, new Date(NOW));
+    await telegramPull(ctx(off.cursor), telegram);
+    expect((await inbox()).find((c) => c.id === "telegram:501")!.thread.map((m) => m.text)).toEqual(["Are we still on for Thursday?", "Yes, 3pm works", "Can you send the deck first?", "Hello again"]);
+    await expect(applyAction(db, "setTelegramSync", [[], true], OWNER_ID, new Date(NOW))).rejects.toThrow("Which chats?");
   });
 
   it("opens a chat again only when it has something new, and reads only the new part", async () => {
-    const telegram = account();
+    const telegram = await tick(account());
     const first = await telegramPull(ctx(), telegram);
     telegram.read.length = 0;
     expect(await telegramPull(ctx(first.cursor), telegram)).toMatchObject({ items: 0, message: "0 new messages in 0 chats" });
@@ -373,38 +431,35 @@ describe("Telegram job", () => {
     const again = await telegramPull(ctx(first.cursor), telegram);
     expect(again).toMatchObject({ items: 1, message: "1 new message in 1 chat", cursor: { seen: { "501": 4 } } });
     expect(telegram.read).toEqual(["501"]);
-    expect((await stateOpened(db, OWNER_ID, new Date(NOW))).inbox.find((c) => c.id === "telegram:501")!.thread).toHaveLength(4);
+    expect((await inbox()).find((c) => c.id === "telegram:501")!.thread).toHaveLength(4);
   });
 
   it("goes back only a few days the first time, and stores nothing twice", async () => {
-    const telegram = fakeTelegram([{ id: "501", name: "Dana Whitfield", kind: "direct", topId: 2, messages: [said(1, "An old one", { at: NOW - 5 * DAY }), said(2, "A new one")] }]);
+    const telegram = await tick(fakeTelegram([{ id: "501", name: "Dana Whitfield", kind: "direct", topId: 2, messages: [said(1, "An old one", { at: NOW - 5 * DAY }), said(2, "A new one")] }]));
     expect((await telegramPull(ctx(), telegram)).items).toBe(1);
     // The bookmark lost: the same messages come back and change nothing.
     expect((await telegramPull(ctx(), telegram)).items).toBe(0);
-    expect((await stateOpened(db, OWNER_ID, new Date(NOW))).inbox.find((c) => c.id === "telegram:501")!.thread.map((m) => m.text)).toEqual(["A new one"]);
+    expect((await inbox()).find((c) => c.id === "telegram:501")!.thread.map((m) => m.text)).toEqual(["A new one"]);
   });
 
   it("never keeps Telegram's own account, where login codes arrive, and removes a copy read before", async () => {
     await db.run("insert into conversations (id, owner_id, source, external_id, from_name, ctx, direct, last_text, last_at) values ('telegram:777000', $1, 'telegram', '777000', 'Telegram', 'Direct message', true, 'Login code: 12345', $2)", [OWNER_ID, NOW]);
     await db.run("insert into messages (id, conversation_id, owner_id, external_id, sender_name, body, at) values ('telegram:777000:6', 'telegram:777000', $1, '6', 'Telegram', 'Login code: 12345', $2)", [OWNER_ID, NOW]);
-    const telegram = account();
+    const telegram = await tick(account());
     await telegramPull(ctx(), telegram);
     expect(telegram.read).not.toContain("777000");
     expect(await db.query("select id from conversations where id = 'telegram:777000'")).toEqual([]);
     expect(await db.query("select id from messages where body like '%Login code%'")).toEqual([]);
   });
 
-  it("brings a group in later, once someone there tags the owner", async () => {
-    const telegram = account();
-    const first = await telegramPull(ctx(), telegram);
-    const club = telegram.chatList[2];
-    club.messages.push(said(5, "Are you coming on Friday?", { sender: "Ines Marsh", mentioned: true }));
-    club.topId = 5;
-    await telegramPull(ctx(first.cursor), telegram);
-    expect((await stateOpened(db, OWNER_ID, new Date(NOW))).inbox.find((c) => c.id === "telegram:-702")).toMatchObject({ from: "Ines Marsh", ctx: "Book club", tagged: true, text: "Are you coming on Friday?" });
+  it("brings in a ticked channel, and a ticked group nobody tags the owner in", async () => {
+    await telegramPull(ctx(), await tick(account(), ["-702", "-1009"]));
+    const chats = await inbox();
+    expect(chats.find((c) => c.id === "telegram:-702")).toMatchObject({ from: "Ines Marsh", ctx: "Book club", tagged: false, text: "Next month's pick is in" });
+    expect(chats.find((c) => c.id === "telegram:-1009")).toMatchObject({ ctx: "Daily news", direct: false, text: "Headline" });
   });
 
-  it("keeps the names of the groups and channels, reads the whole list once a day, and forgets one that is gone", async () => {
+  it("keeps the names of the chats, reads the whole list once a day, and forgets one that is gone", async () => {
     const telegram = account();
     telegram.chatList[1].at = NOW - MINUTE;
     const asked: number[] = [];
@@ -416,34 +471,39 @@ describe("Telegram job", () => {
     const names = () => db.query<{ id: string; name: string; kind: string; last_at: number | null }>("select id, name, kind, last_at from telegram_chats order by id");
 
     const first = await telegramPull(ctx(), telegram);
-    expect(first.cursor).toMatchObject({ listedAt: NOW });
+    expect(first.cursor).toMatchObject({ listedAt: NOW, listsPeople: true });
     expect(await names()).toEqual([
       { id: "-1009", name: "Daily news", kind: "channel", last_at: null },
       { id: "-701", name: "Launch crew", kind: "group", last_at: NOW - MINUTE },
       { id: "-702", name: "Book club", kind: "group", last_at: null },
+      { id: "501", name: "Dana Whitfield", kind: "direct", last_at: null },
     ]);
-    // Only the names: the channel is still never opened.
-    expect(telegram.read).not.toContain("-1009");
+    // Only the names: nothing unticked is opened.
+    expect(telegram.read).toEqual([]);
 
-    // Between the daily reads, only the recent chats are read, and a group missing from them stays.
+    // Between the daily reads, only the recent chats are read, and a chat missing from them stays.
     telegram.chatList.splice(2, 1);
     telegram.chatList[1].name = "Launch crew (Q4)";
     const later = await telegramPull({ ...ctx(first.cursor), now: NOW + 3_600_000 }, telegram);
     expect(later.cursor).toMatchObject({ listedAt: NOW });
-    expect((await names()).map((c) => c.name)).toEqual(["Daily news", "Launch crew (Q4)", "Book club"]);
+    expect((await names()).map((c) => c.name)).toEqual(["Daily news", "Launch crew (Q4)", "Book club", "Dana Whitfield"]);
 
     // A day on, the whole list again: the group that was left is forgotten.
     const nextDay = await telegramPull({ ...ctx(later.cursor), now: NOW + DAY }, telegram);
     expect(nextDay.cursor).toMatchObject({ listedAt: NOW + DAY });
-    expect((await names()).map((c) => c.id)).toEqual(["-1009", "-701"]);
+    expect((await names()).map((c) => c.id)).toEqual(["-1009", "-701", "501"]);
     expect(asked).toEqual([200, 30, 200]);
+
+    // A bookmark from before people were listed reads the whole list once more, at once.
+    await telegramPull({ ...ctx({ listedAt: NOW + DAY }), now: NOW + DAY + MINUTE }, telegram);
+    expect(asked).toEqual([200, 30, 200, 200]);
   });
 });
 
 describe("sending to Telegram", () => {
   const slack = () => fakeSlack({ "chat.postMessage": () => ({ ok: true }) });
   const reply = async () => {
-    await telegramPull(ctx(), account());
+    await telegramPull(ctx(), await tick(account()));
     await applyAction(db, "sendReply", ["telegram:501", "Sending it now", false], OWNER_ID, new Date(NOW));
   };
 
@@ -487,7 +547,7 @@ describe("sending to Telegram", () => {
 
   it("does not offer a Telegram chat as a place to post a Slack assignment", async () => {
     const telegram = fakeTelegram([{ id: "-703", name: "#launch", kind: "group", topId: 1, messages: [said(1, "Can you take the venue?", { sender: "Sam Ortiz", mentioned: true })] }]);
-    await telegramPull(ctx(), telegram);
+    await telegramPull(ctx(), await tick(telegram));
     await seed(db);
     await expect(applyAction(db, "delegateConversation", ["telegram:-703", "u_luis", "", "2026-10-09", "chat"], OWNER_ID, new Date(NOW))).rejects.toThrow("This task did not come from a channel or a group message.");
     expect(await db.query("select id from outbox")).toEqual([]);
@@ -562,7 +622,7 @@ describe("pictures, stickers and reactions from Telegram", () => {
 
   it("keeps the pictures and stickers, and never fetches a video", async () => {
     const telegram = withPictures();
-    await telegramPull(ctx(), telegram);
+    await telegramPull(ctx(), await tick(telegram));
     expect(telegram.fetched.filter((f) => !f.startsWith("face:")).sort()).toEqual(["501:1", "501:2"]);
     expect(await db.query("select key, mime from media order by key")).toEqual([{ key: "telegram/501/1", mime: "image/jpeg" }, { key: "telegram/501/2", mime: "image/webp" }, { key: "telegram/avatar/501", mime: "image/jpeg" }]);
 
@@ -582,14 +642,14 @@ describe("pictures, stickers and reactions from Telegram", () => {
     const telegram = withPictures();
     telegram.files["501:1"] = Buffer.from("this is an animation file, not a picture at all");
     delete telegram.files["501:2"];
-    await telegramPull(ctx(), telegram);
+    await telegramPull(ctx(), await tick(telegram));
     expect((await thread("telegram:501")).map((m) => m.attachments)).toEqual([undefined, undefined, undefined, undefined]);
     expect(await db.query("select key from media where key like 'telegram/501/%'")).toEqual([]);
   });
 
   it("shows the other person's profile picture on the row and beside their messages", async () => {
     const telegram = withPictures();
-    await telegramPull(ctx(), telegram);
+    await telegramPull(ctx(), await tick(telegram));
     const chat = (await stateOpened(db, OWNER_ID, new Date(NOW))).inbox.find((c) => c.id === "telegram:501")!;
     expect(chat.avatar).toBe("/api/media?avatar=501");
     expect(chat.thread.map((m) => m.avatar)).toEqual(Array(4).fill("/api/media?avatar=501"));
@@ -600,7 +660,7 @@ describe("pictures, stickers and reactions from Telegram", () => {
   it("asks once about someone with no profile picture, and shows their initials", async () => {
     const telegram = withPictures();
     telegram.faces = {};
-    const first = await telegramPull(ctx(), telegram);
+    const first = await telegramPull(ctx(), await tick(telegram));
     telegram.chatList[0].messages.push(said(5, "Hello again"));
     telegram.chatList[0].topId = 5;
     await telegramPull(ctx(first.cursor), telegram);
@@ -617,7 +677,7 @@ describe("pictures, stickers and reactions from Telegram", () => {
       said(3, "Can you confirm the date?", { sender: "Sam Ortiz", senderId: "u-sam", mentioned: true }),
     ] }]);
     telegram.faces = { "u-ines": TINY.jpg, "u-sam": TINY.png };
-    await telegramPull(ctx(), telegram);
+    await telegramPull(ctx(), await tick(telegram));
     const chat = (await stateOpened(db, OWNER_ID, new Date(NOW))).inbox.find((c) => c.id === "telegram:-701")!;
     expect(chat.thread.map((m) => m.avatar)).toEqual(["/api/media?avatar=u-ines", undefined, "/api/media?avatar=u-sam"]);
     expect(chat.avatar).toBe("/api/media?avatar=u-sam");
@@ -628,7 +688,7 @@ describe("pictures, stickers and reactions from Telegram", () => {
   it("when a chat is opened, brings in what is new and the reactions as they are now, and no older history", async () => {
     const telegram = withPictures();
     telegram.chatList[0].messages.unshift(said(0, "Something from last month", { at: NOW - 30 * DAY }));
-    await telegramPull(ctx(), telegram);
+    await telegramPull(ctx(), await tick(telegram));
     expect((await thread("telegram:501")).map((m) => m.text)).not.toContain("Something from last month");
 
     const messages = telegram.chatList[0].messages;
@@ -649,7 +709,7 @@ describe("pictures, stickers and reactions from Telegram", () => {
   it("fetches a picture that was missed the next time the chat is opened", async () => {
     const telegram = withPictures();
     delete telegram.files["501:1"];
-    await telegramPull(ctx(), telegram);
+    await telegramPull(ctx(), await tick(telegram));
     expect((await thread("telegram:501"))[0].attachments).toBeUndefined();
     telegram.files["501:1"] = TINY.png;
     expect((await telegramRefresh({ db, ownerId: OWNER_ID, now: NOW }, telegram, "telegram:501")).changed).toBe(1);
@@ -658,7 +718,7 @@ describe("pictures, stickers and reactions from Telegram", () => {
 
   it("fetches again a picture that an earlier version kept as a file", async () => {
     const telegram = withPictures();
-    await telegramPull(ctx(), telegram);
+    await telegramPull(ctx(), await tick(telegram));
     await db.run("update messages set attachments = $1::jsonb where id = 'telegram:501:1'", [JSON.stringify([{ kind: "image", name: "Photo", file: "1.jpg" }])]);
     await db.run("delete from media where key = 'telegram/501/1'");
     telegram.fetched.length = 0;
@@ -669,7 +729,7 @@ describe("pictures, stickers and reactions from Telegram", () => {
 
   it("hands out only its own pictures, by number and id, and nothing once they are removed", async () => {
     const telegram = withPictures();
-    await telegramPull(ctx(), telegram);
+    await telegramPull(ctx(), await tick(telegram));
     for (const bad of ["/api/media?avatar=..%2F501%2F1", "/api/media?avatar=..", "/api/media?avatar=501%2F..%2F..%2Fpg", "/api/media?m=telegram%3A501%3A1&n=5", "/api/media?m=telegram%3A501%3A3&n=0", "/api/media?m=telegram%3A501%3A1&n=-1", "/api/media?n=0"]) {
       expect([bad, (await picture(bad)).status >= 400]).toEqual([bad, true]);
     }

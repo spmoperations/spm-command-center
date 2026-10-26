@@ -1,14 +1,15 @@
 // The Telegram check. Reads new messages from the connected account's own chats.
 //
-// The same rule as Slack: a one-to-one chat always comes in; a group only when something in
-// it is addressed to the owner (a tag or a reply to them). Channels, bots and Saved Messages
-// are left out. So is Telegram's own account: it sends login codes, which are never kept.
+// Only the chats ticked under Settings → Telegram chats come in: a one-to-one chat, a group
+// (everything in it) or a channel. A chat that is not ticked is never opened. A chat already
+// on the dashboard when this rule arrived started ticked; a new one starts unticked. Bots and
+// Saved Messages are left out, and so is Telegram's own account: it sends login codes, which
+// are never kept.
 //
 // Pictures and stickers are kept in the database, and so are the profile pictures of the
 // people who wrote. Videos are never fetched.
 //
-// The names of the account's groups and channels are kept too, without their messages, so a
-// person can choose which ones should always show.
+// The names of the account's chats are kept too, without their messages, for that list.
 import type { Db } from "@/server/db";
 import { saveTelegramAvatar, saveTelegramPicture, telegramAvatarsDue, type StoredPicture } from "@/server/media";
 import { RateLimited } from "@/server/slack";
@@ -106,16 +107,21 @@ async function storeChat(
   return { fresh, changed };
 }
 
+/** The kinds of chat that can be ticked to come in. */
+const LISTED = new Set<TelegramChat["kind"]>(["direct", "group", "channel"]);
+
 /**
- * Keeps the names of the groups and channels among these chats. After reading the whole list,
- * one that is no longer in it is removed: the owner left it, or it was deleted.
+ * Keeps the names of these chats for Settings → Telegram chats. A chat seen for the first time
+ * starts ticked only when it is already on the dashboard. After reading the whole list, one
+ * that is no longer in it is removed: the owner left it, or it was deleted.
  */
 async function noteChats(db: Db, ownerId: string, chats: TelegramChat[], now: number, whole: boolean): Promise<void> {
-  const rows = chats.filter((c) => c.kind === "group" || c.kind === "channel").map((c) => ({ id: c.id, name: c.name, kind: c.kind, last_at: c.at ?? null }));
+  const rows = chats.filter((c) => LISTED.has(c.kind)).map((c) => ({ id: c.id, name: c.name, kind: c.kind, last_at: c.at ?? null }));
   if (rows.length) {
     await db.run(
-      `insert into telegram_chats (owner_id, id, name, kind, last_at, seen_at)
-       select $1, r.id, r.name, r.kind, r.last_at, $3 from jsonb_to_recordset($2::jsonb) as r(id text, name text, kind text, last_at bigint)
+      `insert into telegram_chats (owner_id, id, name, kind, last_at, seen_at, synced)
+       select $1, r.id, r.name, r.kind, r.last_at, $3, exists (select 1 from conversations c where c.owner_id = $1 and c.id = 'telegram:' || r.id)
+       from jsonb_to_recordset($2::jsonb) as r(id text, name text, kind text, last_at bigint)
        on conflict (owner_id, id) do update set name = excluded.name, kind = excluded.kind, last_at = excluded.last_at, seen_at = excluded.seen_at`,
       [ownerId, JSON.stringify(rows), now],
     );
@@ -130,12 +136,14 @@ export async function telegramPull({ db, ownerId, now, cursor }: JobContext, tel
   const [owner] = await db.query<{ name: string }>("select name from users where id = $1", [ownerId]);
   const budget: Budget = { pictures: PICTURES_PER_RUN, avatars: AVATARS_PER_RUN };
 
-  // Messages are read from the most recent chats only. Once a day the whole list is read for its names.
+  // Messages are read from the most recent chats only. Once a day the whole list is read for its
+  // names; and once at the start, so the one-to-one chats are on the list as soon as it has them.
   let listedAt = Number(cursor.listedAt ?? 0);
-  const whole = now - listedAt >= LIST_EVERY;
+  const whole = now - listedAt >= LIST_EVERY || cursor.listsPeople !== true;
   const chats = await telegram.chats(whole ? LIST_CHATS : MAX_CHATS);
   await noteChats(db, ownerId, chats, now, whole);
   if (whole) listedAt = now;
+  const ticked = new Set((await db.query<{ id: string }>("select id from telegram_chats where owner_id = $1 and synced", [ownerId])).map((r) => r.id));
 
   let stored = 0;
   let touched = 0;
@@ -146,9 +154,16 @@ export async function telegramPull({ db, ownerId, now, cursor }: JobContext, tel
       await db.run("delete from conversations where owner_id = $1 and id = $2", [ownerId, `telegram:${chat.id}`]);
       continue;
     }
-    if (chat.kind !== "direct" && chat.kind !== "group") continue;
+    if (!LISTED.has(chat.kind)) continue;
     const last = seen[chat.id] ?? 0;
     if (chat.topId <= last) continue;
+    // A chat that is not ticked is not opened. Its bookmark goes, so ticking it later starts
+    // from the last few days, as a first read does.
+    if (!ticked.has(chat.id)) {
+      delete seen[chat.id];
+      leftOut++;
+      continue;
+    }
     seen[chat.id] = chat.topId;
 
     // On the very first read of a chat, only the last few days count.
@@ -156,11 +171,6 @@ export async function telegramPull({ db, ownerId, now, cursor }: JobContext, tel
     if (!fresh.length) continue;
     const direct = chat.kind === "direct";
     const tagged = fresh.some((m) => !m.out && m.mentioned);
-    // A group with nothing addressed to the owner stays out of the inbox.
-    if (!direct && !tagged) {
-      leftOut++;
-      continue;
-    }
 
     const conversationId = `telegram:${chat.id}`;
     await db.run(
@@ -175,8 +185,8 @@ export async function telegramPull({ db, ownerId, now, cursor }: JobContext, tel
 
   return {
     items: stored,
-    cursor: { seen, listedAt },
-    message: `${stored} new ${stored === 1 ? "message" : "messages"} in ${touched} ${touched === 1 ? "chat" : "chats"}${leftOut ? `. ${leftOut} ${leftOut === 1 ? "group" : "groups"} with nothing addressed to you ${leftOut === 1 ? "was" : "were"} left out` : ""}`,
+    cursor: { seen, listedAt, listsPeople: true },
+    message: `${stored} new ${stored === 1 ? "message" : "messages"} in ${touched} ${touched === 1 ? "chat" : "chats"}${leftOut ? `. ${leftOut} ${leftOut === 1 ? "chat that is" : "chats that are"} not ticked ${leftOut === 1 ? "was" : "were"} left out` : ""}`,
   };
 }
 

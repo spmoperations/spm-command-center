@@ -396,7 +396,8 @@ export async function stateStamps(db: Db, ownerId: string, now = new Date()): Pr
          ${rowsHash("n", "from clients n where n.owner_id = $2")},
          ${rowsHash("row(x.provider, x.label, x.connected_at, x.scopes)", "from connections x where x.owner_id = $1")},
          ${rowsHash("row(a.email, a.scopes, a.connected_at)", "from google_accounts a where a.owner_id = $1")},
-         ${rowsHash("row(u.id, u.name)", `from users u where u.id in (${teamUsersSql("$2")})`)}
+         ${rowsHash("row(u.id, u.name)", `from users u where u.id in (${teamUsersSql("$2")})`)},
+         ${rowsHash("row(tc.id, tc.name, tc.kind, tc.synced)", "from telegram_chats tc where tc.owner_id = $1")}
        )) as rest`,
     [ownerId, TEAM, isoDay(now)],
   );
@@ -507,7 +508,12 @@ async function readState(db: Db, ownerId: string, now: Date, open: string | null
     skip.has("calendar") ? undefined : loadCalendar(db, ownerId),
     googleAccounts(db, ownerId),
     db.query<{ source: "slack" | "telegram"; kind: "chat" | "person"; external_id: string; name: string }>("select source, kind, external_id, name from important where owner_id = $1 order by lower(name)", [ownerId]),
-    telegramHere ? db.query<{ id: string; name: string; kind: "group" | "channel" }>("select id, name, kind from telegram_chats where owner_id = $1 order by lower(name)", [ownerId]) : Promise.resolve([]),
+    telegramHere
+      ? db.query<{ id: string; name: string; kind: "group" | "channel" | "direct"; synced: boolean; last_at: number | null }>(
+          "select id, name, kind, synced, last_at from telegram_chats where owner_id = $1 order by lower(name)",
+          [ownerId],
+        )
+      : Promise.resolve([]),
     telegramHere
       ? db.query<{ id: string; name: string }>(
           // The people of the one-to-one chats, and whoever wrote in a group, each once under their latest name.
@@ -588,7 +594,7 @@ async function readState(db: Db, ownerId: string, now: Date, open: string | null
     channels,
     slackPeople,
     important: importantRows.map((r) => ({ source: r.source, kind: r.kind, id: r.external_id, name: r.name })),
-    telegramChats,
+    telegramChats: telegramChats.map((c) => ({ id: c.id, name: c.name, kind: c.kind, synced: c.synced, lastAt: c.last_at == null ? null : Number(c.last_at) })),
     telegramPeople: telegramPeople.sort((a, b) => a.name.localeCompare(b.name)),
     avatars: Object.fromEntries(pictures.map((p) => [p.name, p.image])),
     owner: { name: owner?.name ?? "You" },
@@ -1229,6 +1235,28 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
   },
   async setChannelSelected(c, id: string, selected: boolean) {
     await c.db.run("update slack_channels set selected = $1 where owner_id = $2 and id = $3", [selected, c.ownerId, id]);
+  },
+  /**
+   * Ticks or unticks Telegram chats to come in (see jobs/telegram.ts). A chat switched off leaves
+   * the dashboard at once: its messages, its pictures, and its suggestions nobody has decided on.
+   * Telegram itself is not touched, and a task already made from it stays.
+   */
+  async setTelegramSync(c, ids: unknown, on: unknown) {
+    const chats = (Array.isArray(ids) ? ids : [ids]).filter((id): id is string => typeof id === "string" && id.length > 0).slice(0, 1000);
+    if (!chats.length) throw new Error("Which chats?");
+    await c.db.run("update telegram_chats set synced = $3 where owner_id = $1 and id in (select jsonb_array_elements_text($2::jsonb))", [c.ownerId, JSON.stringify(chats), Boolean(on)]);
+    if (on) return;
+    const rows = JSON.stringify(chats.map((id) => `telegram:${id}`));
+    await c.db.run(
+      "update suggestions set status = 'dismissed', reason = 'chat_off' where owner_id = $1 and status = 'new' and src_type = 'message' and src_id in (select jsonb_array_elements_text($2::jsonb))",
+      [c.ownerId, rows],
+    );
+    // Its messages go with it.
+    await c.db.run("delete from conversations where owner_id = $1 and id in (select jsonb_array_elements_text($2::jsonb))", [c.ownerId, rows]);
+    await c.db.run("delete from media where owner_id = $1 and split_part(key, '/', 1) = 'telegram' and split_part(key, '/', 2) in (select jsonb_array_elements_text($2::jsonb))", [
+      c.ownerId,
+      JSON.stringify(chats),
+    ]);
   },
 
   // Connections
