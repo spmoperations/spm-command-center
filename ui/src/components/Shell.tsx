@@ -10,7 +10,7 @@ import { PROVIDERS } from "@/core/providers";
 import { evalMetric } from "@/core/targets";
 import type { Mode } from "@/core/types";
 import { HelpButton } from "@/components/Help";
-import { reviewThisWeek } from "@/components/Tickets";
+import { reviewWaiting } from "@/core/review";
 import { PROFESSIONAL_ONLY, refresh, setMode, signOut, useApp, useMode, useToast, type App } from "@/store/store";
 
 // Phase 1 tabs. The Personal side shows the tabs that work for it; Payments, Goals and
@@ -35,7 +35,7 @@ function navCounts({ state, now, today }: App, mode: Mode): Record<string, Count
   const open = state.inbox.filter((c) => c.mode === mode && !c.done && !c.replied && c.source !== "gmail");
   const emails = state.inbox.filter((c) => c.source === "gmail" && !c.done && !c.replied);
   const mine = state.tasks.filter((t) => t.mode === mode && isMine(t, state.me.id));
-  const toReview = reviewThisWeek(state.review, now).length;
+  const toReview = reviewWaiting(state.review).length;
   const clock = { day: now.getDate(), dim: daysInMonth(now) };
   const lagging = state.metrics
     .filter((m) => !m.parent)
@@ -46,7 +46,7 @@ function navCounts({ state, now, today }: App, mode: Mode): Record<string, Count
   return {
     inbox: { text: open.length, hot: open.some((c) => c.pri === "high"), title: `${open.length} waiting for a reply` },
     emails: { text: emails.length, hot: false, title: `${emails.length} ${emails.length === 1 ? "email" : "emails"} not answered or done` },
-    review: { text: toReview, hot: false, title: `${toReview} raised this week, waiting to be made tickets or turned down` },
+    review: { text: toReview, hot: false, title: `${toReview} waiting to be made tickets or turned down` },
     tasks: { text: mine.length, hot: mine.some((t) => t.due <= today), title: `${mine.length} on your plate` },
     targets: { text: lagging ? `${lagging} off` : "OK", hot: lagging > 0, title: lagging ? `${lagging} behind pace` : "All on pace" },
     connections: { text: `${connected} of ${providers.length}`, hot: false, title: `${connected} of ${providers.length} apps connected` },

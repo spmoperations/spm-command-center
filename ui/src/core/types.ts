@@ -194,7 +194,7 @@ export interface ReviewItem {
   pri: Priority;
   /** When it was flagged. */
   at: number;
-  /** When it was said: the message, or the start of the call. The Review tab shows this week's. */
+  /** When it was said: the message, or the start of the call. The Review tab shows everything since `REVIEW_FROM`. */
   raisedAt: number;
   /** A message the rules flagged, read by the AI: how sure it is that this is a real task. Null when not asked. */
   confidence: number | null;

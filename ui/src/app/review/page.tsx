@@ -6,9 +6,10 @@
 import Link from "next/link";
 import { useState } from "react";
 import { Seg } from "@/components/bits";
-import { assignable, ClientPicker, defaultNotify, NotifyChoice, PersonPicker, reviewThisWeek, SourceBox, ticketName, TicketForm, type Assignable } from "@/components/Tickets";
-import { conversationPage, REJECT_REASONS, type RejectReason } from "@/core/config";
-import { sinceMonday, stamp } from "@/core/dates";
+import { assignable, ClientPicker, defaultNotify, NotifyChoice, PersonPicker, SourceBox, ticketName, TicketForm, type Assignable } from "@/components/Tickets";
+import { conversationPage, REJECT_REASONS, REVIEW_FROM, type RejectReason } from "@/core/config";
+import { parseDay, stamp } from "@/core/dates";
+import { raisedIn, REVIEW_WHEN_NAME, reviewWaiting, type ReviewWhen } from "@/core/review";
 import type { ReviewItem, TicketInput } from "@/core/types";
 import { acceptReview, mergeReview, openConversation, rejectReview, restoreReview, reviewMany, showMeeting, useApp, type App } from "@/store/store";
 
@@ -148,6 +149,7 @@ function ReviewCard({ g, app, people, picked, onPick, clients }: { g: ReviewItem
 export default function ReviewPage() {
   const app = useApp();
   const [from, setFrom] = useState("all");
+  const [when, setWhen] = useState<ReviewWhen>("all");
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [last, setLast] = useState<string | null>(null);
   const [reason, setReason] = useState<RejectReason>("not_task");
@@ -156,12 +158,17 @@ export default function ReviewPage() {
   const clients = state.clients;
   const people = assignable(state);
   const logins = state.people.filter((p) => p.login);
-  // Only what was said this week, since Monday.
-  const week = reviewThisWeek(state.review, app.now);
-  const older = state.review.length - week.length;
-  const setAside = reviewThisWeek(state.setAside, app.now).filter((g) => from === "all" || (from === "mine" ? g.mine : `user:${g.fromUser}` === from));
-  const monday = new Date(sinceMonday(app.now)).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
-  const shown = week.filter((g) => from === "all" || (from === "mine" ? g.mine : `user:${g.fromUser}` === from));
+  // Everything raised since the Review tab started (REVIEW_FROM), then narrowed by whose it is and when it was raised.
+  const whose = (g: ReviewItem) => from === "all" || (from === "mine" ? g.mine : `user:${g.fromUser}` === from);
+  const waiting = reviewWaiting(state.review).filter(whose);
+  const shown = waiting.filter((g) => raisedIn(g.raisedAt, when, app.now));
+  const setAside = reviewWaiting(state.setAside)
+    .filter(whose)
+    .filter((g) => raisedIn(g.raisedAt, when, app.now));
+  const count = (w: ReviewWhen) => waiting.filter((g) => raisedIn(g.raisedAt, w, app.now)).length;
+  // A part of the filter with nothing in it is left out, unless it is the one picked.
+  const whens = (["all", "today", "this_week", "last_week", "earlier"] as ReviewWhen[]).filter((w) => w === "all" || w === when || count(w) > 0);
+  const start = parseDay(REVIEW_FROM).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
   const ids = shown.filter((g) => picked.has(g.id)).map((g) => g.id);
   const all = shown.length > 0 && ids.length === shown.length;
   const pick = (id: string, on: boolean, range: boolean) => {
@@ -185,20 +192,23 @@ export default function ReviewPage() {
         <div>
           <h2>Review</h2>
           <div className="muted" style={{ fontSize: 14 }}>
-            {week.length} raised this week, since {monday}, in the team&apos;s chats, emails and calls. Accept what is worth doing: it goes on the <Link href="/tasks">board</Link>.
-            {older > 0 && ` ${older} from before Monday ${older === 1 ? "is" : "are"} not shown.`}
+            {waiting.length} waiting, raised since {start} in the team&apos;s chats, emails and calls. Each stays here until someone accepts or rejects it. Accept what is worth doing: it goes on
+            the <Link href="/tasks">board</Link>.
           </div>
         </div>
-        <Seg
-          value={from}
-          label="Whose"
-          onChange={setFrom}
-          options={[
-            ["all", "Everyone's"],
-            ["mine", "Mine"],
-            ...(state.me.isOwner ? [] : logins.filter((p) => p.id !== `user:${state.me.id}`).map((p): [string, string] => [p.id, `${p.name.split(" ")[0]}'s`])),
-          ]}
-        />
+        <div className="rv-filters">
+          <Seg<ReviewWhen> value={when} label="When it was raised" onChange={setWhen} options={whens.map((w): [ReviewWhen, string] => [w, `${REVIEW_WHEN_NAME[w]} ${count(w)}`])} />
+          <Seg
+            value={from}
+            label="Whose"
+            onChange={setFrom}
+            options={[
+              ["all", "Everyone's"],
+              ["mine", "Mine"],
+              ...(state.me.isOwner ? [] : logins.filter((p) => p.id !== `user:${state.me.id}`).map((p): [string, string] => [p.id, `${p.name.split(" ")[0]}'s`])),
+            ]}
+          />
+        </div>
       </div>
 
       {shown.length > 0 && (
@@ -242,7 +252,19 @@ export default function ReviewPage() {
 
       {shown.length === 0 ? (
         <div className="panel hint-panel">
-          <strong>Nothing to review this week.</strong> Requests in everyone&apos;s chats and emails, and action items from calls, show here as they come in.
+          {waiting.length === 0 ? (
+            <>
+              <strong>Nothing to review.</strong> Requests in everyone&apos;s chats and emails, and action items from calls, show here as they come in.
+            </>
+          ) : (
+            <>
+              <strong>Nothing raised {REVIEW_WHEN_NAME[when].toLowerCase()}.</strong> {waiting.length} {waiting.length === 1 ? "other is" : "others are"} waiting:{" "}
+              <button className="linkbtn" onClick={() => setWhen("all")}>
+                show all
+              </button>
+              .
+            </>
+          )}
         </div>
       ) : (
         <div className="rv-list">
@@ -255,7 +277,7 @@ export default function ReviewPage() {
       {setAside.length > 0 && (
         <details className="panel rv-aside">
           <summary>
-            Set aside by the AI this week: {setAside.length} {setAside.length === 1 ? "message that is" : "messages that are"} not a task
+            Set aside by the AI: {setAside.length} {setAside.length === 1 ? "message that is" : "messages that are"} not a task
           </summary>
           <p className="muted">The AI read each of these and was not sure it is a real task. If one is, put it back and it waits above like the rest.</p>
           <ul>

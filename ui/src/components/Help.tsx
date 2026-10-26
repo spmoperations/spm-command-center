@@ -78,7 +78,7 @@ const GUIDES: Record<string, Guide> = {
           </ul>
         ),
       },
-      { head: KNOW, body: <p>Focus and quick links are yours only. The line about what was flagged this week links to the Review tab.</p> },
+      { head: KNOW, body: <p>Focus and quick links are yours only. The line about what is waiting for review links to the Review tab.</p> },
     ],
   },
   inbox: {
@@ -247,7 +247,7 @@ const GUIDES: Record<string, Guide> = {
   },
   review: {
     title: "Review",
-    intro: "What the Command Center found this week that might be a task, from everyone's chats, emails and calls. Nothing becomes a task until someone here says so.",
+    intro: "What the Command Center found that might be a task, from everyone's chats, emails and calls. Nothing becomes a task until someone here says so.",
     flow: true,
     parts: [
       { head: FOR, body: <p>Deciding, in one place, which of the requests and call action items are real tasks, who should do each, and by when.</p> },
@@ -263,7 +263,7 @@ const GUIDES: Record<string, Guide> = {
             <p>
               Every 30 minutes, an AI reads each new flagged message with the conversation around it and keeps only real tasks, with a clear title, who it is for, and how sure it is. It reads
               at most 100 messages a day for each login, so it costs well under a dollar a day. Action items from calls are never sent to the AI. If the AI can&apos;t be reached for a while,
-              everything flagged still shows here, marked &quot;Not checked by the AI yet&quot;, and it is checked on the next run. Only what was said this week, since Monday, is shown.
+              everything flagged still shows here, marked &quot;Not checked by the AI yet&quot;, and it is checked on the next run. Everything raised since Monday 19 October is shown, and stays until someone decides on it.
             </p>
           </>
         ),
@@ -286,6 +286,7 @@ const GUIDES: Record<string, Guide> = {
             </li>
             <li>Tick several cards (shift-click for a range) to accept or reject them together. Accepting several messages nobody.</li>
             <li>Show everyone&apos;s or only yours. A team login, such as Alex, can also show Jeremy&apos;s.</li>
+            <li>Narrow it by when it was raised: today, this week, last week or earlier. Each shows how many are in it.</li>
           </ul>
         ),
       },

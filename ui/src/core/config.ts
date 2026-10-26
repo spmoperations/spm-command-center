@@ -61,6 +61,13 @@ export const MOST_PICTURES = 10;
 
 /** Tickets on the board are numbered SPM-1, SPM-2 and so on. */
 export const TICKET_PREFIX = "SPM";
+
+/**
+ * The first day the Review tab shows: suggestions raised before it are kept but never shown.
+ * The week the Review tab started, so everything from then on stays visible, this week and
+ * after, until someone accepts or rejects it.
+ */
+export const REVIEW_FROM = "2026-10-19";
 export const TICKET_STATUSES: TicketStatus[] = ["open", "in_progress", "waiting", "done"];
 export const TICKET_STATUS_NAME: Record<TicketStatus, string> = { open: "Open", in_progress: "In progress", waiting: "Waiting", done: "Done" };
 /** Why a suggestion was turned down, as the review asks. */

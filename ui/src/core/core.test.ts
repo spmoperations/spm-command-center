@@ -3,11 +3,12 @@ import { addDays, clockWithZone, dueLabel, sinceMonday, weekStart } from "./date
 import { assignmentText, candidates, canAssign, canAssignInChat, fitFor, taskStatus } from "./delegation";
 import { clampInterval, describeInterval, isDue, JOBS, liveJobs, nextRunAt, waitUntil } from "./jobs";
 import { looksLikeRequest, requestDue, requestSummary, whereAsked } from "./requests";
+import { raisedIn, reviewWaiting, whenRaised } from "./review";
 import { findChoices } from "./search";
 import { checkFathomKey, checkPhone, checkSlackToken, checkTelegramCode, maskPhone, normalizePhone, SLACK_CREATE_APP_URL } from "./providers";
 import { applyRules, ruleHits, ruleMatches, sortConversation } from "./rules";
 import { evalMetric } from "./targets";
-import type { Conversation, JobSetting, Metric, Person, Rule, Task } from "./types";
+import type { Conversation, JobSetting, Metric, Person, ReviewItem, Rule, Task } from "./types";
 
 const conv = (over: Partial<Conversation>): Conversation => ({
   id: "c1", source: "slack", from: "Maya Chen", ctx: "#harbor-realty-content", direct: false, tagged: false,
@@ -292,6 +293,18 @@ describe("dates", () => {
     expect(weekStart(now)).toBe("2026-10-05");
     // The Review tab's week: from Monday at midnight, where the page is looked at.
     expect(new Date(sinceMonday(now)).toString()).toBe(new Date(2026, 9, 5).toString());
+  });
+
+  it("shows on the Review tab what was raised since it started, and sorts it into today, this week, last week and earlier", () => {
+    const item = (day: string, hour = 9) => ({ raisedAt: new Date(`${day}T${String(hour).padStart(2, "0")}:00`).getTime() }) as ReviewItem;
+    // Before the start: kept, never shown. From the start on: shown, this week and every week after.
+    expect(reviewWaiting([item("2026-10-18", 23), item("2026-10-19", 0), item("2026-10-24")]).length).toBe(2);
+    const monday = new Date("2026-11-02T10:00");
+    expect(["2026-11-02", "2026-11-01", "2026-10-26", "2026-10-25", "2026-10-19"].map((d) => whenRaised(item(d).raisedAt, monday))).toEqual(["today", "last_week", "last_week", "earlier", "earlier"]);
+    // This week takes in today.
+    expect(raisedIn(item("2026-11-02").raisedAt, "this_week", monday)).toBe(true);
+    expect(raisedIn(item("2026-11-01").raisedAt, "this_week", monday)).toBe(false);
+    expect(raisedIn(item("2026-10-19").raisedAt, "all", monday)).toBe(true);
   });
 
   it("labels a due date relative to today", () => {

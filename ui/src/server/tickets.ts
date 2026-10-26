@@ -277,13 +277,13 @@ const SUGGESTION_FROM = `select s.id, s.owner_id, s.title, s.why, s.project, s.p
 const SUGGESTION_SQL = `${SUGGESTION_FROM}
   where s.owner_id in (${TEAM_USERS}) and s.status = 'new' and (s.mode = 'professional' or s.owner_id = $2)`;
 
-/** What the AI set aside as not a task since $3, that this person may see. */
+/** What the AI set aside as not a task, that this person may see. */
 const SET_ASIDE_SQL = `${SUGGESTION_FROM}
-  where s.owner_id in (${TEAM_USERS}) and s.status = 'dismissed' and s.reason = 'not_task' and s.confidence is not null and s.checked_at > $3
+  where s.owner_id in (${TEAM_USERS}) and s.status = 'dismissed' and s.reason = 'not_task' and s.confidence is not null
     and (s.mode = 'professional' or s.owner_id = $2)`;
 
-/** How far back the list of what the AI set aside goes. */
-const SET_ASIDE_DAYS = 14;
+/** How many of the AI's set-aside messages are sent, newest first. The page shows those raised since the Review tab started (see `reviewWaiting`). */
+const SET_ASIDE_MOST = 100;
 
 function toReview(g: SuggestionRow, viewer: string, people: TeamPerson[], slack: InSlack[]): ReviewItem {
   const item = g.src_type === "meeting" ? (g.mt_items?.[actionIndex(g.dedupe_key) ?? -1] ?? null) : null;
@@ -321,9 +321,9 @@ export async function reviewItems(db: Db, viewer: string, people: TeamPerson[]):
   return rows.map((g) => toReview(g, viewer, people, slack));
 }
 
-/** What the AI set aside as not a task lately, newest first, so anyone can see it and put one back. */
-export async function setAsideItems(db: Db, viewer: string, people: TeamPerson[], now: number): Promise<ReviewItem[]> {
-  const rows = await db.query<SuggestionRow>(`${SET_ASIDE_SQL} order by s.checked_at desc, s.id limit 100`, [TEAM, viewer, now - SET_ASIDE_DAYS * 86_400_000]);
+/** What the AI set aside as not a task, newest first, so anyone can see it and put one back. */
+export async function setAsideItems(db: Db, viewer: string, people: TeamPerson[]): Promise<ReviewItem[]> {
+  const rows = await db.query<SuggestionRow>(`${SET_ASIDE_SQL} order by s.checked_at desc, s.id limit $3`, [TEAM, viewer, SET_ASIDE_MOST]);
   return rows.map((g) => toReview(g, viewer, people, []));
 }
 

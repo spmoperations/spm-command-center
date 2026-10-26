@@ -62,6 +62,9 @@ nav.tabs .count.hot { background: var(--bad-soft); color: var(--bad); border-col
 
 section.view { padding-top: 22px; }
 .view-head { display: flex; justify-content: space-between; align-items: end; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.rv-filters { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; max-width: 100%; }
+.rv-filters .seg { max-width: 100%; overflow-x: auto; }
+.rv-filters .seg button { white-space: nowrap; flex: none; }
 .view-head h2 { font-size: 22px; }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); }
 .panel-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 14px 16px 10px; }

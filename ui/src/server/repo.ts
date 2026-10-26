@@ -552,7 +552,7 @@ async function readState(db: Db, ownerId: string, now: Date, open: string | null
     inbox,
     tasks,
     review: await reviewItems(db, ownerId, people),
-    setAside: await setAsideItems(db, ownerId, people, now.getTime()),
+    setAside: await setAsideItems(db, ownerId, people),
     clients: await teamClients(db, ownerId),
     people,
     teamSlack: (await teamSlack(db)).sort((a, b) => a.name.localeCompare(b.name)),
