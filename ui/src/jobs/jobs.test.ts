@@ -896,6 +896,19 @@ describe("runner", () => {
     }
   });
 
+  it("gives a login a timer for a check added after it was made, and runs it", async () => {
+    await db.run("delete from jobs where owner_id = $1 and job_id = 'task-check'", [OWNER_ID]);
+    process.env.ANTHROPIC_API_KEY = "sk-test";
+    try {
+      expect((await tick(db, OWNER_ID, NOW)).map((r) => r.jobId)).toContain("task-check");
+      expect(await db.query("select interval_min from jobs where owner_id = $1 and job_id = 'task-check'", [OWNER_ID])).toEqual([{ interval_min: 30 }]);
+      // Its timer is kept from then on: not run again until it is due.
+      expect((await tick(db, OWNER_ID, NOW + 60_000)).map((r) => r.jobId)).not.toContain("task-check");
+    } finally {
+      delete process.env.ANTHROPIC_API_KEY;
+    }
+  });
+
   it("lets only one run of a check go ahead at a time, and frees a run that never reported back", async () => {
     await db.run("insert into job_runs (owner_id, job_id, started_at) values ($1, 'inbox-rules', $2)", [OWNER_ID, NOW - 60_000]);
     expect(await runJob(db, "inbox-rules", OWNER_ID, NOW)).toMatchObject({ ok: false, message: "Already running" });

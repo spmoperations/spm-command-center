@@ -44,13 +44,23 @@ const STARTING_METRICS: Metric[] = [
   { id: "held", parent: "revenue", name: "Sales calls held", target: 48, unit: "n" },
 ];
 
+/**
+ * Gives this login a timer for every check, at its default settings. A check added after the
+ * login was made has none yet: without a timer it never runs on its own. One statement, so it
+ * is cheap to do on every tick.
+ */
+export async function ensureJobs(db: Db, ownerId: string): Promise<void> {
+  await db.run("insert into jobs (owner_id, job_id, interval_min) select $1, j.id, j.minutes from jsonb_to_recordset($2::jsonb) as j(id text, minutes integer) on conflict do nothing", [
+    ownerId,
+    JSON.stringify(defaultJobSettings().map((job) => ({ id: job.id, minutes: job.intervalMin }))),
+  ]);
+}
+
 /** Creates the owner and their starting settings the first time the server runs. */
 export async function ensureOwner(db: Db, ownerId = OWNER_ID): Promise<void> {
   const now = Date.now();
   await db.run("insert into users (id, name, created_at) values ($1, $2, $3) on conflict (id) do nothing", [ownerId, process.env.OWNER_NAME ?? "You", now]);
-  for (const job of defaultJobSettings()) {
-    await db.run("insert into jobs (owner_id, job_id, interval_min) values ($1, $2, $3) on conflict do nothing", [ownerId, job.id, job.intervalMin]);
-  }
+  await ensureJobs(db, ownerId);
   const [{ n: rules }] = await db.query<{ n: number }>("select count(*)::int as n from rules where owner_id = $1", [ownerId]);
   if (rules === 0) {
     // Sensible starting point: being tagged is urgent, a direct message comes next.

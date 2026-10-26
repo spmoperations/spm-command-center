@@ -13,7 +13,7 @@ import { isoDay } from "@/core/dates";
 import { redactSecrets } from "@/core/slack-text";
 import type { Source } from "@/core/types";
 import type { Candidate } from "@/prompts/task-check";
-import { aiKeys, checkCandidates, describeAiError, NoVerdicts, roughCost, type AiUsage, type CheckResult, type TaskCheck } from "@/server/ai";
+import { AI_MODEL, aiKeys, checkCandidates, describeAiError, NoVerdicts, roughCost, type AiUsage, type CheckResult, type TaskCheck } from "@/server/ai";
 import { setting } from "@/server/app-keys";
 import { teamPeople } from "@/server/tickets";
 import type { JobContext, JobResult } from "./runner";
@@ -188,7 +188,8 @@ export async function taskCheck({ db, ownerId, now, cursor }: JobContext, checke
   if (sent.size) parts.push(`${sent.size} to try again`);
   return {
     items: kept + setAside,
-    message: `Checked ${kept + setAside}: ${parts.join(", ")}. This run: ${tokens(used)}. Today: ${total.sent} ${total.sent === 1 ? "message" : "messages"}, ${tokens(total)}`,
+    // The model is named, so anyone can see in Settings which one did the work.
+    message: `Checked ${kept + setAside} with ${AI_MODEL}: ${parts.join(", ")}. This run: ${tokens(used)}. Today: ${total.sent} ${total.sent === 1 ? "message" : "messages"}, ${tokens(total)}`,
     cursor: { ...cursor, today: total },
   };
 }

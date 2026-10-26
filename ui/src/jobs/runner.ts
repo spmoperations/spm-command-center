@@ -8,7 +8,7 @@ import { secretFor } from "@/server/connections";
 import type { Db } from "@/server/db";
 import { hostedProblem } from "@/server/app-keys";
 import { googleAccounts, googleApi, googleCan, googleConnected } from "@/server/google";
-import { ageOutInbox, clearAnswered, OWNER_ID, resortInbox, sendingEnabled } from "@/server/repo";
+import { ageOutInbox, clearAnswered, ensureJobs, OWNER_ID, resortInbox, sendingEnabled } from "@/server/repo";
 import { RateLimited, slackClient } from "@/server/slack";
 import { telegramApi, telegramConnected } from "@/server/telegram";
 import { calendarPull } from "./calendar";
@@ -172,6 +172,8 @@ export async function runJob(db: Db, jobId: JobId, ownerId = OWNER_ID, now = Dat
 
 /** Runs every job whose timer is up. Called once a minute. */
 export async function tick(db: Db, ownerId = OWNER_ID, now = Date.now()): Promise<JobRun[]> {
+  // A team login made before a check was added gets its timer now.
+  await ensureJobs(db, ownerId);
   const rows = await db.query<{ job_id: JobId; interval_min: number; enabled: boolean; last_run_at: number | null; not_before: number | null }>("select job_id, interval_min, enabled, last_run_at, not_before from jobs where owner_id = $1", [ownerId]);
   const connected = await connectedTo(db, ownerId);
   // Which checks this server may run at all. Each one still needs its account connected.
