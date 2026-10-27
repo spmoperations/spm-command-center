@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { addDays, clockWithZone, dueLabel, sinceMonday, weekStart } from "./dates";
-import { assignmentText, candidates, canAssign, canAssignInChat, fitFor, taskStatus } from "./delegation";
+import { assignmentBlocks, assignmentText, candidates, canAssign, canAssignInChat, fitFor, taskStatus, ticketLink } from "./delegation";
 import { clampInterval, describeInterval, isDue, JOBS, liveJobs, nextRunAt, waitUntil } from "./jobs";
 import { looksLikeRequest, requestDue, requestSummary, whereAsked } from "./requests";
 import { raisedIn, reviewWaiting, whenRaised } from "./review";
@@ -121,6 +121,36 @@ describe("delegation", () => {
     // What is not there is left out, with no empty lines in its place.
     expect(assignmentText({ ...whole, note: "", project: "" })).toBe("New task for you: Book the venue\nDue Fri, Oct 16 · High priority");
     expect(assignmentText({ ...whole, pri: "mid", note: "Before Friday." })).toBe("New task for you: Book the venue\nDue Fri, Oct 16 · Medium priority · Launch\n\nBefore Friday.");
+  });
+
+  it("lays the message out for Slack: the tag, the task in bold with its note, and one line of facts", () => {
+    const blocks = assignmentBlocks({ tag: "<@ULUIS>", title: "Fix <the> hook & clip", ticket: "SPM-23", due: "2026-10-27", note: "Use the one in <Drive>.", pri: "low", project: "Harbor Realty", link: "https://example.com/tasks?task=SPM-23" });
+    expect(blocks).toEqual([
+      { type: "section", text: { type: "mrkdwn", text: "<@ULUIS> *New task for you*" } },
+      // What could read as Slack's own markup is written out.
+      { type: "section", text: { type: "mrkdwn", text: "*Fix &lt;the&gt; hook &amp; clip*\nUse the one in &lt;Drive&gt;." } },
+      { type: "context", elements: [{ type: "mrkdwn", text: "*SPM-23*  ·  Due *Tue, Oct 27*  ·  Low priority  ·  Harbor Realty  ·  <https://example.com/tasks?task=SPM-23|Open in Command Center>" }] },
+    ]);
+    // Nothing to say is left out; with nobody tagged it is simply a new task.
+    expect(assignmentBlocks({ tag: "", title: "Book the venue", due: "2026-10-27", note: "" }).map((b) => (b.type === "section" ? b.text.text : b.elements[0].text))).toEqual(["*New task*", "*Book the venue*", "Due *Tue, Oct 27*"]);
+  });
+
+  it("links to a ticket on the live site's board, and nowhere when the site's address is not known", () => {
+    const saved = { site: process.env.SITE_URL, vercel: process.env.VERCEL_PROJECT_PRODUCTION_URL };
+    try {
+      delete process.env.SITE_URL;
+      delete process.env.VERCEL_PROJECT_PRODUCTION_URL;
+      expect(ticketLink("SPM-23")).toBeUndefined();
+      process.env.VERCEL_PROJECT_PRODUCTION_URL = "spm-command-center.vercel.app";
+      expect(ticketLink("SPM-23")).toBe("https://spm-command-center.vercel.app/tasks?task=SPM-23");
+      process.env.SITE_URL = "http://127.0.0.1:3100/";
+      expect([ticketLink("SPM-23"), ticketLink("")]).toEqual(["http://127.0.0.1:3100/tasks?task=SPM-23", undefined]);
+    } finally {
+      for (const [key, value] of [["SITE_URL", saved.site], ["VERCEL_PROJECT_PRODUCTION_URL", saved.vercel]] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   it("addresses the channel as a whole when nobody is tagged", () => {

@@ -11,7 +11,7 @@
 // Telegram from the account of whoever assigned it, through the outbox like every message.
 import crypto from "node:crypto";
 import { PRIORITY_NAME, REJECT_REASONS, SOURCE_NAME, TICKET_PREFIX, TICKET_STATUS_NAME, TICKET_STATUSES, type RejectReason } from "@/core/config";
-import { assignmentText, CHANNEL_PICK, SLACK_PICK } from "@/core/delegation";
+import { assignmentBlocks, assignmentText, CHANNEL_PICK, SLACK_PICK, ticketLink } from "@/core/delegation";
 import { isoDay, parseDay } from "@/core/dates";
 import { norm } from "@/core/rules";
 import type { Mode, Priority, ReviewItem, Source, SourceNote, Task, TaskSource, TeamPerson, TicketEvent, TicketInput, TicketStatus } from "@/core/types";
@@ -52,13 +52,15 @@ const LOGIN_SLACK = `coalesce(u.slack_user_id, (select s.id from slack_users s w
   and lower(s.email) = lower(coalesce(u.login_email, u.email)) order by (s.owner_id = $1) desc, s.id limit 1))`;
 
 /**
- * Whether the Slack account `slackId` may be told about a task that `assigner` gave them. Jeremy
- * (the owner) never is. Another login, such as Alex, only when Jeremy gives it. Anyone else,
- * such as someone on the team list, always: from the Slack account of whoever gave it.
+ * Whether the Slack account `slackId` may be told about a task that `assigner` gave them. Between
+ * logins, only between Jeremy (the owner) and another login, either way: Jeremy giving Alex a
+ * task, or Alex giving Jeremy one. Never about a task they gave themselves. Anyone else, such as
+ * someone on the team list, always: from the Slack account of whoever gave it.
  */
 export async function mayTellOnSlack(db: Db, assigner: string, slackId: string): Promise<boolean> {
   const [login] = await db.query<{ id: string }>(`select u.id from users u where u.id in (${TEAM_USERS}) and ${LOGIN_SLACK} = $2 limit 1`, [TEAM, slackId]);
-  return !login || (login.id !== TEAM && assigner === TEAM);
+  if (!login) return true;
+  return login.id !== assigner && (login.id === TEAM || assigner === TEAM);
 }
 
 /** The team's clients: those added by name, and those tickets, calls and chats already name. Each once, whatever its capitals. */
@@ -581,7 +583,7 @@ async function heldTicket(c: Ctx, id: string) {
  * that starts with their Slack @name, so Slack notifies them of a mention. Refused when the
  * assigner has not connected that app.
  */
-async function tell(c: Ctx, taskId: string, name: string, to: { way: Notify; target: string }[]): Promise<void> {
+async function tell(c: Ctx, taskId: string, name: string, to: { way: Notify; target: string }[], login = false): Promise<void> {
   if (!to.length) return;
   const connected = new Set((await c.db.query<{ provider: string }>("select provider from connections where owner_id = $1", [c.ownerId])).map((r) => r.provider));
   const missing = [...new Set(to.map((t) => t.way))].filter((w) => !connected.has(w));
@@ -596,18 +598,23 @@ async function tell(c: Ctx, taskId: string, name: string, to: { way: Notify; tar
     mode: Mode;
   }>("select title, description, due, pri, project, number, mode from tasks where owner_id = $1 and id = $2", [TEAM, taskId]);
   const now = c.now.getTime();
+  const ticket = t.number ? ticketName(t.number) : "";
+  const note = tidy(t.description, 1500);
+  const project = t.mode === "personal" ? "" : t.project;
   for (const { way, target } of to) {
     const text = assignmentText({
       where: "dm",
       // Telegram has no tag for a person by id: there the message simply says it is theirs.
       who: way === "slack" ? `<@${target}>` : "",
-      title: `${t.title}${t.number ? ` (${ticketName(t.number)})` : ""}`,
+      title: `${t.title}${ticket ? ` (${ticket})` : ""}`,
       due: t.due,
-      note: tidy(t.description, 1500),
+      note,
       pri: t.pri,
-      project: t.mode === "personal" ? "" : t.project,
+      project,
     });
-    await c.db.run("insert into outbox (id, owner_id, source, target, to_name, ctx, body, task_id, created_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)", [
+    // On Slack it is laid out; a link to the ticket only for someone who can sign in to open it.
+    const blocks = way === "slack" ? assignmentBlocks({ tag: `<@${target}>`, title: t.title, ticket, due: t.due, note, pri: t.pri, project, link: login ? ticketLink(ticket) : undefined }) : null;
+    await c.db.run("insert into outbox (id, owner_id, source, target, to_name, ctx, body, task_id, created_at, details) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)", [
       uid("o"),
       c.ownerId,
       way,
@@ -617,6 +624,7 @@ async function tell(c: Ctx, taskId: string, name: string, to: { way: Notify; tar
       text,
       taskId,
       now,
+      blocks ? JSON.stringify({ blocks }) : null,
     ]);
   }
 }
@@ -635,9 +643,9 @@ async function assignTo(c: Ctx, taskId: string, assignee: string | null, notify:
     const userId = assignee.slice(5);
     const [user] = await c.db.query<{ name: string; slack: string | null }>(`select u.name, ${LOGIN_SLACK} as slack from users u where u.id = $2 and u.id in (${TEAM_USERS})`, [TEAM, userId]);
     if (!user) throw new Error("That person is not on the team.");
-    // A login is told on Slack only when Jeremy gives them the task, and Jeremy himself never (see `mayTellOnSlack`).
+    // Between logins, only Jeremy and another login are told, either way (see `mayTellOnSlack`).
     const to = notify.includes("slack") && user.slack && (await mayTellOnSlack(c.db, c.ownerId, user.slack)) ? [{ way: "slack" as const, target: user.slack }] : [];
-    await tell(c, taskId, user.name, to);
+    await tell(c, taskId, user.name, to, true);
     await c.db.run(`update tasks set assignee_user = $3, ${unhand} where owner_id = $1 and id = $2`, [TEAM, taskId, userId]);
     return `Assigned to ${user.name}${toldOn(to.map((t) => t.way))}`;
   }

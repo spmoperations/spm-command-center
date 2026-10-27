@@ -5,7 +5,7 @@
 // the review, from a chat or a call, or is made here.
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Seg } from "@/components/bits";
 import { reviewWaiting } from "@/core/review";
 import { assignable, SourceBox, sourceApp, StatusPill, ticketName, TicketForm, Who } from "@/components/Tickets";
@@ -254,6 +254,16 @@ export default function TasksPage() {
       return "status";
     }
   });
+  // Arriving from the link in a Slack message (?task=SPM-23): that ticket opens.
+  const count = app?.state.tasks.length ?? 0;
+  useEffect(() => {
+    const wanted = Number(/(\d+)$/.exec(new URLSearchParams(window.location.search).get("task") ?? "")?.[1]);
+    const ticket = wanted ? app?.state.tasks.find((t) => t.number === wanted) : undefined;
+    if (!ticket) return;
+    openTask(ticket.id);
+    window.history.replaceState(null, "", window.location.pathname);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [count]);
   const setView = (v: View) => {
     setViewNow(v);
     try {

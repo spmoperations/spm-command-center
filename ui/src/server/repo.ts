@@ -2,7 +2,7 @@
 // holds every change a person can make. Jobs write through their own modules in `src/jobs`.
 import crypto from "node:crypto";
 import { INBOX_DAYS, MOST_PICTURES, PERSONAL, PRIORITIES } from "@/core/config";
-import { assignmentText, canAssignInChat, CHANNEL_PICK, SLACK_PICK, type AssignWhere } from "@/core/delegation";
+import { assignmentBlocks, assignmentText, canAssignInChat, CHANNEL_PICK, SLACK_PICK, type AssignWhere } from "@/core/delegation";
 import { addDays, isoDay, monthKey, pad } from "@/core/dates";
 import { clampInterval, defaultJobSettings, JOBS } from "@/core/jobs";
 import { requestSummary } from "@/core/requests";
@@ -20,7 +20,7 @@ import { isUploadKey, telegramAvatarIds, type StoredPicture } from "./media";
 import { SLACK_FILES_SCOPE, SLACK_NEEDS_UPLOAD, SLACK_UPLOAD_SCOPE, type Fetch } from "./slack";
 import { hashPassword, MIN_PASSWORD, teamLogins } from "./team";
 import { telegramBlocked } from "./telegram";
-import { insertTicket, logEvent, mayTellOnSlack, reviewItems, setAsideItems, sourceNote, TEAM, teamClients, teamPeople, teamSlack, teamTickets, teamUsersSql, TICKET_ACTIONS } from "./tickets";
+import { insertTicket, logEvent, mayTellOnSlack, reviewItems, setAsideItems, sourceNote, TEAM, teamClients, teamPeople, teamSlack, teamTickets, teamUsersSql, ticketName, TICKET_ACTIONS } from "./tickets";
 import type { Db } from "./db";
 import { OWNER_ID } from "./owner";
 
@@ -560,8 +560,8 @@ async function readState(db: Db, ownerId: string, now: Date, open: string | null
     review: await reviewItems(db, ownerId, people),
     setAside: await setAsideItems(db, ownerId, people),
     clients: await teamClients(db, ownerId),
-    // Logins are told only when Jeremy gives them a task, and Jeremy never: the page offers it only then.
-    people: people.map((p) => (p.login && (ownerId !== TEAM || p.id === `user:${TEAM}`) ? { ...p, notTold: true } : p)),
+    // Between logins, only Jeremy and another login are told, either way, and nobody about their own task: the page offers it only then.
+    people: people.map((p) => (p.login && (p.id === `user:${ownerId}` || (ownerId !== TEAM && p.id !== `user:${TEAM}`)) ? { ...p, notTold: true } : p)),
     teamSlack: (await teamSlack(db)).sort((a, b) => a.name.localeCompare(b.name)),
     suggestions: suggestions.map((g) => ({
       // A call from last week suggests a date that has passed: offer today instead.
@@ -723,13 +723,16 @@ async function assignee(c: ActionContext, personId: string): Promise<Assignee> {
  */
 async function delegate(c: ActionContext, taskId: string, personId: string, note: string, due: string, where: AssignWhere = "dm") {
   const person = personId ? await assignee(c, personId) : null;
-  const [task] = await c.db.query<{ title: string; description: string | null; pri: Priority; project: string; mode: Mode; src_type: string | null; src_id: string | null }>(
-    "select title, description, pri, project, mode, src_type, src_id from tasks where owner_id = $1 and id = $2 and (mode = 'professional' or $3::boolean)",
+  const [task] = await c.db.query<{ title: string; description: string | null; pri: Priority; project: string; mode: Mode; src_type: string | null; src_id: string | null; number: number | null }>(
+    "select title, description, pri, project, mode, src_type, src_id, number from tasks where owner_id = $1 and id = $2 and (mode = 'professional' or $3::boolean)",
     [TEAM, taskId, c.ownerId === TEAM],
   );
   if (!task) throw new Error("That task or person no longer exists.");
   // The message says what the task is, when it is due and how much it matters. Its description follows in the thread.
   const text = (who: string) => assignmentText({ where, who, title: task.title, due, note, pri: task.pri, project: task.mode === "personal" ? "" : task.project });
+  // How it looks in Slack (see `assignmentBlocks`); the words above are what a notification shows.
+  const layout = (tag: string) =>
+    JSON.stringify({ blocks: assignmentBlocks({ tag, title: task.title, ticket: task.number ? ticketName(task.number) : "", due, note, pri: task.pri, project: task.mode === "personal" ? "" : task.project }) });
   const description = asDescription(task.description);
   /** Queues the description to go under the message with this id, as a reply in its thread. */
   const thenDescription = async (firstId: string, target: string | null, toName: string, ctx: string, thread: string | null) => {
@@ -742,16 +745,17 @@ async function delegate(c: ActionContext, taskId: string, personId: string, note
   const now = c.now.getTime();
   let holder = person ? { id: person.id, name: person.name, role: person.role } : null;
 
-  // Jeremy is never messaged about a task, and another login only when Jeremy gives it (see `mayTellOnSlack`).
+  // Between logins, only Jeremy and another login are told, either way; nobody about their own task (see `mayTellOnSlack`).
   const tellable = person?.slack_user_id ? await mayTellOnSlack(c.db, c.ownerId, person.slack_user_id) : false;
   if (where === "dm") {
     if (!person) throw new Error("Pick who should get the direct message.");
     if (person.slack_user_id && !tellable) throw new Error(`${person.name} is not messaged on Slack about tasks from here. Give it to them on the board instead.`);
     const first = uid("o");
+    // Tagged in the direct message too, so Slack notifies them of a mention.
+    const tag = person.slack_user_id ? `<@${person.slack_user_id}>` : "";
     await c.db.run(
-      "insert into outbox (id, owner_id, source, target, to_name, ctx, body, task_id, created_at) values ($1, $2, 'slack', $3, $4, 'Direct message', $5, $6, $7)",
-      // Tagged in the direct message too, so Slack notifies them of a mention.
-      [first, c.ownerId, person.slack_user_id, person.name, text(person.slack_user_id ? `<@${person.slack_user_id}>` : ""), taskId, now],
+      "insert into outbox (id, owner_id, source, target, to_name, ctx, body, task_id, created_at, details) values ($1, $2, 'slack', $3, $4, 'Direct message', $5, $6, $7, $8::jsonb)",
+      [first, c.ownerId, person.slack_user_id, person.name, text(tag), taskId, now, layout(tag)],
     );
     await thenDescription(first, person.slack_user_id, person.name, "Direct message", null);
   } else {
@@ -784,10 +788,11 @@ async function delegate(c: ActionContext, taskId: string, personId: string, note
       await c.db.run("update conversations set replied = true where owner_id = $2 and id = $1", [place.conversationId, c.ownerId]);
     }
     const first = uid("o");
+    // Tagged only when they may be told: otherwise their name, which notifies nobody.
+    const tag = person ? (person.slack_user_id && tellable ? `<@${person.slack_user_id}>` : person.name) : "";
     await c.db.run(
-      "insert into outbox (id, owner_id, source, target, to_name, ctx, body, conversation_id, message_id, task_id, thread_ts, created_at) values ($1, $2, 'slack', $3, $4, $5, $6, $7, $8, $9, $10, $11)",
-      // Tagged only when they may be told: otherwise their name, which notifies nobody.
-      [first, c.ownerId, place.target, holder.name, place.label, text(person ? (person.slack_user_id && tellable ? `<@${person.slack_user_id}>` : person.name) : ""), place.conversationId, messageId, taskId, place.thread ?? null, now],
+      "insert into outbox (id, owner_id, source, target, to_name, ctx, body, conversation_id, message_id, task_id, thread_ts, created_at, details) values ($1, $2, 'slack', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)",
+      [first, c.ownerId, place.target, holder.name, place.label, text(tag), place.conversationId, messageId, taskId, place.thread ?? null, now, layout(tag)],
     );
     // In a thread that exists already it goes into that same thread, right after the message.
     await thenDescription(first, place.target, holder.name, place.label, place.thread ?? null);

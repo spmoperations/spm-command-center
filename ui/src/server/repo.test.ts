@@ -445,7 +445,7 @@ describe("assigning to anyone on Slack", () => {
     expect((await outbox())[0].body).toBe("<@ULUIS> new task for you: Swap hook on Harbor clip 4\nDue Mon, Oct 12 · High priority · Harbor Realty");
   });
 
-  it("never sends Jeremy a direct message about a task, and names him without a tag in a channel", async () => {
+  it("never sends Jeremy a direct message about his own task, and names him without a tag in a channel", async () => {
     await db.run("insert into slack_users (owner_id, id, name) values ($1, 'UME', 'Jeremy Moser')", [OWNER_ID]);
     await expect(act("delegateTask", "t_hook", "slack:UME", "", "2026-10-12")).rejects.toThrow("Jeremy Moser is not messaged on Slack about tasks from here");
     await db.run("insert into slack_channels (owner_id, id, name, kind, selected) values ($1, 'C7', 'ops-team', 'private', false)", [OWNER_ID]);

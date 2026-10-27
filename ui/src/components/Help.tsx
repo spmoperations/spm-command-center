@@ -34,7 +34,7 @@ const TOLD = (
       <li>Only the apps they have linked are shown. Slack is ticked if they have it, otherwise Telegram. Tick both, or untick both to tell nobody.</li>
       <li>The message goes from your own Slack or Telegram. If yours is not connected yet, you are asked to connect it first, or to untick it.</li>
       <li>The Slack message starts with their @name, so Slack notifies them of a mention.</li>
-      <li>Jeremy is never messaged about a task. Someone else with a login, such as Alex, is told on Slack only when Jeremy gives them the task. Nobody is told about a task they gave themselves.</li>
+      <li>Jeremy and Alex tell each other on Slack too: Jeremy giving Alex a task, or Alex giving Jeremy one. Nobody is told about a task they gave themselves.</li>
       <li>Afterwards the task&apos;s history says, for example, &quot;told on Slack&quot;, and the opened task shows whether the message was sent.</li>
     </ul>
   </>

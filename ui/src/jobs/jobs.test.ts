@@ -19,6 +19,9 @@ import { runJob, runNow, syncAll, tick, type JobContext } from "./runner";
 import { slackDirectorySync, slackPictures, slackPull, slackReadThreads, wanted } from "./slack";
 import { taskSuggest } from "./task-suggest";
 
+/** What was sent to Slack without the layout: the words are checked in each test, the layout on its own. */
+const withoutLayout = (calls: [string, Record<string, unknown>][]) => calls.map(([method, params]) => [method, Object.fromEntries(Object.entries(params).filter(([key]) => key !== "blocks"))]);
+
 let db: Db;
 const ctx = (cursor: Record<string, unknown> = {}): JobContext => ({ db, ownerId: OWNER_ID, now: NOW, cursor });
 
@@ -778,7 +781,7 @@ describe("outbox", () => {
     const slack = sender();
     const result = await outboxSend(ctx(), slack);
     expect(result.items).toBe(2);
-    expect(slack.calls).toEqual([
+    expect(withoutLayout(slack.calls)).toEqual([
       ["chat.postMessage", { channel: "D1", text: "Swapping it today" }],
       ["conversations.open", { users: "ULUIS" }],
       ["chat.postMessage", { channel: "D-LUIS", text: "<@ULUIS> new task for you: Swap hook on Harbor clip 4\nDue Fri, Oct 9 · High priority · Harbor Realty\n\nPlease swap it." }],
@@ -798,7 +801,14 @@ describe("outbox", () => {
     process.env.SENDING_ENABLED = "true";
     const slack = sender();
     expect((await outboxSend(ctx(), slack)).items).toBe(1);
-    expect(slack.calls).toEqual([["chat.postMessage", { channel: "C1", text: "<@ULUIS> new task for you: From Priya: Booked 2 more discovery calls for tomorrow.\nDue Fri, Oct 9 · Low priority\n\nBefore Friday please." }]]);
+    expect(withoutLayout(slack.calls)).toEqual([["chat.postMessage", { channel: "C1", text: "<@ULUIS> new task for you: From Priya: Booked 2 more discovery calls for tomorrow.\nDue Fri, Oct 9 · Low priority\n\nBefore Friday please." }]]);
+    // How it looks in Slack: the tag first, the task in bold with the note, then one line of facts.
+    const blocks = JSON.parse(String(slack.calls[0][1].blocks)) as { type: string; text?: { text: string }; elements?: { text: string }[] }[];
+    expect(blocks.map((b) => b.text?.text ?? b.elements![0].text)).toEqual([
+      "<@ULUIS> *New task for you*",
+      "*From Priya: Booked 2 more discovery calls for tomorrow.*\nBefore Friday please.",
+      expect.stringMatching(/^(\*SPM-\d+\*  ·  )?Due \*Fri, Oct 9\*  ·  Low priority$/),
+    ]);
     expect((await stateOpened(db)).inbox.find((c) => c.id === "slack:C1")!.thread.at(-1)).toMatchObject({ me: true, status: "sent" });
   });
 
@@ -811,7 +821,7 @@ describe("outbox", () => {
     const slack = fakeSlack({ "conversations.open": () => ({ channel: { id: "D-LUIS" } }), "chat.postMessage": (p) => ({ ok: true, ts: p.thread_ts ? "1700000000.000300" : "1700000000.000200" }) });
     expect(await outboxSend(ctx(), slack)).toMatchObject({ items: 2, message: "Sent 2 of 2" });
     // First what the task is, with the note. Then its description, under that message.
-    expect(slack.calls.filter(([m]) => m === "chat.postMessage").map(([, p]) => p)).toEqual([
+    expect(withoutLayout(slack.calls.filter(([m]) => m === "chat.postMessage")).map(([, p]) => p)).toEqual([
       { channel: "D-LUIS", text: "<@ULUIS> new task for you: Swap hook on Harbor clip 4\nDue Fri, Oct 9 · High priority · Harbor Realty\n\nToday if you can." },
       { channel: "D-LUIS", text: "The new hook is in the shared folder.", thread_ts: "1700000000.000200" },
     ]);
@@ -829,7 +839,7 @@ describe("outbox", () => {
     process.env.SENDING_ENABLED = "true";
     const slack = fakeSlack({ "chat.postMessage": () => ({ ok: true, ts: "6.0" }) });
     await outboxSend(ctx(), slack);
-    expect(slack.calls.map(([, p]) => p)).toEqual([
+    expect(withoutLayout(slack.calls).map(([, p]) => p)).toEqual([
       { channel: "C1", text: "<@ULUIS> new task for you: Book the venue\nDue Fri, Oct 9 · Medium priority", thread_ts: "5.0" },
       { channel: "C1", text: "Shortlist is in the doc.", thread_ts: "5.0" },
     ]);

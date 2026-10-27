@@ -78,6 +78,35 @@ export function assignmentText(o: { where: AssignWhere; who: string; title: stri
   return [`${head}\n${facts}`, o.note.trim()].filter(Boolean).join("\n\n");
 }
 
+/** Slack reads &, < and > as markup: written out, they show as themselves. */
+const slackSafe = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/** A piece of a Slack message laid out with Slack's blocks. */
+export type SlackBlock = { type: "section"; text: { type: "mrkdwn"; text: string } } | { type: "context"; elements: { type: "mrkdwn"; text: string }[] };
+
+/**
+ * The same message as `assignmentText`, laid out for Slack: the tag and "New task for you" on
+ * the first line, the task in bold with its note under it, then one quiet line with its number,
+ * when it is due, how much it matters, what it belongs to and, for someone who can sign in, a
+ * link to it. `tag` is Slack's <@id>, or a name; `ticket` is its number, such as SPM-23.
+ */
+export function assignmentBlocks(o: { tag: string; title: string; ticket?: string; due: string; note: string; pri?: Priority; project?: string; link?: string }): SlackBlock[] {
+  const due = parseDay(o.due).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  const note = slackSafe(o.note.trim()).slice(0, 2500);
+  const facts = [o.ticket ? `*${o.ticket}*` : "", `Due *${due}*`, o.pri ? `${PRIORITY_NAME[o.pri]} priority` : "", slackSafe(o.project?.trim() ?? ""), o.link ? `<${o.link}|Open in Command Center>` : ""].filter(Boolean);
+  return [
+    { type: "section", text: { type: "mrkdwn", text: o.tag ? `${o.tag} *New task for you*` : "*New task*" } },
+    { type: "section", text: { type: "mrkdwn", text: `*${slackSafe(o.title)}*${note ? `\n${note}` : ""}` } },
+    { type: "context", elements: [{ type: "mrkdwn", text: facts.join("  ·  ") }] },
+  ];
+}
+
+/** The address of a ticket on the live site's board, or nothing where the site's address is not known. */
+export function ticketLink(ticket: string): string | undefined {
+  const site = process.env.SITE_URL ?? (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : "");
+  return site && ticket ? `${site.replace(/\/+$/, "")}/tasks?task=${encodeURIComponent(ticket)}` : undefined;
+}
+
 export type TaskStatus = "done" | "overdue" | "ontrack";
 
 export const taskStatus = (t: Task, today: string): TaskStatus =>

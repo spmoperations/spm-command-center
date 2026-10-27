@@ -26,7 +26,8 @@ interface Queued {
   thread_ts: string | null;
   attempts: number;
   after_id: string | null;
-  details: EmailDetails | null;
+  /** An email's headers, or a Slack message's layout (see `assignmentBlocks`). */
+  details: EmailDetails | { blocks?: unknown[] } | null;
   /** What the message it belongs to carries: the pictures added to the reply among them. */
   pictures: StoredPicture[] | null;
 }
@@ -101,7 +102,8 @@ export async function outboxSend(
         item.thread_ts = first?.thread_ts ?? item.thread_ts;
       }
       if (item.source === "gmail") {
-        const email = item.details;
+        // An email's row carries its headers.
+        const email = item.details as EmailDetails | null;
         if (!openGoogle) throw new Error("Google is not connected");
         if (!email?.account || !email.to.length) throw new Error(`There is no address to send this email to ${item.to_name}`);
         let account = google.get(email.account);
@@ -133,7 +135,14 @@ export async function outboxSend(
       // A reply written under a thread goes into that thread, not to the top of the channel.
       const posted = pictures.length
         ? (await postWithPictures(db, ownerId, slack, channel, item, pictures), null)
-        : await slack.call<{ ts?: string }>("chat.postMessage", { channel, text: item.body, ...(item.thread_ts ? { thread_ts: item.thread_ts } : {}) });
+        : await slack.call<{ ts?: string }>("chat.postMessage", {
+            channel,
+            // The words are what a notification shows; the blocks, when there are some, are how the message looks.
+            text: item.body,
+            // Sent as a form, Slack takes the blocks written out as JSON.
+            ...(item.details && "blocks" in item.details && item.details.blocks?.length ? { blocks: JSON.stringify(item.details.blocks) } : {}),
+            ...(item.thread_ts ? { thread_ts: item.thread_ts } : {}),
+          });
       await db.run("update outbox set status = 'sent', sent_at = $1, attempts = attempts + 1, last_error = null where owner_id = $3 and id = $2", [now, item.id, ownerId]);
       // Whatever waits to go under this message now knows its thread: the message itself, or the thread it was posted in.
       if (posted?.ts) await db.run("update outbox set thread_ts = coalesce(thread_ts, $1) where owner_id = $3 and after_id = $2 and status = 'queued'", [posted.ts, item.id, ownerId]);

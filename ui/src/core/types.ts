@@ -164,8 +164,8 @@ export interface TeamPerson {
   slack: boolean;
   telegram: boolean;
   /**
-   * Never told about a task from this page: Jeremy (the owner) never is, and another login only
-   * when Jeremy gives them the task. Nobody is told about a task they gave themselves.
+   * Not told about a task from this page. Between logins, only Jeremy and another login are told,
+   * either way; nobody is told about a task they gave themselves.
    */
   notTold?: boolean;
 }
