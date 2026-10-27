@@ -242,7 +242,7 @@ describe("task actions", () => {
     await act("delegateTask", (await invite()).id, "u_luis", "Send me a draft first.", "2026-10-09");
     const queued = await db.query<{ id: string; body: string; after_id: string | null; target: string; thread_ts: string | null }>("select id, body, after_id, target, thread_ts from outbox order by created_at");
     expect(queued.map((o) => [o.body, o.target, o.thread_ts])).toEqual([
-      ["New task for you: Draft the invite\nDue Fri, Oct 9 · Medium priority · Launch\n\nSend me a draft first.", "ULUIS", null],
+      ["<@ULUIS> new task for you: Draft the invite\nDue Fri, Oct 9 · Medium priority · Launch\n\nSend me a draft first.", "ULUIS", null],
       ["Use last year's as the base.", "ULUIS", null],
     ]);
     expect([queued[0].after_id, queued[1].after_id]).toEqual([null, queued[0].id]);
@@ -434,7 +434,7 @@ describe("assigning to anyone on Slack", () => {
     const s = await state();
     expect(s.tasks.find((x) => x.id === "t_hook")).toMatchObject({ due: "2026-10-13", delegatedTo: { name: "Dana Okafor", role: "Team member", note: "Use the new hook." } });
     expect(s.team.filter((p) => p.slackUserId === "UDANA")).toMatchObject([{ name: "Dana Okafor", depts: [], handles: [] }]);
-    expect(await outbox()).toEqual([{ target: "UDANA", to_name: "Dana Okafor", body: "New task for you: Swap hook on Harbor clip 4\nDue Tue, Oct 13 · High priority · Harbor Realty\n\nUse the new hook." }]);
+    expect(await outbox()).toEqual([{ target: "UDANA", to_name: "Dana Okafor", body: "<@UDANA> new task for you: Swap hook on Harbor clip 4\nDue Tue, Oct 13 · High priority · Harbor Realty\n\nUse the new hook." }]);
   });
 
   it("uses the team member when the Slack person is on the list already, and leaves the note out when there is none", async () => {
@@ -442,7 +442,7 @@ describe("assigning to anyone on Slack", () => {
     const s = await state();
     expect(s.tasks.find((x) => x.id === "t_hook")!.delegatedTo).toMatchObject({ personId: "u_luis", name: "Luis Ramos", role: "Lead editor" });
     expect(s.team.filter((p) => p.slackUserId === "ULUIS")).toHaveLength(1);
-    expect((await outbox())[0].body).toBe("New task for you: Swap hook on Harbor clip 4\nDue Mon, Oct 12 · High priority · Harbor Realty");
+    expect((await outbox())[0].body).toBe("<@ULUIS> new task for you: Swap hook on Harbor clip 4\nDue Mon, Oct 12 · High priority · Harbor Realty");
   });
 
   it("refuses an app or someone who is not in Slack, and changes nothing", async () => {
@@ -458,7 +458,7 @@ describe("assigning to anyone on Slack", () => {
     expect((await proposal()).delegatedTo).toBeNull();
     await act("delegateTask", (await proposal()).id, "slack:UDANA", "", "2026-10-14");
     expect((await proposal()).delegatedTo).toMatchObject({ name: "Dana Okafor" });
-    expect((await outbox()).map((o) => o.body)).toEqual(["New task for you: Draft the proposal\nDue Wed, Oct 14 · Medium priority"]);
+    expect((await outbox()).map((o) => o.body)).toEqual(["<@UDANA> new task for you: Draft the proposal\nDue Wed, Oct 14 · Medium priority"]);
   });
 
   it("assigns a message to someone from Slack as a task for them", async () => {

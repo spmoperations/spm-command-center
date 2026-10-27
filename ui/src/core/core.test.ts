@@ -108,14 +108,15 @@ describe("delegation", () => {
     expect(canAssignInChat({ ctx: "#launch", source: "telegram" })).toBe(false);
   });
 
-  it("words the message for a direct message, and tags the person when it goes in a chat", () => {
+  it("tags the person, in a direct message too, so Slack notifies them; with no tag a direct message just says it is theirs", () => {
     const about = { title: "Swap the hook", due: "2026-10-12" };
-    expect(assignmentText({ ...about, where: "dm", who: "Luis Ramos", note: "" })).toBe("New task for you: Swap the hook\nDue Mon, Oct 12");
+    expect(assignmentText({ ...about, where: "dm", who: "<@ULUIS>", note: "" })).toBe("<@ULUIS> new task for you: Swap the hook\nDue Mon, Oct 12");
+    expect(assignmentText({ ...about, where: "dm", who: "", note: "" })).toBe("New task for you: Swap the hook\nDue Mon, Oct 12");
     expect(assignmentText({ ...about, where: "chat", who: "<@ULUIS>", note: "Use the new one." })).toBe("<@ULUIS> new task for you: Swap the hook\nDue Mon, Oct 12\n\nUse the new one.");
   });
 
   it("says what the task is, when it is due, how much it matters and what it belongs to, then the note", () => {
-    const whole = { where: "dm" as const, who: "Luis Ramos", title: "Book the venue", due: "2026-10-16", pri: "high" as const, project: "Launch", note: "Ask me if the price moves." };
+    const whole = { where: "dm" as const, who: "", title: "Book the venue", due: "2026-10-16", pri: "high" as const, project: "Launch", note: "Ask me if the price moves." };
     expect(assignmentText(whole)).toBe("New task for you: Book the venue\nDue Fri, Oct 16 · High priority · Launch\n\nAsk me if the price moves.");
     // What is not there is left out, with no empty lines in its place.
     expect(assignmentText({ ...whole, note: "", project: "" })).toBe("New task for you: Book the venue\nDue Fri, Oct 16 · High priority");

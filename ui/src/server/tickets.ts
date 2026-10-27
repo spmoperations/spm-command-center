@@ -44,6 +44,13 @@ export const ticketName = (n: number | null | undefined) => (n ? `${TICKET_PREFI
 export const teamUsersSql = (team: string) => `select id from users where id = ${team} or (login_email is not null and password_hash is not null)`;
 const TEAM_USERS = teamUsersSql("$1");
 
+/**
+ * A login's Slack account (with the team as $1, on the users row `u`): the one they connected,
+ * else the one in the team's Slack with their email.
+ */
+const LOGIN_SLACK = `coalesce(u.slack_user_id, (select s.id from slack_users s where s.owner_id in (${TEAM_USERS}) and not s.deleted and not s.is_bot and s.email is not null
+  and lower(s.email) = lower(coalesce(u.login_email, u.email)) order by (s.owner_id = $1) desc, s.id limit 1))`;
+
 /** The team's clients: those added by name, and those tickets, calls and chats already name. Each once, whatever its capitals. */
 export async function teamClients(db: Db, viewer: string): Promise<string[]> {
   const rows = await db.query<{ name: string }>(
@@ -69,6 +76,7 @@ export async function teamUsers(db: Db): Promise<{ id: string; name: string }[]>
 /** Everyone a ticket can be for: the logins first, then the team list. */
 export async function teamPeople(db: Db): Promise<TeamPerson[]> {
   const users = await teamUsers(db);
+  const slackOf = new Map((await db.query<{ id: string; slack: string | null }>(`select u.id, ${LOGIN_SLACK} as slack from users u where u.id in (${TEAM_USERS})`, [TEAM])).map((r) => [r.id, r.slack]));
   const members = await db.query<{
     id: string;
     name: string;
@@ -82,7 +90,7 @@ export async function teamPeople(db: Db): Promise<TeamPerson[]> {
       name: u.name,
       role: u.id === TEAM ? "Owner" : "Team login",
       login: true,
-      slack: false,
+      slack: Boolean(slackOf.get(u.id)),
       telegram: false,
     })),
     ...members.map((m) => ({
@@ -558,6 +566,53 @@ async function heldTicket(c: Ctx, id: string) {
  * the board. A team member is told, where `notify` says, from the account of whoever assigned it:
  * the message waits in the outbox like every other.
  */
+/**
+ * Tells someone a ticket is theirs, from the assigner's own Slack or Telegram: a direct message
+ * that starts with their Slack @name, so Slack notifies them of a mention. Refused when the
+ * assigner has not connected that app.
+ */
+async function tell(c: Ctx, taskId: string, name: string, to: { way: Notify; target: string }[]): Promise<void> {
+  if (!to.length) return;
+  const connected = new Set((await c.db.query<{ provider: string }>("select provider from connections where owner_id = $1", [c.ownerId])).map((r) => r.provider));
+  const missing = [...new Set(to.map((t) => t.way))].filter((w) => !connected.has(w));
+  if (missing.length) throw new Error(`Connect your own ${missing.map((w) => (w === "slack" ? "Slack" : "Telegram")).join(" and ")} first, to tell ${name} there. Or untick it.`);
+  const [t] = await c.db.query<{
+    title: string;
+    description: string;
+    due: string;
+    pri: Priority;
+    project: string;
+    number: number | null;
+    mode: Mode;
+  }>("select title, description, due, pri, project, number, mode from tasks where owner_id = $1 and id = $2", [TEAM, taskId]);
+  const now = c.now.getTime();
+  for (const { way, target } of to) {
+    const text = assignmentText({
+      where: "dm",
+      // Telegram has no tag for a person by id: there the message simply says it is theirs.
+      who: way === "slack" ? `<@${target}>` : "",
+      title: `${t.title}${t.number ? ` (${ticketName(t.number)})` : ""}`,
+      due: t.due,
+      note: tidy(t.description, 1500),
+      pri: t.pri,
+      project: t.mode === "personal" ? "" : t.project,
+    });
+    await c.db.run("insert into outbox (id, owner_id, source, target, to_name, ctx, body, task_id, created_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)", [
+      uid("o"),
+      c.ownerId,
+      way,
+      target,
+      name,
+      way === "slack" ? "Direct message" : "Telegram",
+      text,
+      taskId,
+      now,
+    ]);
+  }
+}
+
+const toldOn = (ways: Notify[]) => (ways.length ? `, told on ${ways.map((w) => (w === "slack" ? "Slack" : "Telegram")).join(" and ")}` : "");
+
 async function assignTo(c: Ctx, taskId: string, assignee: string | null, notify: Notify[] = []): Promise<string> {
   // A message about the ticket that has not gone yet no longer applies.
   await c.db.run("delete from outbox where owner_id = $1 and task_id = $2 and status = 'queued'", [c.ownerId, taskId]);
@@ -568,10 +623,13 @@ async function assignTo(c: Ctx, taskId: string, assignee: string | null, notify:
   }
   if (assignee.startsWith("user:")) {
     const userId = assignee.slice(5);
-    const [user] = await c.db.query<{ name: string }>(`select name from users where id = $2 and id in (${TEAM_USERS})`, [TEAM, userId]);
+    const [user] = await c.db.query<{ name: string; slack: string | null }>(`select u.name, ${LOGIN_SLACK} as slack from users u where u.id = $2 and u.id in (${TEAM_USERS})`, [TEAM, userId]);
     if (!user) throw new Error("That person is not on the team.");
+    // A login is told on Slack too, unless the task is one they gave themselves.
+    const to = notify.includes("slack") && user.slack && userId !== c.ownerId ? [{ way: "slack" as const, target: user.slack }] : [];
+    await tell(c, taskId, user.name, to);
     await c.db.run(`update tasks set assignee_user = $3, ${unhand} where owner_id = $1 and id = $2`, [TEAM, taskId, userId]);
-    return `Assigned to ${user.name}`;
+    return `Assigned to ${user.name}${toldOn(to.map((t) => t.way))}`;
   }
   if (assignee.startsWith(SLACK_PICK) || assignee.startsWith("telegram:")) assignee = `member:${await memberFor(c, assignee)}`;
   if (!assignee.startsWith("member:")) throw new Error("Who should it be for?");
@@ -583,53 +641,20 @@ async function assignTo(c: Ctx, taskId: string, assignee: string | null, notify:
     telegram_id: string | null;
   }>("select id, name, role, slack_user_id, telegram_id from team_members where owner_id = $1 and id = $2", [TEAM, assignee.slice(7)]);
   if (!member) throw new Error("That person is no longer on the team list.");
-  const ways = [...new Set(notify)].filter((w) => (w === "slack" ? member.slack_user_id : member.telegram_id));
-  if (ways.length) {
-    const connected = new Set((await c.db.query<{ provider: string }>("select provider from connections where owner_id = $1", [c.ownerId])).map((r) => r.provider));
-    const missing = ways.filter((w) => !connected.has(w));
-    if (missing.length) throw new Error(`Connect your own ${missing.map((w) => (w === "slack" ? "Slack" : "Telegram")).join(" and ")} first, to tell ${member.name} there. Or untick it.`);
-  }
-  const now = c.now.getTime();
+  const to = [...new Set(notify)].flatMap((way) => {
+    const target = way === "slack" ? member.slack_user_id : member.telegram_id;
+    return target ? [{ way, target }] : [];
+  });
+  await tell(c, taskId, member.name, to);
   await c.db.run("update tasks set assignee_user = null, delegated_to = $3, delegated_name = $4, delegated_role = $5, delegated_note = '', delegated_at = $6 where owner_id = $1 and id = $2", [
     TEAM,
     taskId,
     member.id,
     member.name,
     member.role,
-    now,
+    c.now.getTime(),
   ]);
-  const [t] = await c.db.query<{
-    title: string;
-    description: string;
-    due: string;
-    pri: Priority;
-    project: string;
-    number: number | null;
-    mode: Mode;
-  }>("select title, description, due, pri, project, number, mode from tasks where owner_id = $1 and id = $2", [TEAM, taskId]);
-  const text = assignmentText({
-    where: "dm",
-    who: member.name,
-    title: `${t.title}${t.number ? ` (${ticketName(t.number)})` : ""}`,
-    due: t.due,
-    note: tidy(t.description, 1500),
-    pri: t.pri,
-    project: t.mode === "personal" ? "" : t.project,
-  });
-  for (const way of ways) {
-    await c.db.run("insert into outbox (id, owner_id, source, target, to_name, ctx, body, task_id, created_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)", [
-      uid("o"),
-      c.ownerId,
-      way,
-      way === "slack" ? member.slack_user_id : member.telegram_id,
-      member.name,
-      way === "slack" ? "Direct message" : "Telegram",
-      text,
-      taskId,
-      now,
-    ]);
-  }
-  return `Assigned to ${member.name}${ways.length ? `, told on ${ways.map((w) => (w === "slack" ? "Slack" : "Telegram")).join(" and ")}` : ""}`;
+  return `Assigned to ${member.name}${toldOn(to.map((t) => t.way))}`;
 }
 
 /** What a ticket's form sends, checked. */

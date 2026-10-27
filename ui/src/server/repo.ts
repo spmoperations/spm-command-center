@@ -560,7 +560,8 @@ async function readState(db: Db, ownerId: string, now: Date, open: string | null
     review: await reviewItems(db, ownerId, people),
     setAside: await setAsideItems(db, ownerId, people),
     clients: await teamClients(db, ownerId),
-    people,
+    // Each marked when it is the person looking: nobody is told about a task they gave themselves.
+    people: people.map((p) => (p.id === `user:${ownerId}` ? { ...p, self: true } : p)),
     teamSlack: (await teamSlack(db)).sort((a, b) => a.name.localeCompare(b.name)),
     suggestions: suggestions.map((g) => ({
       // A call from last week suggests a date that has passed: offer today instead.
@@ -746,7 +747,8 @@ async function delegate(c: ActionContext, taskId: string, personId: string, note
     const first = uid("o");
     await c.db.run(
       "insert into outbox (id, owner_id, source, target, to_name, ctx, body, task_id, created_at) values ($1, $2, 'slack', $3, $4, 'Direct message', $5, $6, $7)",
-      [first, c.ownerId, person.slack_user_id, person.name, text(person.name), taskId, now],
+      // Tagged in the direct message too, so Slack notifies them of a mention.
+      [first, c.ownerId, person.slack_user_id, person.name, text(person.slack_user_id ? `<@${person.slack_user_id}>` : ""), taskId, now],
     );
     await thenDescription(first, person.slack_user_id, person.name, "Direct message", null);
   } else {

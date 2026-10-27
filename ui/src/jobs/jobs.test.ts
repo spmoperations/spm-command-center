@@ -781,7 +781,7 @@ describe("outbox", () => {
     expect(slack.calls).toEqual([
       ["chat.postMessage", { channel: "D1", text: "Swapping it today" }],
       ["conversations.open", { users: "ULUIS" }],
-      ["chat.postMessage", { channel: "D-LUIS", text: "New task for you: Swap hook on Harbor clip 4\nDue Fri, Oct 9 · High priority · Harbor Realty\n\nPlease swap it." }],
+      ["chat.postMessage", { channel: "D-LUIS", text: "<@ULUIS> new task for you: Swap hook on Harbor clip 4\nDue Fri, Oct 9 · High priority · Harbor Realty\n\nPlease swap it." }],
     ]);
     expect(await db.query("select status, last_error from outbox order by created_at, to_name")).toEqual([
       { status: "sent", last_error: null },
@@ -812,7 +812,7 @@ describe("outbox", () => {
     expect(await outboxSend(ctx(), slack)).toMatchObject({ items: 2, message: "Sent 2 of 2" });
     // First what the task is, with the note. Then its description, under that message.
     expect(slack.calls.filter(([m]) => m === "chat.postMessage").map(([, p]) => p)).toEqual([
-      { channel: "D-LUIS", text: "New task for you: Swap hook on Harbor clip 4\nDue Fri, Oct 9 · High priority · Harbor Realty\n\nToday if you can." },
+      { channel: "D-LUIS", text: "<@ULUIS> new task for you: Swap hook on Harbor clip 4\nDue Fri, Oct 9 · High priority · Harbor Realty\n\nToday if you can." },
       { channel: "D-LUIS", text: "The new hook is in the shared folder.", thread_ts: "1700000000.000200" },
     ]);
     expect(await db.query("select status from outbox")).toEqual([{ status: "sent" }, { status: "sent" }]);
