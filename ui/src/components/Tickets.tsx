@@ -14,7 +14,7 @@ export const ticketName = (n: number | null | undefined) => (n ? `${TICKET_PREFI
 /** How a team member is told a ticket is theirs, unless the form says otherwise: Slack when they have it, else Telegram. */
 export function defaultNotify(people: TeamPerson[], assignee: string | null): NonNullable<TicketInput["notify"]> {
   const person = people.find((p) => p.id === assignee);
-  if (!person || person.self) return [];
+  if (!person || person.notTold) return [];
   return person.slack ? ["slack"] : person.telegram ? ["telegram"] : [];
 }
 
@@ -215,7 +215,7 @@ export function NotifyChoice({
   onChange(v: NonNullable<TicketInput["notify"]>): void;
 }) {
   const person = people.find((p) => p.id === assignee);
-  if (!person || person.self) return null;
+  if (!person || person.notTold) return null;
   if (!person.slack && !person.telegram)
     return (
       <span className="tk-notify muted">

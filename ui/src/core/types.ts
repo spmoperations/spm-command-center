@@ -163,8 +163,11 @@ export interface TeamPerson {
   /** Where an assignment can reach them: a login on Slack only, someone on the team list on Slack or Telegram. */
   slack: boolean;
   telegram: boolean;
-  /** The person looking at the page. Nobody is told about a task they gave themselves. */
-  self?: boolean;
+  /**
+   * Never told about a task from this page: Jeremy (the owner) never is, and another login only
+   * when Jeremy gives them the task. Nobody is told about a task they gave themselves.
+   */
+  notTold?: boolean;
 }
 
 /** What a ticket is, as it is made or changed on screen. */

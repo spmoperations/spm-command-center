@@ -232,30 +232,36 @@ describe("the board", () => {
 describe("a login told on Slack", () => {
   const outbox = () => db.query<{ owner_id: string; target: string; to_name: string; body: string }>("select owner_id, target, to_name, body from outbox order by created_at, id");
   const slackFor = (who: string) => db.run("insert into connections (owner_id, provider, secret, label, connected_at) values ($1, 'slack', $2, 'Slack', $3)", [who, seal("a-login"), NOW]);
+  const notTold = async (viewer: string) => (await loadState(db, viewer, now)).people.filter((p) => p.login).map((p) => [p.name, p.slack, Boolean(p.notTold)]);
 
-  it("tags a login in a direct message when someone else gives them a task, and never about one they gave themselves", async () => {
+  it("tags a login in a direct message when Jeremy gives them a task, and never tells Jeremy", async () => {
     await slackFor(OWNER_ID);
     await slackFor(alex);
     await db.run("update users set slack_user_id = 'UALEX' where id = $1", [alex]);
-    // The board offers to tell Alex on Slack, ticked; never the person looking.
-    const people = (await loadState(db, OWNER_ID, now)).people;
-    expect(people.filter((p) => p.login).map((p) => [p.name, p.slack, Boolean(p.self)])).toEqual([["Jeremy Moser", true, true], ["Alex", true, false]]);
+    // Jeremy's board offers to tell Alex, ticked; Alex's offers to tell nobody with a login.
+    expect(await notTold(OWNER_ID)).toEqual([["Jeremy Moser", true, true], ["Alex", true, false]]);
+    expect(await notTold(alex)).toEqual([["Jeremy Moser", true, true], ["Alex", true, true]]);
 
     await act(OWNER_ID, "createTicket", ticket({ assignee: `user:${alex}`, notify: ["slack"] }));
     const [first] = await db.query<{ id: string; number: number }>("select id, number from tasks where title = 'Chase the invoices'");
     expect(await outbox()).toEqual([{ owner_id: OWNER_ID, target: "UALEX", to_name: "Alex", body: `<@UALEX> new task for you: Chase the invoices (SPM-${first.number})\nDue Sat, Oct 10 · Medium priority` }]);
     expect((await loadState(db, OWNER_ID, now)).tasks.find((t) => t.id === first.id)!.history!.at(-1)!.what).toBe("Assigned to Alex, told on Slack");
 
-    // Alex gives one to herself: nobody is told, whatever was ticked.
+    // Nobody else's assignment tells a login, whatever was ticked: Alex to herself, Alex to Jeremy, Jeremy to himself.
     await db.run("delete from outbox");
     await act(alex, "createTicket", ticket({ title: "Book the studio", assignee: `user:${alex}`, notify: ["slack"] }));
-    expect(await outbox()).toEqual([]);
-    // And Jeremy, by Alex, from her own Slack.
     await act(alex, "createTicket", ticket({ title: "Sign the contract", assignee: `user:${OWNER_ID}`, notify: ["slack"] }));
-    expect((await outbox()).map((o) => [o.owner_id, o.target, o.body.split("\n")[0]])).toEqual([[alex, "UME", expect.stringMatching(/^<@UME> new task for you: Sign the contract/)]]);
+    await act(OWNER_ID, "createTicket", ticket({ title: "Call the bank", assignee: `user:${OWNER_ID}`, notify: ["slack"] }));
+    // Nor picking them from Slack instead of the logins.
+    await db.run("insert into slack_users (owner_id, id, name) values ($1, 'UME', 'Jeremy Moser')", [alex]);
+    await act(alex, "createTicket", ticket({ title: "Review the deck", assignee: "slack:UME", notify: ["slack"] }));
+    expect(await outbox()).toEqual([]);
+    // Someone on the team list is still told by whoever gives them the task.
+    await act(alex, "createTicket", ticket({ title: "Cut the trailer", assignee: "member:u_luis", notify: ["slack"] }));
+    expect((await outbox()).map((o) => [o.owner_id, o.target])).toEqual([[alex, "ULUIS"]]);
   });
 
-  it("finds a login who never connected Slack by their email in the team's Slack, and asks the assigner to connect theirs first", async () => {
+  it("finds a login who never connected Slack by their email in the team's Slack, and asks Jeremy to connect his first", async () => {
     await db.run("insert into slack_users (owner_id, id, name, email) values ($1, 'UALEX2', 'Alex Z', 'Alex@Example.com')", [OWNER_ID]);
     expect((await loadState(db, OWNER_ID, now)).people.find((p) => p.name === "Alex")!.slack).toBe(true);
     expect(await refused(OWNER_ID, "createTicket", ticket({ assignee: `user:${alex}`, notify: ["slack"] }))).toBe("Connect your own Slack first, to tell Alex there. Or untick it.");

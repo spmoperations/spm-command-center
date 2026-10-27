@@ -51,6 +51,16 @@ const TEAM_USERS = teamUsersSql("$1");
 const LOGIN_SLACK = `coalesce(u.slack_user_id, (select s.id from slack_users s where s.owner_id in (${TEAM_USERS}) and not s.deleted and not s.is_bot and s.email is not null
   and lower(s.email) = lower(coalesce(u.login_email, u.email)) order by (s.owner_id = $1) desc, s.id limit 1))`;
 
+/**
+ * Whether the Slack account `slackId` may be told about a task that `assigner` gave them. Jeremy
+ * (the owner) never is. Another login, such as Alex, only when Jeremy gives it. Anyone else,
+ * such as someone on the team list, always: from the Slack account of whoever gave it.
+ */
+export async function mayTellOnSlack(db: Db, assigner: string, slackId: string): Promise<boolean> {
+  const [login] = await db.query<{ id: string }>(`select u.id from users u where u.id in (${TEAM_USERS}) and ${LOGIN_SLACK} = $2 limit 1`, [TEAM, slackId]);
+  return !login || (login.id !== TEAM && assigner === TEAM);
+}
+
 /** The team's clients: those added by name, and those tickets, calls and chats already name. Each once, whatever its capitals. */
 export async function teamClients(db: Db, viewer: string): Promise<string[]> {
   const rows = await db.query<{ name: string }>(
@@ -625,8 +635,8 @@ async function assignTo(c: Ctx, taskId: string, assignee: string | null, notify:
     const userId = assignee.slice(5);
     const [user] = await c.db.query<{ name: string; slack: string | null }>(`select u.name, ${LOGIN_SLACK} as slack from users u where u.id = $2 and u.id in (${TEAM_USERS})`, [TEAM, userId]);
     if (!user) throw new Error("That person is not on the team.");
-    // A login is told on Slack too, unless the task is one they gave themselves.
-    const to = notify.includes("slack") && user.slack && userId !== c.ownerId ? [{ way: "slack" as const, target: user.slack }] : [];
+    // A login is told on Slack only when Jeremy gives them the task, and Jeremy himself never (see `mayTellOnSlack`).
+    const to = notify.includes("slack") && user.slack && (await mayTellOnSlack(c.db, c.ownerId, user.slack)) ? [{ way: "slack" as const, target: user.slack }] : [];
     await tell(c, taskId, user.name, to);
     await c.db.run(`update tasks set assignee_user = $3, ${unhand} where owner_id = $1 and id = $2`, [TEAM, taskId, userId]);
     return `Assigned to ${user.name}${toldOn(to.map((t) => t.way))}`;
@@ -641,10 +651,12 @@ async function assignTo(c: Ctx, taskId: string, assignee: string | null, notify:
     telegram_id: string | null;
   }>("select id, name, role, slack_user_id, telegram_id from team_members where owner_id = $1 and id = $2", [TEAM, assignee.slice(7)]);
   if (!member) throw new Error("That person is no longer on the team list.");
-  const to = [...new Set(notify)].flatMap((way) => {
+  const to: { way: Notify; target: string }[] = [];
+  for (const way of new Set(notify)) {
     const target = way === "slack" ? member.slack_user_id : member.telegram_id;
-    return target ? [{ way, target }] : [];
-  });
+    // Someone on the list who is also a login (picked from Slack) follows the logins' rule.
+    if (target && (way !== "slack" || (await mayTellOnSlack(c.db, c.ownerId, target)))) to.push({ way, target });
+  }
   await tell(c, taskId, member.name, to);
   await c.db.run("update tasks set assignee_user = null, delegated_to = $3, delegated_name = $4, delegated_role = $5, delegated_note = '', delegated_at = $6 where owner_id = $1 and id = $2", [
     TEAM,
