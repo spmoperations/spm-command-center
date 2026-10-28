@@ -63,6 +63,13 @@ export const MOST_PICTURES = 10;
 export const TICKET_PREFIX = "SPM";
 
 /**
+ * The team's Google Workspace. Anyone with a Google account there who is on the team's Slack
+ * signs in with Google to see their own tasks, without being given a login first (see
+ * server/task-logins.ts). A developer's machine can name its own with TEAM_GOOGLE_DOMAIN.
+ */
+export const TEAM_GOOGLE_DOMAIN = "socialprofitmedia.co";
+
+/**
  * The first day the Review tab shows: suggestions raised before it are kept but never shown.
  * The week the Review tab started, so everything from then on stays visible, this week and
  * after, until someone accepts or rejects it.

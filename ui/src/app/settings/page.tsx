@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { Seg } from "@/components/bits";
 import { Combo } from "@/components/Combo";
-import { DEPARTMENTS, DEPTS, LINE_NAME, liveSources, PERSONAL_SIDE, PRIORITY_NAME, SOURCE_NAME } from "@/core/config";
+import { DEPARTMENTS, DEPTS, LINE_NAME, liveSources, PERSONAL_SIDE, PRIORITY_NAME, SOURCE_NAME, TEAM_GOOGLE_DOMAIN } from "@/core/config";
 import { ago } from "@/core/dates";
 import { describeInterval, jobById, liveJobs, type Connection } from "@/core/jobs";
 import { PROVIDER_NAME } from "@/core/providers";
@@ -342,7 +342,7 @@ function TaskLoginEdit({ p, now }: { p: Person; now: number }) {
           </button>
         </div>
         <p className="muted person-login-hint">
-          If the email is a Google account, such as a Social Profit Media one, they can use Sign in with Google. Give anyone else a password, and send it to them yourself.
+          If the email is a Google account they can use Sign in with Google. Give anyone else a password, and send it to them yourself.
           {login && " Saving signs them out everywhere."}
         </p>
         <div className="login-acts">
@@ -377,7 +377,8 @@ function TaskLoginEdit({ p, now }: { p: Person; now: number }) {
         <button
           className="linkbtn danger"
           onClick={() => {
-            if (window.confirm(`${p.name} will no longer be able to sign in. Their tasks stay on the board.`)) removeTaskLogin(p.id, p.name);
+            const again = login.email.endsWith(`@${TEAM_GOOGLE_DOMAIN}`) ? ` They can sign in again with their ${TEAM_GOOGLE_DOMAIN} Google account while they are on the team's Slack.` : "";
+            if (window.confirm(`${p.name} will be signed out and can no longer sign in with this login.${again} Their tasks stay on the board.`)) removeTaskLogin(p.id, p.name);
           }}
         >
           Remove
@@ -599,7 +600,8 @@ function Team({ app }: { app: App }) {
       </div>
       <p className="set-intro">
         The people you assign work to. {DEPARTMENTS ? "When you assign a task, people in its department are offered first, and anyone" : "When you assign a task, anyone"} whose responsibilities match the task is marked as the best fit. You can also assign to anyone on Slack; they are added here the first time. Pick each person&apos;s Slack account, and their Telegram if they use it, so an assigned task can reach them. The list is the team&apos;s: everyone with a login assigns from it.
-        {app.state.me.isOwner && " You can also let someone sign in here to see only the tasks given to them: with Google, or with an email and password."}
+        {app.state.me.isOwner &&
+          ` Anyone on the team's Slack with a ${TEAM_GOOGLE_DOMAIN} Google account can sign in with Google to see only the tasks given to them, and is added here the first time. Anyone else, let in below with an email and a password.`}
       </p>
       <div className="table-scroll">
         <table className="set">

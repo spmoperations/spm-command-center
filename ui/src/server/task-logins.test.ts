@@ -68,7 +68,7 @@ beforeEach(async () => {
   alex = (await db.query<{ id: string }>("select id from users where login_email = 'alex@example.com'"))[0].id;
 });
 afterEach(() => {
-  for (const k of ["DATABASE_URL", "GOOGLE_HOSTED"]) delete process.env[k];
+  for (const k of ["DATABASE_URL", "GOOGLE_HOSTED", "TEAM_GOOGLE_DOMAIN"]) delete process.env[k];
 });
 
 describe("giving someone on the team list a task login", () => {
@@ -329,8 +329,8 @@ describe("signing in with Google", () => {
       return back(res)?.replace(`${SITE}/login?error=`, "");
     };
     // Jeremy and Alex sign in with their email and password, as before.
-    expect(await answer(good("jeremy@example.com"))).toBe("google-none");
-    expect(await answer(good("alex@example.com"))).toBe("google-none");
+    expect(await answer(good("jeremy@example.com"))).toBe("google-login");
+    expect(await answer(good("alex@example.com"))).toBe("google-login");
     expect(await answer(good("someone@team.example.com"))).toBe("google-none");
     expect(await answer((n) => ({ ...good(LUIS.email)(n), email_verified: false }))).toBe("google-failed");
     expect(await answer((n) => ({ ...good(LUIS.email)(n), aud: "another-app" }))).toBe("google-failed");
@@ -355,5 +355,87 @@ describe("signing in with Google", () => {
       const res = await googleSignInCallback(get(`/api/google/callback?state=${state}&code=c`, cookie), db, { fetchImpl: google.fetchImpl });
       expect(new URL(back(res)!).origin).toBe(SITE);
     }
+  });
+});
+
+describe("signing in with a Google account of the team's own Workspace", () => {
+  const TEAM_DOMAIN = "team.example.com";
+  /** Google's answer for an account; `hd` is the Workspace Google says it belongs to. */
+  const claims = (email: string, hd: string | null, nonce: string) => ({ iss: "https://accounts.google.com", aud: GOOGLE_APP.clientId, exp: Math.floor(Date.now() / 1000) + 3600, email, email_verified: true, nonce, ...(hd ? { hd } : {}) });
+
+  /** Signs in with Google as that account, end to end against a pretend Google. Answers where it ended and the session. */
+  async function viaGoogle(email: string, hd: string | null = TEAM_DOMAIN) {
+    const started = await googleSignInRedirect(get("/api/login/google", ""), db);
+    const url = new URL(started.headers.get("location")!);
+    const fetchImpl: Fetch = async () => new Response(JSON.stringify({ id_token: ["h", Buffer.from(JSON.stringify(claims(email, hd, url.searchParams.get("nonce")!))).toString("base64url"), "s"].join(".") }), { status: 200 });
+    const res = await googleSignInCallback(get(`/api/google/callback?state=${url.searchParams.get("state")}&code=c`, cookieFrom(started, GOOGLE_SIGN_IN_COOKIE), "cross-site"), db, { fetchImpl });
+    const session = readSession(tokenOf(cookieFrom(res, SESSION_COOKIE)));
+    return { to: res.headers.get("location")!.replace(SITE, ""), session, member: await memberOfSession(db, session) };
+  }
+
+  beforeEach(async () => {
+    process.env.TEAM_GOOGLE_DOMAIN = TEAM_DOMAIN;
+    await saveKeys(db, OWNER_ID, "google", GOOGLE_APP, NOW);
+    // The team's Slack: Luis (on the team list, from the seed), Dana (not on it yet), and the owner.
+    await db.run(
+      `insert into slack_users (owner_id, id, name, email) values ($1, 'ULUIS', 'Luis Ramos', 'Luis@Team.Example.com'), ($1, 'UDANA', 'Dana Okafor', 'dana@team.example.com'),
+       ($1, 'UME', 'Jeremy Moser', 'jeremy@example.com'), ($1, 'UGONE', 'Gone Person', 'gone@team.example.com')`,
+      [OWNER_ID],
+    );
+    await db.run("update slack_users set deleted = true where id = 'UGONE'");
+  });
+
+  it("needs no login given first: someone on the team list, by their Slack account's address", async () => {
+    const first = await viaGoogle("luis@team.example.com");
+    expect([first.to, first.session?.member, first.member]).toEqual(["/my-tasks", true, { id: "u_luis", name: "Luis Ramos", email: "luis@team.example.com" }]);
+    // Kept like any other login, for Google only, and shown to the owner.
+    const owner = await loadState(db, OWNER_ID, now);
+    expect(owner.team.find((p) => p.id === "u_luis")?.taskLogin).toEqual({ email: "luis@team.example.com", password: false, lastIn: expect.any(Number) });
+    // The next time, the same login.
+    expect((await viaGoogle("luis@team.example.com")).member?.id).toBe("u_luis");
+    expect(await db.query("select member_id from task_logins")).toEqual([{ member_id: "u_luis" }]);
+  });
+
+  it("adds someone on the team's Slack who is not on the team list yet, as picking them from Slack does", async () => {
+    const dana = await viaGoogle("dana@team.example.com");
+    expect(dana.member?.name).toBe("Dana Okafor");
+    expect(await db.query("select name, role, slack_user_id from team_members where id = $1", [dana.member!.id])).toEqual([{ name: "Dana Okafor", role: "Team member", slack_user_id: "UDANA" }]);
+    // A ticket given to her from Slack is hers.
+    await act(OWNER_ID, "createTicket", ticket({ title: "Dana's", assignee: "slack:UDANA" }));
+    const mine = (await (await myTasks(get("/api/my-tasks", `${SESSION_COOKIE}=${createSession(dana.session!.email, Date.now(), dana.session!.mark, true)}`))).json()) as { tasks: MyTask[] };
+    expect(mine.tasks.map((t) => t.title)).toEqual(["Dana's"]);
+  });
+
+  it("is only for the team's Workspace by Google's word, someone on its Slack, and never Jeremy's or Alex's own address", async () => {
+    const people = async () => (await db.query<{ n: number }>("select count(*)::int as n from team_members"))[0].n;
+    const before = await people();
+    // The right address, but Google does not say it is the team's Workspace.
+    expect((await viaGoogle("luis@team.example.com", null)).to).toBe("/login?error=google-none");
+    // Another Workspace.
+    expect((await viaGoogle("luis@team.example.com", "elsewhere.example.com")).to).toBe("/login?error=google-none");
+    // In the Workspace but not on the team's Slack, or gone from it.
+    expect((await viaGoogle("nobody@team.example.com")).to).toBe("/login?error=google-none");
+    expect((await viaGoogle("gone@team.example.com")).to).toBe("/login?error=google-none");
+    // The owner's address, even in the Workspace and on Slack: the password, as before.
+    process.env.TEAM_GOOGLE_DOMAIN = "example.com";
+    expect((await viaGoogle("jeremy@example.com", "example.com")).to).toBe("/login?error=google-login");
+    expect((await viaGoogle("alex@example.com", "example.com")).to).toBe("/login?error=google-login");
+    expect([await people(), await db.query("select * from task_logins")]).toEqual([before, []]);
+  });
+
+  it("signs in someone given a login of their own before with it, and leaves it as it was", async () => {
+    await act(OWNER_ID, "setTaskLogin", "u_luis", "luis.home@example.org", LUIS.password);
+    const login = () => db.query("select member_id, email, password_hash, since from task_logins");
+    const [kept] = await login();
+    const luis = await viaGoogle("luis@team.example.com");
+    expect([luis.member?.id, luis.session?.email]).toEqual(["u_luis", "luis.home@example.org"]);
+    expect(await login()).toEqual([kept]);
+  });
+
+  it("can be taken away by the owner, which signs them out until they sign in with Google again", async () => {
+    const luis = await viaGoogle("luis@team.example.com");
+    await act(OWNER_ID, "removeTaskLogin", "u_luis");
+    expect(await memberOfSession(db, luis.session)).toBeNull();
+    expect((await viaGoogle("luis@team.example.com")).member?.id).toBe("u_luis");
   });
 });

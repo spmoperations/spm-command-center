@@ -6,7 +6,8 @@
 // Google already uses (/api/google/callback), so nothing new is set up in Google Cloud. The
 // cookie of a sign-in in progress tells that way back which of the two it is.
 import crypto from "node:crypto";
-import { hostedProblem, keysById, keysForNew } from "./app-keys";
+import { TEAM_GOOGLE_DOMAIN } from "@/core/config";
+import { hostedProblem, keysById, keysForNew, setting } from "./app-keys";
 import type { Db } from "./db";
 import { cookieValue, sameSite, siteOf } from "./http";
 import { OWNER_ID } from "./owner";
@@ -24,7 +25,10 @@ export const GOOGLE_SIGN_IN_COOKIE = "cc_google_sign_in";
 const MINUTES = 10;
 
 /** Why the login page sends someone back, as the page puts it in words (see app/login/page.tsx). */
-export type SignInProblem = "google-off" | "google-none" | "google-again" | "google-denied" | "google-failed";
+export type SignInProblem = "google-off" | "google-none" | "google-login" | "google-again" | "google-denied" | "google-failed";
+
+/** The team's own Google Workspace (see core/config). */
+const teamDomain = () => (setting("TEAM_GOOGLE_DOMAIN") || TEAM_GOOGLE_DOMAIN).toLowerCase();
 
 /** True where the login page offers Sign in with Google: Google may be used on this server, and the team has its keys. */
 export async function googleSignInOffered(db: Db): Promise<boolean> {
@@ -111,6 +115,8 @@ interface IdToken {
   email?: unknown;
   email_verified?: unknown;
   nonce?: unknown;
+  /** The Google Workspace the account belongs to. Only Workspace accounts have one. */
+  hd?: unknown;
 }
 
 /**
@@ -118,7 +124,7 @@ interface IdToken {
  * from Google's token address over https, for this app's own keys, so its signature need not be
  * checked again (OpenID Connect Core, 3.1.3.7); what it says is still checked.
  */
-async function accountOf(db: Db, pending: Pending, code: string, fetchImpl: Fetch, now: number): Promise<string> {
+async function accountOf(db: Db, pending: Pending, code: string, fetchImpl: Fetch, now: number): Promise<{ email: string; teamAccount: boolean }> {
   const keys = await keysById(db, OWNER_ID, "google", pending.keyId);
   if (!keys) throw new Error("the keys the sign-in started with are gone");
   const res = await fetchImpl(TOKEN_URL, {
@@ -139,7 +145,10 @@ async function accountOf(db: Db, pending: Pending, code: string, fetchImpl: Fetc
   if (typeof claims.exp !== "number" || claims.exp * 1000 < now) throw new Error("the answer has run out");
   if (typeof claims.nonce !== "string" || !sameText(claims.nonce, pending.nonce)) throw new Error("the answer is for another sign-in");
   if (typeof claims.email !== "string" || claims.email_verified !== true) throw new Error("Google did not confirm the account's address");
-  return claims.email.trim().toLowerCase();
+  const email = claims.email.trim().toLowerCase();
+  // In the team's Workspace by Google's own word, not only by how the address ends.
+  const domain = teamDomain();
+  return { email, teamAccount: typeof claims.hd === "string" && claims.hd.toLowerCase() === domain && email.endsWith(`@${domain}`) };
 }
 
 /** The tests hand in their own database and a pretend Google. */
@@ -148,21 +157,25 @@ interface Options {
   now?: number;
 }
 
-/** Google's answer: signs in the person on the team list whose task login is that account, and takes them to their tasks. */
+/**
+ * Google's answer: signs in the person on the team list whose task login is that account, or who
+ * that account is in the team's own Workspace and Slack, and takes them to their tasks.
+ */
 export async function googleSignInCallback(request: Request, db: Db, { fetchImpl = fetch, now = Date.now() }: Options = {}): Promise<Response> {
   const pending = pendingOf(request, now);
   const answer = new URL(request.url).searchParams;
   if (!pending || !sameText(answer.get("state") ?? "", pending.state)) return backToLogin(request, "google-again");
   if (answer.get("error")) return backToLogin(request, answer.get("error") === "access_denied" ? "google-denied" : "google-failed");
   if (hostedProblem("google")) return backToLogin(request, "google-off");
-  let email: string;
+  let account: { email: string; teamAccount: boolean };
   try {
-    email = await accountOf(db, pending, answer.get("code") ?? "", fetchImpl, now);
+    account = await accountOf(db, pending, answer.get("code") ?? "", fetchImpl, now);
   } catch (error) {
     console.error(`[command-center] google sign-in failed: ${(error as Error).message}`);
     return backToLogin(request, "google-failed");
   }
-  const who = await memberByGoogle(db, email);
+  const who = await memberByGoogle(db, account.email, account.teamAccount, now);
+  if (who === "login") return backToLogin(request, "google-login");
   if (!who) return backToLogin(request, "google-none");
   await signedInNow(db, who.member.id, now);
   const secure = isHttps(request);

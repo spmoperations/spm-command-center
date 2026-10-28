@@ -18,6 +18,7 @@ const FROM_SERVER: Record<string, string> = {
   setup: "Sign-in is not set up yet. Add LOGIN_EMAIL and LOGIN_PASSWORD to .env.local and restart.",
   // From Sign in with Google (server/google-sign-in.ts).
   "google-none": "That Google account has no login here. Ask for it to be added, or sign in with your email and password.",
+  "google-login": "This account signs in with its email and password, above.",
   "google-off": "Sign in with Google is not set up here. Use your email and password.",
   "google-again": "That Google sign-in timed out or did not start here. Try again.",
   "google-denied": "Google was not allowed in, so you were not signed in.",

@@ -6,6 +6,8 @@
 // They sign in on the same login page: with Google, when their email is a Google account such
 // as a Social Profit Media one (google-sign-in.ts), or with that email and a password the owner
 // gave them. Only the owner gives, changes and takes away these logins, on the team list.
+// Someone in the team's own Google Workspace who is on the team's Slack needs none given: their
+// first Google sign-in makes it (see `memberByGoogle`).
 import crypto from "node:crypto";
 import type { TaskLoginInfo } from "@/core/types";
 import type { Db } from "./db";
@@ -13,7 +15,7 @@ import { isEmailAddress } from "./gmail";
 import { OWNER_ID } from "./owner";
 import type { Session } from "./session";
 import { hashPassword, MIN_PASSWORD, passwordMark, passwordMatches } from "./team";
-import { TEAM } from "./tickets";
+import { TEAM, teamUsersSql } from "./tickets";
 
 /** Someone on the team list, signed in with their task login. */
 export interface Member {
@@ -56,9 +58,50 @@ export async function memberByPassword(db: Db, email: string, password: string):
   return { member: asMember(login), mark: markOf(login) };
 }
 
-/** Who a Google account signs in as, once Google has said the address is theirs, or null. */
-export async function memberByGoogle(db: Db, email: string): Promise<{ member: Member; mark: string } | null> {
-  const login = await loginFor(db, email);
+/**
+ * Who a Google account signs in as, once Google has said the address is theirs: the person whose
+ * task login it is. An account in the team's own Google Workspace (`teamAccount`) needs no login
+ * given first. It is the person on the team list whose Slack account has that address; someone on
+ * the team's Slack who is not on the list yet is added to it, as picking them from Slack does.
+ * Their login is then kept like any other, for Google only, and the owner can take it away.
+ * "login" for the owner's own address or a team login's: those sign in with their password.
+ * Null for anyone else.
+ */
+export async function memberByGoogle(db: Db, email: string, teamAccount: boolean, now: number): Promise<{ member: Member; mark: string } | "login" | null> {
+  const known = await loginFor(db, email);
+  if (known) return { member: asMember(known), mark: markOf(known) };
+  const address = email.trim().toLowerCase();
+  if (await emailInUse(db, address)) return "login";
+  if (!teamAccount) return null;
+  const login = await db.transaction(async (tx) => {
+    // Their Slack account, in anyone's copy of the team's Slack: the owner's first.
+    const inSlack = `select s.id from slack_users s where s.owner_id in (${teamUsersSql("$1")}) and not s.is_bot and not s.deleted and lower(s.email) = $2`;
+    const [onList] = await tx.query<{ id: string }>(`select id from team_members where owner_id = $1 and slack_user_id in (${inSlack}) order by position, id limit 1`, [TEAM, address]);
+    let memberId = onList?.id;
+    if (!memberId) {
+      const [slack] = await tx.query<{ id: string; name: string }>(
+        `select s.id, s.name from slack_users s where s.owner_id in (${teamUsersSql("$1")}) and not s.is_bot and not s.deleted and lower(s.email) = $2 order by (s.owner_id = $1) desc, s.id limit 1`,
+        [TEAM, address],
+      );
+      if (!slack) return null;
+      memberId = `u_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+      await tx.run("insert into team_members (id, owner_id, name, role, depts, handles, slack_user_id, position) values ($1, $2, $3, 'Team member', '[]', '[]', $4, $5)", [
+        memberId,
+        TEAM,
+        slack.name,
+        slack.id,
+        Math.floor(now / 1000),
+      ]);
+    }
+    // Someone given a login of their own before, such as a password on another email, keeps it and signs in with it.
+    const [own] = await tx.query<LoginRow>(
+      "select l.member_id, l.email, l.password_hash, l.since, m.name from task_logins l join team_members m on m.id = l.member_id where l.owner_id = $1 and l.member_id = $2",
+      [TEAM, memberId],
+    );
+    if (own) return own;
+    await tx.run("insert into task_logins (member_id, owner_id, email, password_hash, since) values ($1, $2, $3, null, $4)", [memberId, TEAM, address, now]);
+    return loginFor(tx, address);
+  });
   return login ? { member: asMember(login), mark: markOf(login) } : null;
 }
 
