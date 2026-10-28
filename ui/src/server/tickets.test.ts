@@ -282,6 +282,34 @@ describe("a login told on Slack", () => {
     }
   });
 
+  it("leaves out why the dashboard found the task, and keeps what a person wrote", async () => {
+    await slackFor(OWNER_ID);
+    await slackFor(alex);
+    await db.run("update users set slack_user_id = 'UALEX' where id = $1", [alex]);
+    await db.run("update users set slack_user_id = 'UME' where id = $1", [OWNER_ID]);
+    const add = (id: string, why: string) =>
+      db.run(
+        "insert into suggestions (id, owner_id, title, dept, project, pri, due, why, src_type, src_id, dedupe_key, mode, created_at) values ($1, $2, $3, 'Operations', '', 'mid', '2026-10-10', $4, 'message', 'slack:D1', $5, 'professional', $6)",
+        [id, OWNER_ID, `Send access ${id}`, why, `ask:${id}`, NOW],
+      );
+    await add("s_for", 'Fathom listed this for Alex on "SPM - Operations".');
+    await add("s_mine", 'Fathom listed this as your action item on "SPM - Operations".');
+    // As the Review tab sends it: the reason, as each of them was shown it, in the description.
+    await act(OWNER_ID, "acceptSuggestion", "s_for", { assignee: `user:${alex}`, notify: ["slack"], description: 'Fathom listed this for Alex on "SPM - Operations".' });
+    await act(alex, "acceptSuggestion", "s_mine", {
+      assignee: `user:${OWNER_ID}`,
+      notify: ["slack"],
+      description: `Fathom listed this as Jeremy Moser's action item on "SPM - Operations".\n\nUse the shared login.`,
+    });
+    const sent = await db.query<{ target: string; body: string; details: { blocks: { text?: { text: string } }[] } }>("select target, body, details from outbox");
+    expect(sent.map((o) => [o.target, o.body.includes("Fathom"), o.details.blocks[1].text!.text]).sort()).toEqual([
+      ["UALEX", false, "*Send access s_for*"],
+      ["UME", false, "*Send access s_mine*\nUse the shared login."],
+    ]);
+    // The board keeps it.
+    expect((await loadState(db, OWNER_ID, now)).tasks.find((t) => t.title === "Send access s_for")!.description).toBe('Fathom listed this for Alex on "SPM - Operations".');
+  });
+
   it("tells no login about a task another login gives them, when neither is Jeremy", async () => {
     await act(OWNER_ID, "addTeamLogin", "Sam", "sam@example.com", "a long enough password");
     const sam = (await db.query<{ id: string }>("select id from users where login_email = 'sam@example.com'"))[0].id;

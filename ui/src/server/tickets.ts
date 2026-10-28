@@ -599,7 +599,11 @@ async function tell(c: Ctx, taskId: string, name: string, to: { way: Notify; tar
   }>("select title, description, due, pri, project, number, mode from tasks where owner_id = $1 and id = $2", [TEAM, taskId]);
   const now = c.now.getTime();
   const ticket = t.number ? ticketName(t.number) : "";
-  const note = tidy(t.description, 1500);
+  // Why the dashboard found it ("Fathom listed this for …") is for the board, not the message:
+  // only what a person wrote in the description goes.
+  const found = await c.db.query<{ why: string; from_name: string }>("select s.why, u.name as from_name from suggestions s join users u on u.id = s.owner_id where s.ticket_id = $1", [taskId]);
+  const written = found.reduce((text, s) => text.split(whyFor(s.why, s.from_name)).join("").split(s.why).join(""), t.description);
+  const note = tidy(written, 1500);
   const project = t.mode === "personal" ? "" : t.project;
   for (const { way, target } of to) {
     const text = assignmentText({
@@ -733,9 +737,10 @@ async function accept(c: Ctx, g: SuggestionRow, input: Partial<TicketInput> | un
     },
     `Made a ticket from ${fromWhere(note)}`,
   );
+  // Linked before it is given to anyone, so the message that tells them knows the reason it was found (see `tell`).
+  await c.db.run("update suggestions set status = 'accepted', ticket_id = $3 where owner_id = $1 and id = $2", [g.owner_id, g.id, ticket]);
   const assignee = edits.assignee !== undefined ? edits.assignee : guessFor(g, people, g.src_type === "meeting" ? await teamSlack(c.db) : []).assignee;
   await logEvent(c, ticket, await assignTo(c, ticket, assignee, edits.notify ?? []));
-  await c.db.run("update suggestions set status = 'accepted', ticket_id = $3 where owner_id = $1 and id = $2", [g.owner_id, g.id, ticket]);
   return ticket;
 }
 
