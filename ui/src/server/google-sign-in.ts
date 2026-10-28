@@ -6,8 +6,7 @@
 // Google already uses (/api/google/callback), so nothing new is set up in Google Cloud. The
 // cookie of a sign-in in progress tells that way back which of the two it is.
 import crypto from "node:crypto";
-import { TEAM_GOOGLE_DOMAIN } from "@/core/config";
-import { hostedProblem, keysById, keysForNew, setting } from "./app-keys";
+import { hostedProblem, keysById, keysForNew, teamGoogleDomain } from "./app-keys";
 import type { Db } from "./db";
 import { cookieValue, sameSite, siteOf } from "./http";
 import { OWNER_ID } from "./owner";
@@ -26,9 +25,6 @@ const MINUTES = 10;
 
 /** Why the login page sends someone back, as the page puts it in words (see app/login/page.tsx). */
 export type SignInProblem = "google-off" | "google-none" | "google-login" | "google-again" | "google-denied" | "google-failed";
-
-/** The team's own Google Workspace (see core/config). */
-const teamDomain = () => (setting("TEAM_GOOGLE_DOMAIN") || TEAM_GOOGLE_DOMAIN).toLowerCase();
 
 /** True where the login page offers Sign in with Google: Google may be used on this server, and the team has its keys. */
 export async function googleSignInOffered(db: Db): Promise<boolean> {
@@ -147,7 +143,7 @@ async function accountOf(db: Db, pending: Pending, code: string, fetchImpl: Fetc
   if (typeof claims.email !== "string" || claims.email_verified !== true) throw new Error("Google did not confirm the account's address");
   const email = claims.email.trim().toLowerCase();
   // In the team's Workspace by Google's own word, not only by how the address ends.
-  const domain = teamDomain();
+  const domain = teamGoogleDomain();
   return { email, teamAccount: typeof claims.hd === "string" && claims.hd.toLowerCase() === domain && email.endsWith(`@${domain}`) };
 }
 

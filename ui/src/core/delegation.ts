@@ -87,16 +87,17 @@ export type SlackBlock = { type: "section"; text: { type: "mrkdwn"; text: string
 /**
  * The same message as `assignmentText`, laid out for Slack: the tag and "New task for you" on
  * the first line, the task in bold with its note under it, then one quiet line with its number,
- * when it is due, how much it matters, what it belongs to and, for someone who can sign in, a
- * link to it. `tag` is Slack's <@id>, or a name; `ticket` is its number, such as SPM-23.
+ * when it is due, how much it matters and what it belongs to. For someone who can sign in, the
+ * task's name is the link to it. `tag` is Slack's <@id>, or a name; `ticket` is its number, such as SPM-23.
  */
 export function assignmentBlocks(o: { tag: string; title: string; ticket?: string; due: string; note: string; pri?: Priority; project?: string; link?: string }): SlackBlock[] {
   const due = parseDay(o.due).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
   const note = slackSafe(o.note.trim()).slice(0, 2500);
-  const facts = [o.ticket ? `*${o.ticket}*` : "", `Due *${due}*`, o.pri ? `${PRIORITY_NAME[o.pri]} priority` : "", slackSafe(o.project?.trim() ?? ""), o.link ? `<${o.link}|Open in Command Center>` : ""].filter(Boolean);
+  const facts = [o.ticket ? `*${o.ticket}*` : "", `Due *${due}*`, o.pri ? `${PRIORITY_NAME[o.pri]} priority` : "", slackSafe(o.project?.trim() ?? "")].filter(Boolean);
+  const title = o.link ? `<${o.link}|${slackSafe(o.title)}>` : slackSafe(o.title);
   return [
     { type: "section", text: { type: "mrkdwn", text: o.tag ? `${o.tag} *New task for you*` : "*New task*" } },
-    { type: "section", text: { type: "mrkdwn", text: `*${slackSafe(o.title)}*${note ? `\n${note}` : ""}` } },
+    { type: "section", text: { type: "mrkdwn", text: `*${title}*${note ? `\n${note}` : ""}` } },
     { type: "context", elements: [{ type: "mrkdwn", text: facts.join("  ·  ") }] },
   ];
 }

@@ -123,13 +123,13 @@ describe("delegation", () => {
     expect(assignmentText({ ...whole, pri: "mid", note: "Before Friday." })).toBe("New task for you: Book the venue\nDue Fri, Oct 16 · Medium priority · Launch\n\nBefore Friday.");
   });
 
-  it("lays the message out for Slack: the tag, the task in bold with its note, and one line of facts", () => {
+  it("lays the message out for Slack: the tag, the task in bold with its note, and one line of facts, the task's name its link", () => {
     const blocks = assignmentBlocks({ tag: "<@ULUIS>", title: "Fix <the> hook & clip", ticket: "SPM-23", due: "2026-10-27", note: "Use the one in <Drive>.", pri: "low", project: "Harbor Realty", link: "https://example.com/tasks?task=SPM-23" });
     expect(blocks).toEqual([
       { type: "section", text: { type: "mrkdwn", text: "<@ULUIS> *New task for you*" } },
       // What could read as Slack's own markup is written out.
-      { type: "section", text: { type: "mrkdwn", text: "*Fix &lt;the&gt; hook &amp; clip*\nUse the one in &lt;Drive&gt;." } },
-      { type: "context", elements: [{ type: "mrkdwn", text: "*SPM-23*  ·  Due *Tue, Oct 27*  ·  Low priority  ·  Harbor Realty  ·  <https://example.com/tasks?task=SPM-23|Open in Command Center>" }] },
+      { type: "section", text: { type: "mrkdwn", text: "*<https://example.com/tasks?task=SPM-23|Fix &lt;the&gt; hook &amp; clip>*\nUse the one in &lt;Drive&gt;." } },
+      { type: "context", elements: [{ type: "mrkdwn", text: "*SPM-23*  ·  Due *Tue, Oct 27*  ·  Low priority  ·  Harbor Realty" }] },
     ]);
     // Nothing to say is left out; with nobody tagged it is simply a new task.
     expect(assignmentBlocks({ tag: "", title: "Book the venue", due: "2026-10-27", note: "" }).map((b) => (b.type === "section" ? b.text.text : b.elements[0].text))).toEqual(["*New task*", "*Book the venue*", "Due *Tue, Oct 27*"]);

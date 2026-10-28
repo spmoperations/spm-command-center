@@ -15,6 +15,7 @@ import { assignmentBlocks, assignmentText, CHANNEL_PICK, SLACK_PICK, ticketLink 
 import { isoDay, parseDay } from "@/core/dates";
 import { norm } from "@/core/rules";
 import type { Mode, MyTask, Priority, ReviewItem, Source, SourceNote, Task, TaskSource, TeamPerson, TicketEvent, TicketInput, TicketStatus } from "@/core/types";
+import { teamGoogleDomain } from "./app-keys";
 import type { Db } from "./db";
 import { OWNER_ID } from "./owner";
 
@@ -583,7 +584,22 @@ async function heldTicket(c: Ctx, id: string) {
  * that starts with their Slack @name, so Slack notifies them of a mention. Refused when the
  * assigner has not connected that app.
  */
-async function tell(c: Ctx, taskId: string, name: string, to: { way: Notify; target: string }[], login = false): Promise<void> {
+/**
+ * Whether someone on the team list can sign in to open a ticket's link: they were given a task
+ * login, or their Slack account's address is a Google account of the team's own Workspace,
+ * which signs in with Google without one (see task-logins.ts).
+ */
+async function canSignIn(db: Db, memberId: string, slackUserId: string | null): Promise<boolean> {
+  const [row] = await db.query<{ yes: boolean }>(
+    `select exists (select 1 from task_logins where owner_id = $1 and member_id = $2)
+       or exists (select 1 from slack_users s where s.owner_id in (${TEAM_USERS}) and s.id = $3 and not s.deleted and split_part(lower(s.email), '@', 2) = $4) as yes`,
+    [TEAM, memberId, slackUserId ?? "", teamGoogleDomain()],
+  );
+  return Boolean(row?.yes);
+}
+
+/** `canOpen`: they can sign in to open the ticket, so its link goes with the message. */
+async function tell(c: Ctx, taskId: string, name: string, to: { way: Notify; target: string }[], canOpen = false): Promise<void> {
   if (!to.length) return;
   const connected = new Set((await c.db.query<{ provider: string }>("select provider from connections where owner_id = $1", [c.ownerId])).map((r) => r.provider));
   const missing = [...new Set(to.map((t) => t.way))].filter((w) => !connected.has(w));
@@ -617,7 +633,7 @@ async function tell(c: Ctx, taskId: string, name: string, to: { way: Notify; tar
       project,
     });
     // On Slack it is laid out; a link to the ticket only for someone who can sign in to open it.
-    const blocks = way === "slack" ? assignmentBlocks({ tag: `<@${target}>`, title: t.title, ticket, due: t.due, note, pri: t.pri, project, link: login ? ticketLink(ticket) : undefined }) : null;
+    const blocks = way === "slack" ? assignmentBlocks({ tag: `<@${target}>`, title: t.title, ticket, due: t.due, note, pri: t.pri, project, link: canOpen ? ticketLink(ticket) : undefined }) : null;
     await c.db.run("insert into outbox (id, owner_id, source, target, to_name, ctx, body, task_id, created_at, details) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)", [
       uid("o"),
       c.ownerId,
@@ -669,7 +685,8 @@ async function assignTo(c: Ctx, taskId: string, assignee: string | null, notify:
     // Someone on the list who is also a login (picked from Slack) follows the logins' rule.
     if (target && (way !== "slack" || (await mayTellOnSlack(c.db, c.ownerId, target)))) to.push({ way, target });
   }
-  await tell(c, taskId, member.name, to);
+  // Someone on the team list who can sign in gets the ticket's link too: it opens their own tasks.
+  await tell(c, taskId, member.name, to, await canSignIn(c.db, member.id, member.slack_user_id));
   await c.db.run("update tasks set assignee_user = null, delegated_to = $3, delegated_name = $4, delegated_role = $5, delegated_note = '', delegated_at = $6 where owner_id = $1 and id = $2", [
     TEAM,
     taskId,

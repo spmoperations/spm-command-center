@@ -918,22 +918,17 @@ select.f.tk-done { background: var(--good-soft); color: var(--good); }
 .tk-foot { display: flex; justify-content: space-between; font-size: 12px; }
 .tk-num { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
 
-/* The page of someone who signs in to see only their own tasks (app/my-tasks). */
-.my-tasks { display: grid; gap: 14px; padding-top: 20px; max-width: 760px; }
-.my-intro { margin: 0; font-size: 14px; }
-.my-list { display: grid; gap: 10px; }
-.my-card { display: grid; gap: 10px; padding: 14px 16px; min-width: 0; }
-.my-card.picked { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-.my-card.done .my-title { color: var(--muted); text-decoration: line-through; }
-.my-card-top { display: flex; gap: 10px; align-items: baseline; min-width: 0; }
-.my-title { margin: 0; font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
+/* The page of someone who signs in to see only their own tasks (app/my-tasks): the board's look. */
+.my-tasks { padding-top: 20px; }
+.my-intro { font-size: 14px; max-width: 520px; }
+.my-search { width: 180px; }
 .my-desc { margin: 0; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.my-from { margin: 0; font-size: 12.5px; }
-.my-empty { margin: 0; padding: 18px 16px; color: var(--muted); }
-.my-done { display: grid; gap: 10px; justify-items: start; }
-.my-done .my-list { width: 100%; }
+.my-facts { margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px 16px; }
+.my-facts dt { font-size: 12px; color: var(--muted); margin-bottom: 3px; }
+.my-facts dd { margin: 0; font-size: 14px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .chip.my-pri.p-high { background: var(--bad-soft); color: var(--bad); border-color: transparent; font-weight: 600; }
 .chip.my-pri.p-mid { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+@media (max-width: 640px) { .my-search { width: 100%; } }
 
 .tk-form { width: min(620px, 100%); max-height: calc(100vh - 32px); overflow: auto; display: grid; gap: 12px; padding: 18px; }
 .tk-form h3 { margin: 0; font-size: 17px; overflow-wrap: anywhere; }

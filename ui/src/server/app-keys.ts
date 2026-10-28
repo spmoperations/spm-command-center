@@ -15,6 +15,7 @@
 // nothing is saved. The settings the whole site needs stay where they are: the database address,
 // SECRETS_KEY, the owner's login, CRON_SECRET and the switches.
 import crypto from "node:crypto";
+import { TEAM_GOOGLE_DOMAIN } from "@/core/config";
 import type { Db } from "./db";
 import { OWNER_ID } from "./owner";
 import { seal, unseal } from "./secrets";
@@ -129,6 +130,9 @@ export function hostedProblem(provider: KeyProvider): string | null {
   if (provider === "anthropic" || provider === "slack" || !process.env.DATABASE_URL) return null;
   return setting(provider === "google" ? "GOOGLE_HOSTED" : "TELEGRAM_HOSTED").toLowerCase() === "true" ? null : offHere(provider);
 }
+
+/** The team's own Google Workspace (see core/config): a developer's machine can name its own with TEAM_GOOGLE_DOMAIN. */
+export const teamGoogleDomain = () => (setting("TEAM_GOOGLE_DOMAIN") || TEAM_GOOGLE_DOMAIN).toLowerCase();
 
 /** Why Google or Telegram is off on this server: it uses the hosted database and is not the live site. */
 export const offHere = (provider: "google" | "telegram") =>
