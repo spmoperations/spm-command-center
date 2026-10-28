@@ -132,6 +132,9 @@ export async function outboxSend(
         ? (await slack.call<{ channel: { id: string } }>("conversations.open", { users: item.target })).channel.id
         : item.target;
       const pictures = (item.pictures ?? []).filter((p): p is StoredPicture & { key: string } => isUploadKey(p.key));
+      // A message laid out with blocks is the dashboard's own, such as a task: its link (the task's
+      // name) is not followed by Slack's preview of the site. A reply someone typed keeps Slack's previews.
+      const laidOut = Boolean(item.details && "blocks" in item.details && item.details.blocks?.length);
       // A reply written under a thread goes into that thread, not to the top of the channel.
       const posted = pictures.length
         ? (await postWithPictures(db, ownerId, slack, channel, item, pictures), null)
@@ -140,7 +143,7 @@ export async function outboxSend(
             // The words are what a notification shows; the blocks, when there are some, are how the message looks.
             text: item.body,
             // Sent as a form, Slack takes the blocks written out as JSON.
-            ...(item.details && "blocks" in item.details && item.details.blocks?.length ? { blocks: JSON.stringify(item.details.blocks) } : {}),
+            ...(laidOut ? { blocks: JSON.stringify((item.details as { blocks: unknown[] }).blocks), unfurl_links: false, unfurl_media: false } : {}),
             ...(item.thread_ts ? { thread_ts: item.thread_ts } : {}),
           });
       await db.run("update outbox set status = 'sent', sent_at = $1, attempts = attempts + 1, last_error = null where owner_id = $3 and id = $2", [now, item.id, ownerId]);

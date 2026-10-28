@@ -20,7 +20,8 @@ import { slackDirectorySync, slackPictures, slackPull, slackReadThreads, wanted 
 import { taskSuggest } from "./task-suggest";
 
 /** What was sent to Slack without the layout: the words are checked in each test, the layout on its own. */
-const withoutLayout = (calls: [string, Record<string, unknown>][]) => calls.map(([method, params]) => [method, Object.fromEntries(Object.entries(params).filter(([key]) => key !== "blocks"))]);
+const LAYOUT = new Set(["blocks", "unfurl_links", "unfurl_media"]);
+const withoutLayout = (calls: [string, Record<string, unknown>][]) => calls.map(([method, params]) => [method, Object.fromEntries(Object.entries(params).filter(([key]) => !LAYOUT.has(key)))]);
 
 let db: Db;
 const ctx = (cursor: Record<string, unknown> = {}): JobContext => ({ db, ownerId: OWNER_ID, now: NOW, cursor });
@@ -785,6 +786,12 @@ describe("outbox", () => {
       ["chat.postMessage", { channel: "D1", text: "Swapping it today" }],
       ["conversations.open", { users: "ULUIS" }],
       ["chat.postMessage", { channel: "D-LUIS", text: "<@ULUIS> new task for you: Swap hook on Harbor clip 4\nDue Fri, Oct 9 · High priority · Harbor Realty\n\nPlease swap it." }],
+    ]);
+    // The task, laid out, comes without Slack's preview of a link; the typed reply keeps Slack's own way.
+    const posts = slack.calls.filter(([m]) => m === "chat.postMessage").map(([, p]) => p);
+    expect(posts.map((p) => [p.unfurl_links, p.unfurl_media])).toEqual([
+      [undefined, undefined],
+      [false, false],
     ]);
     expect(await db.query("select status, last_error from outbox order by created_at, to_name")).toEqual([
       { status: "sent", last_error: null },
