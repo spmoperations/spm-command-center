@@ -14,7 +14,7 @@ import { PRIORITY_NAME, REJECT_REASONS, SOURCE_NAME, TICKET_PREFIX, TICKET_STATU
 import { assignmentBlocks, assignmentText, CHANNEL_PICK, SLACK_PICK, ticketLink } from "@/core/delegation";
 import { isoDay, parseDay } from "@/core/dates";
 import { norm } from "@/core/rules";
-import type { Mode, Priority, ReviewItem, Source, SourceNote, Task, TaskSource, TeamPerson, TicketEvent, TicketInput, TicketStatus } from "@/core/types";
+import type { Mode, MyTask, Priority, ReviewItem, Source, SourceNote, Task, TaskSource, TeamPerson, TicketEvent, TicketInput, TicketStatus } from "@/core/types";
 import type { Db } from "./db";
 import { OWNER_ID } from "./owner";
 
@@ -700,6 +700,59 @@ async function setStatus(c: Ctx, taskId: string, status: TicketStatus): Promise<
     status,
     done,
     c.now.getTime(),
+  ]);
+}
+
+// ---------- For a task login ----------
+
+/** How long a ticket they finished stays on their page. */
+const DONE_SHOWN_DAYS = 14;
+
+/**
+ * The work tickets given to someone on the team list, for their own page (see task-logins.ts):
+ * the open ones, and those done in the last two weeks. Nothing about where a ticket came from.
+ */
+export async function memberTickets(db: Db, memberId: string, now = new Date()): Promise<MyTask[]> {
+  const rows = await db.query<Pick<TicketRow, "id" | "number" | "title" | "description" | "project" | "pri" | "due" | "done" | "done_at" | "status"> & { given_by: string | null }>(
+    `select t.id, t.number, t.title, t.description, t.project, t.pri, t.due, t.done, t.done_at, t.status,
+       (select e.by_name from ticket_events e where e.owner_id = t.owner_id and e.task_id = t.id and e.what like '%Assigned to %' order by e.at desc, e.id desc limit 1) as given_by
+     from tasks t where t.owner_id = $1 and t.delegated_to = $2 and t.mode = 'professional' and (not t.done or t.done_at > $3)
+     order by t.done, t.due, t.number, t.id limit 500`,
+    [TEAM, memberId, now.getTime() - DONE_SHOWN_DAYS * 86_400_000],
+  );
+  return rows.map((t) => ({
+    id: t.id,
+    ticket: ticketName(t.number),
+    title: t.title,
+    description: t.description ?? "",
+    client: t.project,
+    pri: t.pri,
+    due: t.due,
+    status: statusOf(t),
+    from: t.given_by || null,
+    doneAt: t.done_at == null ? null : Number(t.done_at),
+  }));
+}
+
+/** Someone on the team list moves one of their own tickets along the board. It goes in the ticket's history under their name. */
+export async function memberSetsStatus(db: Db, member: { id: string; name: string }, taskId: string, status: TicketStatus, now = new Date()): Promise<void> {
+  if (!TICKET_STATUSES.includes(status)) throw new Error("That is not a status on the board.");
+  const [t] = await db.query<Pick<TicketRow, "done" | "status">>("select done, status from tasks where owner_id = $1 and id = $2 and delegated_to = $3 and mode = 'professional' for update", [
+    TEAM,
+    String(taskId),
+    member.id,
+  ]);
+  if (!t) throw new Error("That task is no longer yours. Reload the page.");
+  if (statusOf(t) === status) return;
+  await setStatus({ db, ownerId: TEAM, now }, taskId, status);
+  // Not a login, so no `by_user`: the name says who.
+  await db.run("insert into ticket_events (id, owner_id, task_id, at, by_user, by_name, what) values ($1, $2, $3, $4, null, $5, $6)", [
+    eventId(),
+    TEAM,
+    taskId,
+    now.getTime(),
+    member.name,
+    `Status: ${TICKET_STATUS_NAME[status]}`,
   ]);
 }
 

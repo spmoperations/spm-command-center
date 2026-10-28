@@ -374,6 +374,32 @@ export interface Person {
   slackUserId?: string | null;
   /** Their Telegram account, so an assignment can reach them there too. */
   telegramId?: string | null;
+  /** How they sign in to see their own tasks. Shown to the owner only; absent when they cannot. */
+  taskLogin?: TaskLoginInfo;
+}
+
+/** Someone on the team list who signs in to see only their own tasks (see server/task-logins.ts). Never the password. */
+export interface TaskLoginInfo {
+  email: string;
+  /** False: Google only. */
+  password: boolean;
+  lastIn: number | null;
+}
+
+/** A ticket as the person it was given to sees it on their own page: nothing about where it came from. */
+export interface MyTask {
+  id: string;
+  /** Its name on the board, such as SPM-12. */
+  ticket: string;
+  title: string;
+  description: string;
+  client: string;
+  pri: Priority;
+  due: string;
+  status: TicketStatus;
+  /** Who gave it to them, when the history says. */
+  from: string | null;
+  doneAt: number | null;
 }
 
 /**

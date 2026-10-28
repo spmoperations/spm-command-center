@@ -79,7 +79,7 @@ export const THEME_KEY = "cc-theme";
  * Light or dark. Until it is pressed, the dashboard follows the computer's own setting; after
  * that it keeps the choice, in this browser.
  */
-function ThemeToggle() {
+export function ThemeToggle() {
   return (
     <button
       className="theme-btn"
@@ -213,9 +213,12 @@ function Chrome({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** The header, tabs and toast around every page. The login page stands alone. */
+/**
+ * The header, tabs and toast around every page. The login page stands alone, and so does the
+ * page of someone who signs in to see only their tasks: the dashboard's data is never read there.
+ */
 export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  if (pathname === "/login") return <>{children}</>;
+  if (pathname === "/login" || pathname === "/my-tasks") return <>{children}</>;
   return <Chrome>{children}</Chrome>;
 }

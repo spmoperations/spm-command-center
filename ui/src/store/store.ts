@@ -528,6 +528,12 @@ export const setTeamPassword = (id: string, name: string, password: string) => a
 export const turnOffTeamLogin = (id: string, name: string) => void act("turnOffTeamLogin", [id], `${name} can no longer sign in`);
 export const removeTeamLogin = (id: string, name: string) => void act("removeTeamLogin", [id], `${name}'s login and everything of theirs are removed`);
 
+// Task logins, the owner's alone: someone on the team list signs in to see only their own tasks.
+// An empty password means Google only. Resolves to true once it is saved.
+export const setTaskLogin = (personId: string, name: string, email: string, password: string) =>
+  act("setTaskLogin", [personId, email, password], `${name} can sign in to see their tasks${password ? "" : " with Google"}`);
+export const removeTaskLogin = (personId: string, name: string) => void act("removeTaskLogin", [personId], `${name} can no longer sign in`);
+
 export const togglePersonDept = (personId: string, dept: string) => void act("togglePersonDept", [personId, dept]);
 export const addHandle = (personId: string, handle: string) => void act("addHandle", [personId, handle]);
 export const removeHandle = (personId: string, index: number) => void act("removeHandle", [personId, index]);

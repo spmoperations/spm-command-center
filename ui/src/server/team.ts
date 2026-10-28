@@ -69,6 +69,8 @@ export async function signInAs(open: Opener, email: string, password: string): P
  * database: signing in once still lasts its week.
  */
 export async function ownerOfSession(open: Opener, session: Session): Promise<string | null> {
+  // A task login sees its own tickets on /my-tasks and nothing else (see task-logins.ts).
+  if (session.member) return null;
   if (!session.mark) return loginConfigured() && session.email.trim().toLowerCase() === process.env.LOGIN_EMAIL!.trim().toLowerCase() ? OWNER_ID : null;
   const login = await findLogin(await open(), session.email);
   if (!login || passwordMark(login.password_hash) !== session.mark) return null;

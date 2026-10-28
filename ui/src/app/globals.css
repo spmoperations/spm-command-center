@@ -568,6 +568,9 @@ a.btn:hover { color: var(--accent); }
 .login .btn[disabled] { opacity: 0.6; cursor: default; }
 .login-error { margin: 0; padding: 8px 12px; border-radius: 8px; background: var(--bad-soft); color: var(--bad); font-size: 13.5px; font-weight: 600; }
 .login-note { margin: 0; font-size: 12.5px; color: var(--muted); text-align: center; }
+.login-or { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--muted); }
+.login-or::before, .login-or::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.login .login-google { display: inline-flex; justify-content: center; align-items: center; gap: 10px; padding: 10px 12px; font-size: 15px; font-weight: 600; text-decoration: none; color: var(--ink); }
 
 /* A plain next step where a list would otherwise be empty */
 .hint-panel { padding: 18px 16px; color: var(--muted); font-size: 14.5px; }
@@ -915,6 +918,23 @@ select.f.tk-done { background: var(--good-soft); color: var(--good); }
 .tk-foot { display: flex; justify-content: space-between; font-size: 12px; }
 .tk-num { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
 
+/* The page of someone who signs in to see only their own tasks (app/my-tasks). */
+.my-tasks { display: grid; gap: 14px; padding-top: 20px; max-width: 760px; }
+.my-intro { margin: 0; font-size: 14px; }
+.my-list { display: grid; gap: 10px; }
+.my-card { display: grid; gap: 10px; padding: 14px 16px; min-width: 0; }
+.my-card.picked { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.my-card.done .my-title { color: var(--muted); text-decoration: line-through; }
+.my-card-top { display: flex; gap: 10px; align-items: baseline; min-width: 0; }
+.my-title { margin: 0; font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
+.my-desc { margin: 0; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.my-from { margin: 0; font-size: 12.5px; }
+.my-empty { margin: 0; padding: 18px 16px; color: var(--muted); }
+.my-done { display: grid; gap: 10px; justify-items: start; }
+.my-done .my-list { width: 100%; }
+.chip.my-pri.p-high { background: var(--bad-soft); color: var(--bad); border-color: transparent; font-weight: 600; }
+.chip.my-pri.p-mid { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+
 .tk-form { width: min(620px, 100%); max-height: calc(100vh - 32px); overflow: auto; display: grid; gap: 12px; padding: 18px; }
 .tk-form h3 { margin: 0; font-size: 17px; overflow-wrap: anywhere; }
 .tk-field { display: grid; gap: 4px; }
@@ -925,6 +945,11 @@ select.f.tk-done { background: var(--good-soft); color: var(--good); }
 .tk-history summary { cursor: pointer; font-size: 13px; font-weight: 600; }
 .tk-history ol { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13px; }
 .person-tg { margin-top: 6px; max-width: 260px; }
+.person-login, .person-login-set { margin-top: 8px; display: grid; gap: 6px; justify-items: start; font-size: 13px; max-width: 420px; }
+.person-login-set { justify-items: stretch; }
+.person-login-email { font-weight: 600; overflow-wrap: anywhere; }
+.person-login-hint { margin: 0; font-size: 12.5px; }
+.person-login-add { margin-top: 6px; font-size: 13px; }
 .client-pick { display: inline-flex; align-items: center; min-height: 32px; min-width: 0; }
 .client-pick input.f { width: 100%; min-width: 160px; }
 .tk-field .client-pick { display: flex; }

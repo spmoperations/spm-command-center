@@ -33,14 +33,18 @@ export function checkLogin(email: string, password: string): boolean {
   return emailOk && passwordOk;
 }
 
-/** Who a session is for. A team member's carries a mark of their password (see team.ts); the owner's has none. */
+/**
+ * Who a session is for. A team member's carries a mark of their password (see team.ts); the owner's has none.
+ * `member` is a task login's: someone on the team list who sees only their own tickets (see task-logins.ts).
+ */
 export interface Session {
   email: string;
   mark?: string;
+  member?: true;
 }
 
-export function createSession(email: string, now = Date.now(), mark?: string): string {
-  const payload = Buffer.from(JSON.stringify({ email, exp: now + SESSION_MS, ...(mark ? { mark } : {}) })).toString("base64url");
+export function createSession(email: string, now = Date.now(), mark?: string, member = false): string {
+  const payload = Buffer.from(JSON.stringify({ email, exp: now + SESSION_MS, ...(mark ? { mark } : {}), ...(member ? { member: true } : {}) })).toString("base64url");
   return `${payload}.${sign(payload).toString("base64url")}`;
 }
 
@@ -53,8 +57,10 @@ export function readSession(token: string | null | undefined, now = Date.now()):
     const given = Buffer.from(signature, "base64url");
     const expected = sign(payload);
     if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return null;
-    const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { email?: unknown; exp?: unknown; mark?: unknown };
+    const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { email?: unknown; exp?: unknown; mark?: unknown; member?: unknown };
     if (typeof data.email !== "string" || typeof data.exp !== "number" || data.exp <= now) return null;
+    // A task login's session is never anyone else's, even with a broken mark.
+    if (data.member === true) return typeof data.mark === "string" ? { email: data.email, mark: data.mark, member: true } : null;
     return typeof data.mark === "string" ? { email: data.email, mark: data.mark } : { email: data.email };
   } catch {
     return null;

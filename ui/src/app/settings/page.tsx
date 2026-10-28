@@ -11,8 +11,9 @@ import { PROVIDER_NAME } from "@/core/providers";
 import { ruleHits } from "@/core/rules";
 import type { JobSetting, Line, Person, Priority, Rule, Source, TeamLogin } from "@/core/types";
 import {
-  addHandle, addPerson, addRule, addTeamLogin, clearManualPriorities, deleteRule, moveRule, removeHandle, removePerson, runJobNow, setPersonTelegram,
-  removeTeamLogin, setChannelSelected, setImportant, setJobEnabled, setJobInterval, setTeamPassword, setTelegramSync, syncNow, toast, togglePersonDept, turnOffTeamLogin, useApp, type App, type RuleKind,
+  addHandle, addPerson, addRule, addTeamLogin, clearManualPriorities, deleteRule, moveRule, removeHandle, removePerson, removeTaskLogin, runJobNow, setPersonTelegram,
+  removeTeamLogin, setChannelSelected, setImportant, setJobEnabled, setJobInterval, setTaskLogin, setTeamPassword, setTelegramSync, syncNow, toast, togglePersonDept, turnOffTeamLogin, useApp,
+  type App, type RuleKind,
 } from "@/store/store";
 
 function IntervalInput({ setting }: { setting: JobSetting }) {
@@ -308,8 +309,86 @@ function Important({ app }: { app: App }) {
   );
 }
 
+/**
+ * How someone on the team list signs in to see only their own tasks, and nothing else of the
+ * dashboard (see server/task-logins.ts). The owner's alone.
+ */
+function TaskLoginEdit({ p, now }: { p: Person; now: number }) {
+  const login = p.taskLogin;
+  const [editing, setEditing] = useState(false);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const edit = () => {
+    setEmail(login?.email ?? "");
+    setPassword("");
+    setEditing(true);
+  };
+  const save = async () => {
+    if (!email.trim()) return toast("Write the email they sign in with");
+    if (password && password.length < MIN_PASSWORD) return toast(`The password needs at least ${MIN_PASSWORD} characters, or none for Google only`);
+    if (await setTaskLogin(p.id, p.name, email, password)) {
+      setEditing(false);
+      setPassword("");
+    }
+  };
+  if (editing) {
+    return (
+      <div className="person-login-set">
+        <input className="f" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Their email" aria-label={`The email ${p.name} signs in with`} autoComplete="off" />
+        <div className="login-pass-set">
+          <input className="f" type="text" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password, or empty for Google only" aria-label={`${p.name}'s password`} autoComplete="off" spellCheck={false} />
+          <button className="linkbtn" onClick={() => setPassword(madePassword())}>
+            Make one
+          </button>
+        </div>
+        <p className="muted person-login-hint">
+          If the email is a Google account, such as a Social Profit Media one, they can use Sign in with Google. Give anyone else a password, and send it to them yourself.
+          {login && " Saving signs them out everywhere."}
+        </p>
+        <div className="login-acts">
+          <button className="btn primary" onClick={() => void save()}>
+            Save
+          </button>
+          <button className="linkbtn" onClick={() => setEditing(false)}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+  if (!login) {
+    return (
+      <button className="linkbtn person-login-add" onClick={edit}>
+        Let them sign in to see their tasks
+      </button>
+    );
+  }
+  return (
+    <div className="person-login">
+      <span className="chip good">Sees their tasks</span>
+      <span className="person-login-email">{login.email}</span>
+      <span className="muted">
+        {login.password ? "Password or Google" : "Google only"} · {login.lastIn ? `signed in ${ago(login.lastIn, now)} ago` : "not signed in yet"}
+      </span>
+      <span className="login-acts">
+        <button className="linkbtn" onClick={edit}>
+          Change
+        </button>
+        <button
+          className="linkbtn danger"
+          onClick={() => {
+            if (window.confirm(`${p.name} will no longer be able to sign in. Their tasks stay on the board.`)) removeTaskLogin(p.id, p.name);
+          }}
+        >
+          Remove
+        </button>
+      </span>
+    </div>
+  );
+}
+
 /** `telegram` is the signed-in person's Telegram chats: an assignment goes from their own account, to someone in them. */
-function PersonRow({ p, telegram }: { p: Person; telegram: { id: string; name: string }[] }) {
+function PersonRow({ p, telegram, owner, now }: { p: Person; telegram: { id: string; name: string }[]; owner: boolean; now: number }) {
   const [handle, setHandle] = useState("");
   return (
     <tr>
@@ -331,6 +410,7 @@ function PersonRow({ p, telegram }: { p: Person; telegram: { id: string; name: s
             />
           </div>
         )}
+        {owner && <TaskLoginEdit p={p} now={now} />}
       </td>
       {DEPARTMENTS && (
         <td>
@@ -519,6 +599,7 @@ function Team({ app }: { app: App }) {
       </div>
       <p className="set-intro">
         The people you assign work to. {DEPARTMENTS ? "When you assign a task, people in its department are offered first, and anyone" : "When you assign a task, anyone"} whose responsibilities match the task is marked as the best fit. You can also assign to anyone on Slack; they are added here the first time. Pick each person&apos;s Slack account, and their Telegram if they use it, so an assigned task can reach them. The list is the team&apos;s: everyone with a login assigns from it.
+        {app.state.me.isOwner && " You can also let someone sign in here to see only the tasks given to them: with Google, or with an email and password."}
       </p>
       <div className="table-scroll">
         <table className="set">
@@ -532,7 +613,7 @@ function Team({ app }: { app: App }) {
           </thead>
           <tbody>
             {app.state.team.map((p) => (
-              <PersonRow key={p.id} p={p} telegram={app.state.telegramPeople} />
+              <PersonRow key={p.id} p={p} telegram={app.state.telegramPeople} owner={app.state.me.isOwner} now={app.now.getTime()} />
             ))}
           </tbody>
         </table>

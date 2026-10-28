@@ -1,6 +1,9 @@
+import { connection } from "next/server";
 import { failed, fromDashboard, refused, sameSite } from "@/server/http";
 import { ready } from "@/server/boot";
+import { googleSignInOffered } from "@/server/google-sign-in";
 import { clearFailures, createSession, isHttps, lockedFor, loginConfigured, recordFailure, sessionCookie } from "@/server/session";
+import { memberByPassword, signedInNow } from "@/server/task-logins";
 import { signInAs } from "@/server/team";
 
 type Problem = "setup" | "locked" | "wrong";
@@ -26,17 +29,32 @@ export async function POST(request: Request) {
   if (Math.max(lockedFor(caller), lockedFor("everyone")) > 0) return no("locked");
   try {
     const { email, password } = (plainForm ? Object.fromEntries(await request.formData()) : await request.json()) as { email?: unknown; password?: unknown };
-    // The owner's login (LOGIN_EMAIL) or a team member's.
-    const who = typeof email === "string" && typeof password === "string" ? await signInAs(ready, email, password) : null;
-    if (!who || typeof email !== "string") {
+    // The owner's login (LOGIN_EMAIL) or a team member's; else someone on the team list who sees only their tasks.
+    const given = typeof email === "string" && typeof password === "string" ? { email, password } : null;
+    const who = given ? await signInAs(ready, given.email, given.password) : null;
+    const member = given && !who ? await memberByPassword(await ready(), given.email, given.password) : null;
+    if (!given || (!who && !member)) {
       recordFailure(caller);
       recordFailure("everyone");
       return no("wrong");
     }
     clearFailures(caller);
-    const cookie = { "Set-Cookie": sessionCookie(createSession(email.trim().toLowerCase(), Date.now(), who.mark), isHttps(request)) };
-    return plainForm ? new Response(null, { status: 303, headers: { Location: "/", ...cookie } }) : Response.json({ ok: true }, { headers: cookie });
+    if (member) await signedInNow(await ready(), member.member.id, Date.now());
+    const session = member ? createSession(member.member.email, Date.now(), member.mark, true) : createSession(given.email.trim().toLowerCase(), Date.now(), who!.mark);
+    const cookie = { "Set-Cookie": sessionCookie(session, isHttps(request)) };
+    return plainForm ? new Response(null, { status: 303, headers: { Location: member ? "/my-tasks" : "/", ...cookie } }) : Response.json({ ok: true }, { headers: cookie });
   } catch (error) {
     return failed(error);
+  }
+}
+
+/** What the login page offers besides the email and password: Sign in with Google, where it is set up. */
+export async function GET() {
+  // Read when asked, never when the site is built.
+  await connection();
+  try {
+    return Response.json({ google: await googleSignInOffered(await ready()) }, { headers: { "cache-control": "no-store" } });
+  } catch {
+    return Response.json({ google: false });
   }
 }

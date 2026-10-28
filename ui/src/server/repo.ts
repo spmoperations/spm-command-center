@@ -18,6 +18,7 @@ import { hostedProblem, keysOnScreen } from "./app-keys";
 import { disconnectGoogle, googleAccounts, googleBlocked, googleCan } from "./google";
 import { isUploadKey, telegramAvatarIds, type StoredPicture } from "./media";
 import { SLACK_FILES_SCOPE, SLACK_NEEDS_UPLOAD, SLACK_UPLOAD_SCOPE, type Fetch } from "./slack";
+import { emailInUse, TASK_LOGIN_ACTIONS, taskLogins } from "./task-logins";
 import { hashPassword, MIN_PASSWORD, teamLogins } from "./team";
 import { telegramBlocked } from "./telegram";
 import { insertTicket, logEvent, mayTellOnSlack, reviewItems, setAsideItems, sourceNote, TEAM, teamClients, teamPeople, teamSlack, teamTickets, teamUsersSql, ticketName, TICKET_ACTIONS } from "./tickets";
@@ -393,6 +394,7 @@ export async function stateStamps(db: Db, ownerId: string, now = new Date()): Pr
          ${rowsHash("g", `from suggestions g where g.owner_id in (${teamUsersSql("$2")})`)},
          ${rowsHash("row(o.id, o.status, o.body, o.to_name, o.ctx, o.created_at, o.conversation_id, o.task_id, o.after_id)", "from outbox o where o.owner_id = $1")},
          ${rowsHash("p", "from team_members p where p.owner_id = $2")},
+         ${rowsHash("row(l.member_id, l.email, l.password_hash is null, l.since, l.last_in)", "from task_logins l where l.owner_id = $2")},
          ${rowsHash("n", "from clients n where n.owner_id = $2")},
          ${rowsHash("row(x.provider, x.label, x.connected_at, x.scopes)", "from connections x where x.owner_id = $1")},
          ${rowsHash("row(a.email, a.scopes, a.connected_at)", "from google_accounts a where a.owner_id = $1")},
@@ -530,6 +532,8 @@ async function readState(db: Db, ownerId: string, now: Date, open: string | null
   ]);
 
   const people = await teamPeople(db);
+  // How each person on the team list signs in to see their tasks: for the owner only.
+  const signIns = ownerId === OWNER_ID ? await taskLogins(db) : null;
   const logs: AppState["logs"] = {};
   for (const l of logRows) (logs[l.metric_id] ??= {})[Number(l.day.slice(8))] = Number(l.value);
   const board = (): FocusBoard => ({ day: {}, week: {} });
@@ -570,7 +574,7 @@ async function readState(db: Db, ownerId: string, now: Date, open: string | null
     })),
     meetings,
     calendar,
-    team: team.map((p): Person => ({ id: p.id, name: p.name, role: p.role, depts: p.depts ?? [], handles: p.handles ?? [], slackUserId: p.slack_user_id, telegramId: p.telegram_id })),
+    team: team.map((p): Person => ({ id: p.id, name: p.name, role: p.role, depts: p.depts ?? [], handles: p.handles ?? [], slackUserId: p.slack_user_id, telegramId: p.telegram_id, ...(signIns?.has(p.id) ? { taskLogin: signIns.get(p.id) } : {}) })),
     projects: projects.map((p) => p.project),
     labelRules,
     priorityRules,
@@ -1142,9 +1146,9 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
     if (!who) throw new Error("Write their name.");
     if (!isEmailAddress(address)) throw new Error("That email address does not look right.");
     if (secret.length < MIN_PASSWORD) throw new Error(`The password needs at least ${MIN_PASSWORD} characters.`);
-    if (address === (process.env.LOGIN_EMAIL ?? "").trim().toLowerCase()) throw new Error("That is your own login.");
-    const [taken] = await c.db.query<{ id: string }>("select id from users where lower(login_email) = $1", [address]);
-    if (taken) throw new Error("Someone already signs in with that email.");
+    // Not the owner's own, nor anyone else's, a task login's among them.
+    const taken = await emailInUse(c.db, address);
+    if (taken) throw new Error(taken);
     const id = uid("u");
     await c.db.run("insert into users (id, name, email, login_email, password_hash, created_at) values ($1, $2, $3, $3, $4, $5)", [id, who, address, hashPassword(secret), c.now.getTime()]);
     // Their own checks, timers and starting rules, as the owner had on their first start.
@@ -1279,6 +1283,7 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
 
   // The board and the review, shared by the team.
   ...TICKET_ACTIONS,
+  ...TASK_LOGIN_ACTIONS,
 };
 
 export async function applyAction(db: Db, type: string, args: unknown[], ownerId = OWNER_ID, now = new Date()): Promise<void> {
