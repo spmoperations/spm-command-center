@@ -264,52 +264,29 @@ describe("a login told on Slack", () => {
     expect((await outbox()).map((o) => [o.owner_id, o.target])).toEqual([[alex, "ULUIS"]]);
   });
 
-  it("lays the Slack message out, with a link to the ticket only for someone who can sign in", async () => {
+  it("lays the Slack message out, with the task's name linked to it for everyone told", async () => {
     process.env.SITE_URL = "https://board.example.com";
     try {
       await slackFor(OWNER_ID);
       await db.run("update users set slack_user_id = 'UALEX' where id = $1", [alex]);
       await act(OWNER_ID, "createTicket", ticket({ assignee: `user:${alex}`, notify: ["slack"], client: "Harbor Realty" }));
+      // Luis has no login of any kind: the link takes him to sign in, and to the ticket once he can.
       await act(OWNER_ID, "createTicket", ticket({ title: "Cut the trailer", assignee: "member:u_luis", notify: ["slack"] }));
       const rows = await db.query<{ target: string; details: { blocks: { type: string; text?: { text: string }; elements?: { text: string }[] }[] } }>("select target, details from outbox order by created_at, id");
       const facts = (target: string) => rows.find((r) => r.target === target)!.details.blocks.at(-1)!.elements![0].text;
-      expect(rows.find((r) => r.target === "UALEX")!.details.blocks[0].text!.text).toBe("<@UALEX> *New task for you*");
       const task = (target: string) => rows.find((r) => r.target === target)!.details.blocks[1].text!.text;
+      expect(rows.find((r) => r.target === "UALEX")!.details.blocks[0].text!.text).toBe("<@UALEX> *New task for you*");
       expect(facts("UALEX")).toMatch(/^\*SPM-\d+\*  ·  Due \*Sat, Oct 10\*  ·  Medium priority  ·  Harbor Realty$/);
-      // The task's name is its link.
       expect(task("UALEX")).toMatch(/^\*<https:\/\/board\.example\.com\/tasks\?task=SPM-\d+\|Chase the invoices>\*$/);
-      // Luis cannot sign in: no link.
-      expect(task("ULUIS")).toBe("*Cut the trailer*");
+      expect(task("ULUIS")).toMatch(/^\*<https:\/\/board\.example\.com\/tasks\?task=SPM-\d+\|Cut the trailer>\*$/);
     } finally {
       delete process.env.SITE_URL;
     }
-  });
-
-  it("sends the link to someone on the team list who can sign in to see their tasks", async () => {
-    process.env.SITE_URL = "https://board.example.com";
-    process.env.TEAM_GOOGLE_DOMAIN = "team.example.com";
-    try {
-      await slackFor(OWNER_ID);
-      const linked = async (title: string) => {
-        await act(OWNER_ID, "createTicket", ticket({ title, assignee: "member:u_luis", notify: ["slack"] }));
-        const [row] = await db.query<{ details: { blocks: { text?: { text: string } }[] } }>("select details from outbox where body like $1", [`%${title}%`]);
-        return new RegExp(`^\\*<https://board\\.example\\.com/tasks\\?task=SPM-\\d+\\|${title}>\\*$`).test(row.details.blocks[1].text!.text);
-      };
-      // Not yet: no task login, and his Slack account is not on the team's Google Workspace.
-      await db.run("insert into slack_users (owner_id, id, name, email) values ($1, 'ULUIS', 'Luis Ramos', 'luis@elsewhere.example.com')", [OWNER_ID]);
-      expect(await linked("First")).toBe(false);
-      // His Slack account's address is the team's Workspace: he signs in with Google.
-      await db.run("update slack_users set email = 'Luis@Team.Example.com' where id = 'ULUIS'");
-      expect(await linked("Second")).toBe(true);
-      // Or the owner gave him a login.
-      await db.run("update slack_users set email = null where id = 'ULUIS'");
-      expect(await linked("Third")).toBe(false);
-      await act(OWNER_ID, "setTaskLogin", "u_luis", "luis@elsewhere.example.com", "a long enough password");
-      expect(await linked("Fourth")).toBe(true);
-    } finally {
-      delete process.env.SITE_URL;
-      delete process.env.TEAM_GOOGLE_DOMAIN;
-    }
+    // Where the site's address is not known, such as on a developer's machine, the name is plain.
+    await db.run("delete from outbox");
+    await act(OWNER_ID, "createTicket", ticket({ title: "Plain", assignee: "member:u_luis", notify: ["slack"] }));
+    const [plain] = await db.query<{ details: { blocks: { text?: { text: string } }[] } }>("select details from outbox");
+    expect(plain.details.blocks[1].text!.text).toBe("*Plain*");
   });
 
   it("leaves out why the dashboard found the task, and keeps what a person wrote", async () => {

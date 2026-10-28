@@ -87,8 +87,8 @@ export type SlackBlock = { type: "section"; text: { type: "mrkdwn"; text: string
 /**
  * The same message as `assignmentText`, laid out for Slack: the tag and "New task for you" on
  * the first line, the task in bold with its note under it, then one quiet line with its number,
- * when it is due, how much it matters and what it belongs to. For someone who can sign in, the
- * task's name is the link to it. `tag` is Slack's <@id>, or a name; `ticket` is its number, such as SPM-23.
+ * when it is due, how much it matters and what it belongs to. With `link`, the task's name is the
+ * link to it. `tag` is Slack's <@id>, or a name; `ticket` is its number, such as SPM-23.
  */
 export function assignmentBlocks(o: { tag: string; title: string; ticket?: string; due: string; note: string; pri?: Priority; project?: string; link?: string }): SlackBlock[] {
   const due = parseDay(o.due).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
