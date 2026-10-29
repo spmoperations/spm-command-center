@@ -9,7 +9,7 @@ import { requestSummary } from "@/core/requests";
 import { applyRules } from "@/core/rules";
 import type {
   AddedPicture, AppState, Conversation, ConversationChange, FocusBoard, HeavyPart, JobId, JobStatus, Meeting, MessagePicture, Metric, Mode, Person, Priority, Provider, Reaction, Rule, Source, Stamps,
-  StateAnswer, StatePart, StateUpdate, Suggestion, CalendarItem, TaskLine, HeavyUpdate,
+  StateAnswer, StatePart, StateUpdate, Suggestion, CalendarItem, TaskLine, HeavyUpdate, Channel, OwnerChats,
 } from "@/core/types";
 import { aiConfigured } from "./ai";
 import { emailTags, type TaggedEmail } from "@/core/email-tags";
@@ -481,6 +481,36 @@ export function stampsFrom(value: unknown): Partial<Stamps> | null {
   return have;
 }
 
+/** Someone's public and private Slack channels, as Settings lists them. */
+const slackChannelsOf = (db: Db, who: string) =>
+  db.query<Channel>("select id, name, kind, selected from slack_channels where owner_id = $1 and kind in ('public', 'private') order by name", [who]);
+
+/** The people in someone's copy of Slack, apps and people who have left aside. */
+const slackPeopleOf = (db: Db, who: string) => db.query<{ id: string; name: string }>("select id, name from slack_users where owner_id = $1 and not is_bot and not deleted order by name", [who]);
+
+/** Someone's Telegram chats, and whether each is ticked to come in. */
+const telegramChatsOf = async (db: Db, who: string): Promise<OwnerChats["telegramChats"]> =>
+  (
+    await db.query<{ id: string; name: string; kind: "group" | "channel" | "direct"; synced: boolean; last_at: number | null }>(
+      "select id, name, kind, synced, last_at from telegram_chats where owner_id = $1 order by lower(name)",
+      [who],
+    )
+  ).map((c) => ({ id: c.id, name: c.name, kind: c.kind, synced: c.synced, lastAt: c.last_at == null ? null : Number(c.last_at) }));
+
+/** The people of someone's one-to-one Telegram chats, and whoever wrote in a group, each once under their latest name. */
+const telegramPeopleOf = async (db: Db, who: string) =>
+  (
+    await db.query<{ id: string; name: string }>(
+      `select distinct on (id) id, name from (
+         select c.external_id as id, c.from_name as name, c.last_at as at from conversations c where c.owner_id = $1 and c.source = 'telegram' and c.direct
+         union all
+         select m.sender_id, m.sender_name, m.at from messages m join conversations c on c.owner_id = m.owner_id and c.id = m.conversation_id
+         where c.owner_id = $1 and c.source = 'telegram' and not m.me and m.sender_id is not null
+       ) p order by id, at desc`,
+      [who],
+    )
+  ).sort((a, b) => a.name.localeCompare(b.name));
+
 /** The big parts not in `skip`, read alone. */
 async function heavyParts(db: Db, ownerId: string, open: string | null, skip: Set<HeavyPart>, stamps: Stamps): Promise<HeavyUpdate> {
   const [inbox, meetings, calendar] = await Promise.all([
@@ -523,6 +553,7 @@ async function readState(db: Db, ownerId: string, now: Date, open: string | null
     telegramChats,
     telegramPeople,
     jobStatus,
+    ownerChats,
   ] = await Promise.all([
     db.query<{ name: string }>("select name from users where id = $1", [ownerId]),
     loadRules(db, ownerId),
@@ -545,8 +576,8 @@ async function readState(db: Db, ownerId: string, now: Date, open: string | null
     ),
     db.query<{ job_id: JobId; interval_min: number; enabled: boolean }>("select job_id, interval_min, enabled from jobs where owner_id = $1", [ownerId]),
     db.query<{ provider: Provider; label: string | null; connected_at: number; scopes: string | null }>("select provider, label, connected_at, scopes from connections where owner_id = $1", [ownerId]),
-    db.query<{ id: string; name: string; kind: "public" | "private"; selected: boolean }>("select id, name, kind, selected from slack_channels where owner_id = $1 and kind in ('public', 'private') order by name", [ownerId]),
-    db.query<{ id: string; name: string }>("select id, name from slack_users where owner_id = $1 and not is_bot and not deleted order by name", [ownerId]),
+    slackChannelsOf(db, ownerId),
+    slackPeopleOf(db, ownerId),
     // Apps and people who have left come first, so someone current with the same name wins.
     db.query<{ name: string; image: string }>("select name, image from slack_users where owner_id = $1 and image <> '' order by (not deleted) asc, (not is_bot) asc", [ownerId]),
     db.query<{ project: string }>(
@@ -560,25 +591,15 @@ async function readState(db: Db, ownerId: string, now: Date, open: string | null
     db.query<{ source: "slack" | "telegram"; kind: "chat" | "person"; external_id: string; name: string }>("select source, kind, external_id, name from important where owner_id = $1 order by lower(name)", [ownerId]),
     // Agency, Consulting or Sales: the team's picks, whoever made them.
     db.query<{ source: "slack" | "telegram"; kind: "chat" | "person"; external_id: string; name: string; line: TaskLine }>("select source, kind, external_id, name, line from chat_lines where owner_id = $1 order by lower(name)", [TEAM]),
-    telegramHere
-      ? db.query<{ id: string; name: string; kind: "group" | "channel" | "direct"; synced: boolean; last_at: number | null }>(
-          "select id, name, kind, synced, last_at from telegram_chats where owner_id = $1 order by lower(name)",
-          [ownerId],
-        )
-      : Promise.resolve([]),
-    telegramHere
-      ? db.query<{ id: string; name: string }>(
-          // The people of the one-to-one chats, and whoever wrote in a group, each once under their latest name.
-          `select distinct on (id) id, name from (
-             select c.external_id as id, c.from_name as name, c.last_at as at from conversations c where c.owner_id = $1 and c.source = 'telegram' and c.direct
-             union all
-             select m.sender_id, m.sender_name, m.at from messages m join conversations c on c.owner_id = m.owner_id and c.id = m.conversation_id
-             where c.owner_id = $1 and c.source = 'telegram' and not m.me and m.sender_id is not null
-           ) p order by id, at desc`,
-          [ownerId],
-        )
-      : Promise.resolve([]),
+    telegramHere ? telegramChatsOf(db, ownerId) : Promise.resolve([]),
+    telegramHere ? telegramPeopleOf(db, ownerId) : Promise.resolve([]),
     loadJobStatus(db, ownerId),
+    // What everyone picks Agency, Consulting or Sales from: the owner's own lists, which the owner has already.
+    ownerId === TEAM
+      ? Promise.resolve(null)
+      : Promise.all([slackChannelsOf(db, TEAM), slackPeopleOf(db, TEAM), telegramHere ? telegramChatsOf(db, TEAM) : [], telegramHere ? telegramPeopleOf(db, TEAM) : []]).then(
+          ([channels, slackPeople, telegramChats, telegramPeople]): OwnerChats => ({ channels, slackPeople, telegramChats, telegramPeople }),
+        ),
   ]);
 
   const people = await teamPeople(db);
@@ -650,8 +671,9 @@ async function readState(db: Db, ownerId: string, now: Date, open: string | null
     slackPeople,
     important: importantRows.map((r) => ({ source: r.source, kind: r.kind, id: r.external_id, name: r.name })),
     chatLines: chatLineRows.map((r) => ({ source: r.source, kind: r.kind, id: r.external_id, name: r.name, line: r.line })),
-    telegramChats: telegramChats.map((c) => ({ id: c.id, name: c.name, kind: c.kind, synced: c.synced, lastAt: c.last_at == null ? null : Number(c.last_at) })),
-    telegramPeople: telegramPeople.sort((a, b) => a.name.localeCompare(b.name)),
+    ownerChats,
+    telegramChats,
+    telegramPeople,
     avatars: Object.fromEntries(pictures.map((p) => [p.name, p.image])),
     owner: { name: owner?.name ?? "You" },
     me: { id: ownerId, isOwner: ownerId === OWNER_ID },

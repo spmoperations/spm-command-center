@@ -505,6 +505,14 @@ export interface Channel {
   selected: boolean;
 }
 
+/** Someone's Slack channels and people and Telegram chats and people, as Settings lists them. */
+export interface OwnerChats {
+  channels: Channel[];
+  slackPeople: { id: string; name: string }[];
+  telegramChats: { id: string; name: string; kind: "group" | "channel" | "direct"; synced: boolean; lastAt: number | null }[];
+  telegramPeople: { id: string; name: string }[];
+}
+
 export interface JobStatus {
   lastRunAt: number | null;
   ok: boolean | null;
@@ -556,6 +564,11 @@ export interface AppState {
   important: ImportantPick[];
   /** The team's picks of Agency, Consulting or Sales for chats and people (see `ChatLine`). */
   chatLines: ChatLine[];
+  /**
+   * The owner's Slack channels and people and Telegram groups and people: what everyone picks
+   * Agency, Consulting or Sales from. Sent to a team login; the owner has them as their own lists.
+   */
+  ownerChats: OwnerChats | null;
   /** The Telegram groups and channels, and the people, there are to tick. Empty where Telegram is not used. */
   /** The connected Telegram account's chats, and whether each is ticked to come in (see jobs/telegram.ts). */
   telegramChats: { id: string; name: string; kind: "group" | "channel" | "direct"; synced: boolean; lastAt: number | null }[];

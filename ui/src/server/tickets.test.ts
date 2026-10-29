@@ -462,6 +462,19 @@ describe("Agency, Consulting or Sales", () => {
     expect(await refused(alex, "setChatLine", "gmail", "chat", "C1", "#sales", "sales")).toBe("That is not a chat or a person.");
   });
 
+  it("are picked from the owner's channels and people, by Alex too, while everything else shows Alex her own", async () => {
+    await db.run("insert into slack_channels (owner_id, id, name, kind) values ($1, 'C_OPS', 'ops', 'public'), ($2, 'C_ALEX', 'alex-only', 'public')", [OWNER_ID, alex]);
+    await db.run("insert into slack_users (owner_id, id, name) values ($1, 'UMAYA', 'Maya Chen'), ($2, 'UALEXFRIEND', 'Alex Friend')", [OWNER_ID, alex]);
+    const state = await loadState(db, alex, now);
+    const hers = state.ownerChats!;
+    expect([hers.channels.map((c) => c.id), hers.slackPeople.map((p) => p.id)]).toEqual([["C_OPS"], ["UMAYA"]]);
+    // Everywhere else (Important, Channels, the team list's pickers) she has her own lists.
+    expect([state.channels.map((c) => c.id), state.slackPeople.map((p) => p.id)]).toEqual([["C_ALEX"], ["UALEXFRIEND"]]);
+    // The owner picks from their own lists, which they already have.
+    const his = await loadState(db, OWNER_ID, now);
+    expect([his.ownerChats, his.channels.map((c) => c.id)]).toEqual([null, ["C_OPS"]]);
+  });
+
   it("label a task with its chat's line, those made before the pick too, and the review card before it is a task", async () => {
     await suggestion("s_sales", { title: "Send Priya the call notes", src: ["message", "slack:C1"], key: "ask:slack:C1:1.0" });
     expect((await loadState(db, alex, now)).review.find((g) => g.id === "s_sales")?.line).toBeNull();
