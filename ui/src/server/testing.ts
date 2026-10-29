@@ -64,6 +64,18 @@ export async function reset(db: Db): Promise<void> {
 
 export const NOW = Date.parse("2026-10-08T12:00:00Z");
 
+/**
+ * The suggestions the checks made for someone, as the database keeps them, newest first. What the
+ * tests look at: the screens get only those they show (the review, and a call's on the Meetings page).
+ */
+export async function suggestionsIn(db: Db, ownerId = OWNER_ID) {
+  const rows = await db.query<{ id: string; title: string; mode: string; dept: string; project: string; pri: string; due: string; why: string; status: string; src_type: string | null; src_id: string | null }>(
+    "select id, title, mode, dept, project, pri, due, why, status, src_type, src_id from suggestions where owner_id = $1 order by created_at desc, id",
+    [ownerId],
+  );
+  return rows.map(({ src_type, src_id, ...g }) => ({ ...g, src: src_type && src_id ? { type: src_type, id: src_id } : null }));
+}
+
 /** Two conversations, a teammate and a task: enough for the actions to work on. */
 export async function seed(db: Db): Promise<void> {
   await db.run("insert into team_members (id, owner_id, name, role, depts, handles, slack_user_id) values ('u_luis', $1, 'Luis Ramos', 'Lead editor', '[\"Client Sales\"]', '[\"Hooks\"]', 'ULUIS')", [OWNER_ID]);

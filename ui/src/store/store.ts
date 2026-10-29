@@ -492,10 +492,16 @@ export const loadTranscript = async (id: string) => (await request<{ transcript:
 
 export type FocusScope = "day" | "week";
 export const addFocus = (scope: FocusScope, key: string, text: string) => void act("addFocus", [scope, key, text, ui.mode]);
-export const toggleFocus = (scope: FocusScope, key: string, id: string, done: boolean) => void act("toggleFocus", [scope, key, id, done]);
-export const removeFocus = (scope: FocusScope, key: string, id: string) => void act("removeFocus", [scope, key, id]);
+/** One period's focus items changed at once, on both sides of the dashboard. */
+const inFocus = (scope: FocusScope, key: string, change: (items: AppState["focus"]["professional"]["day"][string]) => AppState["focus"]["professional"]["day"][string]) => (s: AppState): AppState => ({
+  ...s,
+  focus: Object.fromEntries(Object.entries(s.focus).map(([mode, board]) => [mode, { ...board, [scope]: { ...board[scope], [key]: change(board[scope][key] ?? []) } }])) as AppState["focus"],
+});
+export const toggleFocus = (scope: FocusScope, key: string, id: string, done: boolean) =>
+  void act("toggleFocus", [scope, key, id, done], undefined, inFocus(scope, key, (items) => items.map((f) => (f.id === id ? { ...f, done } : f))));
+export const removeFocus = (scope: FocusScope, key: string, id: string) => void act("removeFocus", [scope, key, id], undefined, inFocus(scope, key, (items) => items.filter((f) => f.id !== id)));
 export const addLink = (label: string, url: string) => void act("addLink", [label, url, ui.mode], "Link added");
-export const removeLink = (id: string) => void act("removeLink", [id]);
+export const removeLink = (id: string) => void act("removeLink", [id], undefined, (s) => ({ ...s, links: s.links.filter((l) => l.id !== id) }));
 
 // ---------- Targets ----------
 
@@ -532,14 +538,22 @@ export const removeTeamLogin = (id: string, name: string) => void act("removeTea
 // An empty password means Google only. Resolves to true once it is saved.
 export const setTaskLogin = (personId: string, name: string, email: string, password: string) =>
   act("setTaskLogin", [personId, email, password], `${name} can sign in to see their tasks${password ? "" : " with Google"}`);
-export const removeTaskLogin = (personId: string, name: string) => void act("removeTaskLogin", [personId], `${name} can no longer sign in`);
+/** One person on the team list changed at once. */
+const inTeam = (personId: string, change: (p: Person) => Person | null) => (s: AppState): AppState => ({
+  ...s,
+  team: s.team.flatMap((p) => (p.id === personId ? (change(p) ?? []) : [p])),
+});
+export const removeTaskLogin = (personId: string, name: string) =>
+  void act("removeTaskLogin", [personId], `${name} can no longer sign in`, inTeam(personId, (p) => ({ ...p, taskLogin: undefined })));
 
-export const togglePersonDept = (personId: string, dept: string) => void act("togglePersonDept", [personId, dept]);
+export const togglePersonDept = (personId: string, dept: string) =>
+  void act("togglePersonDept", [personId, dept], undefined, inTeam(personId, (p) => ({ ...p, depts: p.depts.includes(dept) ? p.depts.filter((d) => d !== dept) : [...p.depts, dept] })));
 export const addHandle = (personId: string, handle: string) => void act("addHandle", [personId, handle]);
-export const removeHandle = (personId: string, index: number) => void act("removeHandle", [personId, index]);
+export const removeHandle = (personId: string, index: number) => void act("removeHandle", [personId, index], undefined, inTeam(personId, (p) => ({ ...p, handles: p.handles.filter((_, k) => k !== index) })));
 export const addPerson = (input: Omit<Person, "id">) => void act("addPerson", [input], `Added ${input.name}`);
-export const removePerson = (personId: string) => void act("removePerson", [personId], "Removed");
-export const setPersonTelegram = (personId: string, telegramId: string) => void act("setPersonTelegram", [personId, telegramId], telegramId ? "Telegram linked" : "Telegram taken away");
+export const removePerson = (personId: string) => void act("removePerson", [personId], "Removed", inTeam(personId, () => null));
+export const setPersonTelegram = (personId: string, telegramId: string) =>
+  void act("setPersonTelegram", [personId, telegramId], telegramId ? "Telegram linked" : "Telegram taken away", inTeam(personId, (p) => ({ ...p, telegramId: telegramId || null })));
 
 export type RuleKind = "labelRules" | "priorityRules";
 export const addRule = (kind: RuleKind, rule: Omit<Rule, "id">) => void act("addRule", [kind, rule], "Rule added");
@@ -548,8 +562,9 @@ export const deleteRule = (kind: RuleKind, id: string) => void act("deleteRule",
 export const clearManualPriorities = () => void act("clearManualPriorities", [], "Chats re-sorted by your rules");
 
 export const setJobInterval = (id: JobId, minutes: number) => void act("setJobInterval", [id, minutes]);
-export const setJobEnabled = (id: JobId, enabled: boolean) => void act("setJobEnabled", [id, enabled]);
-export const setChannelSelected = (id: string, selected: boolean) => void act("setChannelSelected", [id, selected]);
+export const setJobEnabled = (id: JobId, enabled: boolean) => void act("setJobEnabled", [id, enabled], undefined, (s) => ({ ...s, jobs: s.jobs.map((j) => (j.id === id ? { ...j, enabled } : j)) }));
+export const setChannelSelected = (id: string, selected: boolean) =>
+  void act("setChannelSelected", [id, selected], undefined, (s) => ({ ...s, channels: s.channels.map((c) => (c.id === id ? { ...c, selected } : c)) }));
 
 /** Ticks or unticks Telegram chats to come in. Unticked, a chat and its messages leave the dashboard at once. */
 export function setTelegramSync(ids: string[], on: boolean, name?: string) {
@@ -568,7 +583,10 @@ export function setTelegramSync(ids: string[], on: boolean, name?: string) {
 }
 /** Ticks something as important: its messages go to the top of the inbox. */
 export const setImportant = (source: "slack" | "telegram", kind: "chat" | "person", id: string, name: string, on: boolean) =>
-  void act("setImportant", [source, kind, id, name, on], on ? `${name} is important: its messages go to the top of the inbox` : `${name} is no longer important`);
+  void act("setImportant", [source, kind, id, name, on], on ? `${name} is important: its messages go to the top of the inbox` : `${name} is no longer important`, (s) => ({
+    ...s,
+    important: [...s.important.filter((i) => !(i.source === source && i.kind === kind && i.id === id)), ...(on ? [{ source, kind, id, name }] : [])],
+  }));
 
 /**
  * Picks Agency, Consulting or Sales for a Slack channel, Telegram group or person, for the whole

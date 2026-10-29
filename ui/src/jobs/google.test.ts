@@ -14,7 +14,7 @@ import {
   type CalendarEvent, type GoogleAccount, type GoogleApi, type MailboxChanges, type NewEvent,
 } from "@/server/google";
 import { googleCallback, googleLoginRedirect } from "@/server/google-routes";
-import { applyAction, forgetGoogle, loadState, OWNER_ID, resortInbox } from "@/server/repo";
+import { applyAction, forgetGoogle, loadConversation, loadState, OWNER_ID, resortInbox } from "@/server/repo";
 import { seal, unseal } from "@/server/secrets";
 import { createSession, SESSION_COOKIE } from "@/server/session";
 import { RateLimited, type Fetch } from "@/server/slack";
@@ -533,7 +533,8 @@ describe("Gmail check", () => {
     expect(again).toMatchObject({ items: 2, message: "2 new emails in 1 thread", cursor: { accounts: { [JEREMY_MAIL]: { history: "106" } } } });
     const dana = (await gmailRows()).find((c) => c.id.endsWith(":t1"))!;
     expect(dana).toMatchObject({ text: "Great, sending the deck.", replied: false });
-    expect(dana.thread.map((m) => [m.me, m.text])).toEqual([[false, "Can we move it to 3pm?"], [true, "Yes, works."], [false, "Great, sending the deck."]]);
+    // Opened, the thread comes whole (the list brings its newest email only).
+    expect((await loadConversation(db, OWNER_ID, dana.id))!.thread.map((m) => [m.me, m.text])).toEqual([[false, "Can we move it to 3pm?"], [true, "Yes, works."], [false, "Great, sending the deck."]]);
   });
 
   it("misses nothing when a lot arrives: the history is read page by page, and what does not fit in one run comes in the next", async () => {
@@ -805,7 +806,7 @@ describe("answering and writing email", () => {
     // Gmail now has the reply in the thread, under the id it gave it.
     google.deliver(mail("sent1", "t1", { from: JEREMY, subject: "Re: Thursday", text: "Yes, 3pm works.", at: NOW + MINUTE, labels: ["SENT", "INBOX"] }));
     await gmailPull(ctx((await db.query<{ cursor: Record<string, unknown> }>("select cursor from jobs where job_id = 'gmail-pull'"))[0].cursor, NOW + 5 * MINUTE), [account()], opener(google));
-    const thread = (await loadState(db, OWNER_ID, new Date(NOW))).inbox.find((c) => c.id === `gmail:${JEREMY_MAIL}:t1`)!.thread;
+    const thread = (await loadConversation(db, OWNER_ID, `gmail:${JEREMY_MAIL}:t1`))!.thread;
     expect(thread.map((m) => [m.me, m.text, m.status ?? null])).toEqual([[false, "Can we move it to 3pm?", null], [true, "Yes, 3pm works.", "sent"]]);
   });
 

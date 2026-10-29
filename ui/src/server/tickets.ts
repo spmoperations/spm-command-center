@@ -268,6 +268,19 @@ const firstName = (name: string) => norm(name).split(" ")[0] ?? "";
 /** The checks write why a suggestion was found to whoever's inbox it is ("your reply"). For anyone else, and on a ticket the team shares, it names them. */
 export const whyFor = (why: string, from: string) => why.replace(/\byour (reply|action item)\b/g, `${from}'s $1`);
 
+/** What a person wrote in a ticket's description, without why the dashboard found it ("Fathom listed this for …"), which is for the board. */
+const writtenPart = (description: string, found: { why: string; from_name: string }[]) =>
+  found.reduce((text, s) => text.split(whyFor(s.why, s.from_name)).join("").split(s.why).join(""), description);
+
+/** A call's recording (Fathom), and a "WATCH:" in front of one. Only the logins see them: never someone on the team list. */
+const RECORDING_LINK = /(?:\bWATCH:\s*)?https?:\/\/(?:[\w-]+\.)*fathom\.(?:video|ai)\/\S*/gi;
+export const withoutRecordings = (text: string) =>
+  text
+    .replace(RECORDING_LINK, "")
+    .replace(/[ \t]+$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
 /** The person a name is, on the team: the whole name first, then the first name if only one person has it. */
 export function personNamed(people: TeamPerson[], name: string | null | undefined): TeamPerson | null {
   if (!name) return null;
@@ -601,16 +614,12 @@ async function heldTicket(c: Ctx, id: string) {
 }
 
 /**
- * Puts a ticket in someone's hands and answers what to write in its history. A login sees it on
- * the board. A team member is told, where `notify` says, from the account of whoever assigned it:
- * the message waits in the outbox like every other.
- */
-/**
  * Tells someone a ticket is theirs, from the assigner's own Slack or Telegram: a direct message
  * that starts with their Slack @name, so Slack notifies them of a mention. Refused when the
- * assigner has not connected that app.
+ * assigner has not connected that app. `login`: they are Jeremy or another login, who see a
+ * call's recording; anyone else is told without it.
  */
-async function tell(c: Ctx, taskId: string, name: string, to: { way: Notify; target: string }[]): Promise<void> {
+async function tell(c: Ctx, taskId: string, name: string, to: { way: Notify; target: string }[], login = false): Promise<void> {
   if (!to.length) return;
   const connected = new Set((await c.db.query<{ provider: string }>("select provider from connections where owner_id = $1", [c.ownerId])).map((r) => r.provider));
   const missing = [...new Set(to.map((t) => t.way))].filter((w) => !connected.has(w));
@@ -629,8 +638,8 @@ async function tell(c: Ctx, taskId: string, name: string, to: { way: Notify; tar
   // Why the dashboard found it ("Fathom listed this for …") is for the board, not the message:
   // only what a person wrote in the description goes.
   const found = await c.db.query<{ why: string; from_name: string }>("select s.why, u.name as from_name from suggestions s join users u on u.id = s.owner_id where s.ticket_id = $1", [taskId]);
-  const written = found.reduce((text, s) => text.split(whyFor(s.why, s.from_name)).join("").split(s.why).join(""), t.description);
-  const note = tidy(written, 1500);
+  const written = writtenPart(t.description, found);
+  const note = tidy(login ? written : withoutRecordings(written), 1500);
   const project = t.mode === "personal" ? "" : t.project;
   for (const { way, target } of to) {
     const text = assignmentText({
@@ -662,6 +671,11 @@ async function tell(c: Ctx, taskId: string, name: string, to: { way: Notify; tar
 
 const toldOn = (ways: Notify[]) => (ways.length ? `, told on ${ways.map((w) => (w === "slack" ? "Slack" : "Telegram")).join(" and ")}` : "");
 
+/**
+ * Puts a ticket in someone's hands and answers what to write in its history. A login sees it on
+ * the board. A team member is told, where `notify` says, from the account of whoever assigned it:
+ * the message waits in the outbox like every other.
+ */
 async function assignTo(c: Ctx, taskId: string, assignee: string | null, notify: Notify[] = []): Promise<string> {
   // A message about the ticket that has not gone yet no longer applies.
   await c.db.run("delete from outbox where owner_id = $1 and task_id = $2 and status = 'queued'", [c.ownerId, taskId]);
@@ -676,7 +690,7 @@ async function assignTo(c: Ctx, taskId: string, assignee: string | null, notify:
     if (!user) throw new Error("That person is not on the team.");
     // Between logins, only Jeremy and another login are told, either way (see `mayTellOnSlack`).
     const to = notify.includes("slack") && user.slack && (await mayTellOnSlack(c.db, c.ownerId, user.slack)) ? [{ way: "slack" as const, target: user.slack }] : [];
-    await tell(c, taskId, user.name, to);
+    await tell(c, taskId, user.name, to, true);
     await c.db.run(`update tasks set assignee_user = $3, ${unhand} where owner_id = $1 and id = $2`, [TEAM, taskId, userId]);
     return `Assigned to ${user.name}${toldOn(to.map((t) => t.way))}`;
   }
@@ -748,11 +762,17 @@ export async function memberTickets(db: Db, memberId: string, now = new Date()):
      order by t.done, t.due, t.number, t.id limit 500`,
     [TEAM, memberId, now.getTime() - DONE_SHOWN_DAYS * 86_400_000],
   );
+  // Why the dashboard found each one is for the board, and a call's recording is for the logins (see `withoutRecordings`).
+  const found = await db.query<{ ticket_id: string; why: string; from_name: string }>(
+    `select s.ticket_id, s.why, u.name as from_name from suggestions s join users u on u.id = s.owner_id
+     where s.ticket_id in (select t.id from tasks t where t.owner_id = $1 and t.delegated_to = $2)`,
+    [TEAM, memberId],
+  );
   return rows.map((t) => ({
     id: t.id,
     ticket: ticketName(t.number),
-    title: t.title,
-    description: t.description ?? "",
+    title: withoutRecordings(t.title),
+    description: withoutRecordings(writtenPart(t.description ?? "", found.filter((f) => f.ticket_id === t.id))),
     client: t.project,
     pri: t.pri,
     due: t.due,

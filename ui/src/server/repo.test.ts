@@ -4,9 +4,9 @@ import { connect, secretFor } from "./connections";
 import fs from "node:fs";
 import type { Db } from "./db";
 import { databaseHome, describeDbError, migrate, openDb, openRemote, splitStatements } from "./db";
-import { ageOutInbox, applyAction, clearAnswered, loadConversation, loadState, OWNER_ID, stampsFrom, stateUpdate } from "./repo";
+import { ageOutInbox, applyAction, clearAnswered, loadConversation, loadState, OWNER_ID, stampsFrom, stateStamps, stateUpdate } from "./repo";
 import { seal, unseal } from "./secrets";
-import { NOW, reset, seed, stateOpened, testDb } from "./testing";
+import { NOW, reset, seed, stateOpened, suggestionsIn, testDb } from "./testing";
 
 let db: Db;
 const now = new Date(NOW);
@@ -276,7 +276,7 @@ describe("task actions", () => {
     const s = await state();
     expect(s.tasks).toHaveLength(before + 1);
     expect(s.tasks.find((t) => t.title === "Send the proposal")).toMatchObject({ pri: "mid", src: { type: "meeting", id: "fathom:1" } });
-    expect(s.suggestions.find((g) => g.id === "s1")!.status).toBe("accepted");
+    expect((await suggestionsIn(db)).find((g) => g.id === "s1")!.status).toBe("accepted");
   });
 
   it("marks a task done with the time, and undone again", async () => {
@@ -713,14 +713,21 @@ describe("reading only what changed", () => {
     expect((await loadState(db, OWNER_ID, now)).inbox.find((c) => c.id === "slack:D1")!.partial).toBeUndefined();
   });
 
-  it("brings an email thread whole: its tags are worked out from all of it", async () => {
+  it("brings an email thread to the list cut short, its tags worked out from all of it, and whole once opened", async () => {
     await db.run("insert into conversations (id, owner_id, source, external_id, from_name, ctx, last_text, last_at) values ('gmail:a@x.com:t1', $1, 'gmail', 't1', 'Ana', 'Invoice 12', 'Paid, thanks', $2)", [OWNER_ID, NOW]);
-    for (let k = 1; k <= 3; k++) await message("gmail:a@x.com:t1", k, `email ${k}`);
-    const email = (await loadState(db, OWNER_ID, now)).inbox.find((c) => c.id === "gmail:a@x.com:t1")!;
-    expect([email.partial, email.thread.length]).toEqual([undefined, 3]);
-    // Its row's text is its latest email from someone else, taken from the emails rather than read twice.
+    for (let k = 1; k <= 2; k++) await message("gmail:a@x.com:t1", k, `email ${k}`);
+    // The newest email is long, and says it is paid only at its end.
+    await message("gmail:a@x.com:t1", 3, `email 3 ${"x".repeat(2000)} the invoice is paid`);
+    const listed = (await loadState(db, OWNER_ID, now)).inbox.find((c) => c.id === "gmail:a@x.com:t1")!;
+    expect([listed.partial, listed.thread.map((m) => m.ts), listed.thread[0].text.length, listed.text.length]).toEqual([true, ["3.0"], 300, 300]);
+    expect(listed.tags).toContain("payment");
+    const opened = (await loadState(db, OWNER_ID, now, "gmail:a@x.com:t1")).inbox.find((c) => c.id === "gmail:a@x.com:t1")!;
+    expect([opened.partial, opened.thread.length, opened.thread[2].text.endsWith("the invoice is paid")]).toEqual([undefined, 3, true]);
+    expect((await loadConversation(db, OWNER_ID, "gmail:a@x.com:t1"))!.thread).toHaveLength(3);
+    // Its row's text is its latest email from someone else; a reply of the owner's comes too, for "You:".
     await db.run("insert into messages (id, conversation_id, owner_id, external_id, sender_name, me, body, at) values ('gmail:a@x.com:t1:4.0', 'gmail:a@x.com:t1', $1, '4.0', 'Jeremy', true, 'Thanks!', $2)", [OWNER_ID, NOW]);
-    expect((await loadState(db, OWNER_ID, now)).inbox.find((c) => c.id === "gmail:a@x.com:t1")!.text).toBe("email 3");
+    const after = (await loadState(db, OWNER_ID, now)).inbox.find((c) => c.id === "gmail:a@x.com:t1")!;
+    expect([after.text.startsWith("email 3"), after.thread.map((m) => [m.ts, m.me])]).toEqual([true, [["4.0", true]]]);
   });
 
   it("answers in a few bytes when nothing changed, and leaves out each big part that did not", async () => {
@@ -739,6 +746,42 @@ describe("reading only what changed", () => {
     const done = (await loadState(db, OWNER_ID, now)).stamps!;
     await db.run("update messages set reactions = '[{\"emoji\":\"+1\",\"count\":1}]' where id = 'slack:D1:2.0'");
     expect(await parts(done)).toEqual(["inbox"]);
+  });
+
+  it("answers a change made on the page with only the parts it touched", async () => {
+    const answer = async (have: Parameters<typeof stateUpdate>[2]) => {
+      const a = await stateUpdate(db, OWNER_ID, have, null, now);
+      return "unchanged" in a ? "unchanged" : { inbox: "inbox" in a, rest: "tasks" in a };
+    };
+    let have = (await loadState(db, OWNER_ID, now)).stamps!;
+    // A click on a chat: the inbox alone, without the small part, which the page keeps.
+    await act("markConversationDone", "slack:D1");
+    expect(await answer(have)).toEqual({ inbox: true, rest: false });
+    have = (await loadState(db, OWNER_ID, now)).stamps!;
+    // A click on a task: the small part alone.
+    await act("toggleTask", "t_hook", true);
+    expect(await answer(have)).toEqual({ inbox: false, rest: true });
+  });
+
+  it("covers in the small part's fingerprint every setting a change on the page can make", async () => {
+    await db.run("insert into slack_channels (owner_id, id, name, kind) values ($1, 'C9', 'design', 'public')", [OWNER_ID]);
+    const [metric] = (await loadState(db, OWNER_ID, now)).metrics.filter((m) => !m.sum);
+    const changes: [string, () => Promise<unknown>][] = [
+      ["a timer switched off", () => act("setJobEnabled", "slack-pull", false)],
+      ["a timer's interval", () => act("setJobInterval", "slack-pull", 45)],
+      ["a rule added", () => act("addRule", "priorityRules", { source: "any", when: "from", op: "is", value: "Maya", pri: "high" })],
+      ["a channel ticked", () => act("setChannelSelected", "C9", true)],
+      ["a focus item", () => act("addFocus", "day", "2026-10-08", "Call the bank")],
+      ["a link", () => act("addLink", "Docs", "https://example.com")],
+      ["a target logged", () => act("saveLogs", 8, { [metric.id]: 3 })],
+      ["a team login", () => act("addTeamLogin", "Sam", "sam@example.com", "a long enough password")],
+      ["something ticked important", () => act("setImportant", "slack", "chat", "C1", "#sales", true)],
+    ];
+    for (const [what, change] of changes) {
+      const before = (await stateStamps(db, OWNER_ID, now)).rest;
+      await change();
+      expect([what, (await stateStamps(db, OWNER_ID, now)).rest === before]).toEqual([what, false]);
+    }
   });
 
   it("notices what the team changed, a new call and a calendar change, each in its own part", async () => {
@@ -772,7 +815,11 @@ describe("reading only what changed", () => {
 
 describe("suggested due dates", () => {
   it("offers today in place of a date that has passed, and adds the task for today", async () => {
-    await db.run("insert into suggestions (id, owner_id, title, dept, pri, due, dedupe_key, created_at) values ('s_old', $1, 'Send the September report', 'Operations', 'mid', '2026-10-02', 'k1', $2), ('s_next', $1, 'Plan November', 'Operations', 'mid', '2026-10-20', 'k2', $2)", [OWNER_ID, now.getTime()]);
+    // A call's action items, which the Meetings page offers under the call.
+    await db.run(
+      "insert into suggestions (id, owner_id, title, dept, pri, due, src_type, src_id, dedupe_key, created_at) values ('s_old', $1, 'Send the September report', 'Operations', 'mid', '2026-10-02', 'meeting', 'fathom:1', 'k1', $2), ('s_next', $1, 'Plan November', 'Operations', 'mid', '2026-10-20', 'meeting', 'fathom:1', 'k2', $2)",
+      [OWNER_ID, now.getTime()],
+    );
     const today = (await state()).suggestions;
     expect(today.find((g) => g.id === "s_old")!.due).toBe("2026-10-08");
     expect(today.find((g) => g.id === "s_next")!.due).toBe("2026-10-20");

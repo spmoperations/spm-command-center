@@ -137,7 +137,9 @@ export async function openRemote(url: string, options: { max?: number } = {}): P
     // Encrypt the connection to anything that is not this computer, unless the address says how.
     ...(local || searchParams.has("sslmode") || searchParams.has("ssl") ? {} : { ssl: "require" as const }),
     connect_timeout: 15,
-    idle_timeout: 30,
+    // Kept open between the page's checks (one a minute while it is on screen, see store.ts), so a
+    // check finds a connection ready instead of opening a new one first.
+    idle_timeout: 120,
     // Supabase's transaction pooler does not support prepared statements.
     prepare: false,
     onnotice: () => {},

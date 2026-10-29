@@ -217,6 +217,22 @@ describe("their own tasks", () => {
     expect((await db.query<{ status: string }>("select status from tasks where id = $1", [renes.id]))[0].status).toBe("open");
   });
 
+  it("never show a call's recording, nor why the dashboard found the task; the board keeps both", async () => {
+    // A call's action item, accepted for Luis with a note, as the Review tab fills it in.
+    const why = 'Fathom listed this for Luis Ramos on "SPM Ops".';
+    await db.run(
+      "insert into suggestions (id, owner_id, title, dept, project, pri, due, why, src_type, src_id, dedupe_key, created_at) values ('s_call', $1, 'Cut the reel', 'Operations', '', 'mid', '2026-10-10', $2, 'meeting', 'fathom:1', 'fathom:1:action:0', $3)",
+      [OWNER_ID, why, NOW],
+    );
+    const written = `${why}\n\nUse the second take. WATCH: https://fathom.video/calls/876?timestamp=12.5\nAlso https://fathom.video/share/abc`;
+    await act(OWNER_ID, "acceptSuggestion", "s_call", { assignee: "member:u_luis", description: written });
+    const mine = await listed(await luisCookie());
+    expect(mine.tasks.map((t) => [t.title, t.description])).toEqual([["Cut the reel", "Use the second take.\nAlso"]]);
+    expect(JSON.stringify(mine)).not.toMatch(/fathom|SPM Ops/i);
+    // Jeremy's board still has all of it.
+    expect((await loadState(db, OWNER_ID, now)).tasks.find((t) => t.title === "Cut the reel")!.description).toBe(written);
+  });
+
   it("keep what they finished for two weeks", async () => {
     await act(OWNER_ID, "createTicket", ticket({ assignee: "member:u_luis", status: "done" }));
     await db.run("update tasks set done_at = $1", [Date.now() - 13 * 86_400_000]);

@@ -602,12 +602,14 @@ export interface AppState {
 
 /**
  * The parts of the data that are read again only when they changed: the conversations, the
- * calendar, the calls, and everything else (which is small, and comes whenever any part does).
+ * calendar, the calls, and everything else (the small part).
  */
 export type StatePart = "inbox" | "calendar" | "meetings" | "rest";
 export type Stamps = Record<StatePart, string>;
 /** The big parts. An answer leaves out each one that has not changed since the page read it. */
 export type HeavyPart = Exclude<StatePart, "rest">;
-/** What the server answers when the page asks for what changed. */
+/** What the server answers when the page asks for what changed: everything, or the small part and each big part that changed. */
 export type StateUpdate = Omit<AppState, HeavyPart> & Partial<Pick<AppState, HeavyPart>>;
-export type StateAnswer = StateUpdate | { unchanged: true; stamps: Stamps };
+/** Only big parts changed: they come alone, with the stamps, and the page keeps the small part it has. */
+export type HeavyUpdate = Partial<Pick<AppState, HeavyPart>> & { stamps: Stamps };
+export type StateAnswer = StateUpdate | HeavyUpdate | { unchanged: true; stamps: Stamps };

@@ -10,7 +10,7 @@ import { OWNER_ID } from "@/server/repo";
 import { pictureResponse, SLACK_NEEDS_FILES } from "@/server/pictures";
 import { seal } from "@/server/secrets";
 import { RateLimited, slackClient } from "@/server/slack";
-import { fakeSlack, NOW, reset, seed, stateOpened, testDb, TINY } from "@/server/testing";
+import { fakeSlack, NOW, reset, seed, stateOpened, suggestionsIn, testDb, TINY } from "@/server/testing";
 import { fathomPull, toMeeting } from "./fathom";
 import { outboxSend } from "./outbox";
 import { requestFinder } from "./request-finder";
@@ -249,7 +249,7 @@ describe("Slack jobs", () => {
       await slackDirectorySync(ctx(), directory());
       await slackPull(ctx(), twoThreads());
       await requestFinder(ctx());
-      expect((await stateOpened(db)).suggestions.filter((g) => g.status === "new").map((g) => g.src?.id).sort()).toEqual([`slack:C2:${a}`, `slack:C2:${b}`]);
+      expect((await suggestionsIn(db)).filter((g) => g.status === "new").map((g) => g.src?.id).sort()).toEqual([`slack:C2:${a}`, `slack:C2:${b}`]);
 
       await act("sendReply", [`slack:C2:${a}`, "Approved.", true]);
       const [one, two] = [(await row(`slack:C2:${a}`))!, (await row(`slack:C2:${b}`))!];
@@ -258,7 +258,7 @@ describe("Slack jobs", () => {
       expect(await db.query("select target, thread_ts, body from outbox")).toEqual([{ target: "C2", thread_ts: a, body: "Approved." }]);
       // The answered thread's suggestion is settled. The other one is still waiting.
       await requestFinder(ctx());
-      expect((await stateOpened(db)).suggestions.filter((g) => g.status === "new").map((g) => g.src?.id)).toEqual([`slack:C2:${b}`]);
+      expect((await suggestionsIn(db)).filter((g) => g.status === "new").map((g) => g.src?.id)).toEqual([`slack:C2:${b}`]);
     });
 
     it("makes a single message that tags the owner a row, answers under it, and lets later replies join it", async () => {
@@ -653,7 +653,7 @@ describe("task finder", () => {
     expect(asked).toEqual(["slack:D1"]); // #sales is Low and not a direct message
     expect(sent).not.toContain("xoxp-"); // a key pasted in the chat is not passed on
     expect(result.items).toBe(2);
-    const suggestions = (await stateOpened(db, OWNER_ID, new Date(NOW))).suggestions;
+    const suggestions = (await suggestionsIn(db));
     expect(suggestions.map((g) => [g.title, g.due]).sort()).toEqual([["Old date", "2026-10-11"], ["Swap the hook on clip 4", "2026-10-09"]]);
     expect(await db.query("select count(*)::int as n from messages where conversation_id = 'slack:D1' and not scanned")).toEqual([{ n: 0 }]);
   });
@@ -702,7 +702,7 @@ describe("the task finder's prompt", () => {
 
 describe("request finder", () => {
   beforeEach(() => seed(db));
-  const suggestions = async () => (await stateOpened(db, OWNER_ID, new Date(NOW))).suggestions;
+  const suggestions = async () => (await suggestionsIn(db));
   const say = (id: string, conversation: string, sender: string, body: string, at: number, me = false) =>
     db.run("insert into messages (id, conversation_id, owner_id, sender_name, me, body, at) values ($1, $2, $3, $4, $5, $6, $7)", [id, conversation, OWNER_ID, sender, me, body, at]);
 
@@ -954,7 +954,7 @@ describe("runner", () => {
   it("clears what has had nothing new for three days in the same pass, and keeps the request that is still waiting", async () => {
     await seed(db);
     await requestFinder(ctx());
-    const waiting = async () => (await stateOpened(db, OWNER_ID, new Date(NOW))).suggestions.filter((g) => g.status === "new").map((g) => g.src?.id);
+    const waiting = async () => (await suggestionsIn(db)).filter((g) => g.status === "new").map((g) => g.src?.id);
     expect(await waiting()).toEqual(["slack:D1"]);
 
     const later = NOW + 4 * 86_400_000;

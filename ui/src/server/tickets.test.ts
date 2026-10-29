@@ -317,6 +317,18 @@ describe("a login told on Slack", () => {
     expect((await loadState(db, OWNER_ID, now)).tasks.find((t) => t.title === "Send access s_for")!.description).toBe('Fathom listed this for Alex on "SPM - Operations".');
   });
 
+  it("tells someone on the team list without a call's recording, and a login with it", async () => {
+    await slackFor(OWNER_ID);
+    await db.run("update users set slack_user_id = 'UALEX' where id = $1", [alex]);
+    const note = "Use the second take: https://fathom.video/calls/876?timestamp=12";
+    await act(OWNER_ID, "createTicket", ticket({ title: "For Luis", description: note, assignee: "member:u_luis", notify: ["slack"] }));
+    await act(OWNER_ID, "createTicket", ticket({ title: "For Alex", description: note, assignee: `user:${alex}`, notify: ["slack"] }));
+    const told = await db.query<{ target: string; body: string }>("select target, body from outbox order by created_at, id");
+    expect(told.find((o) => o.target === "ULUIS")!.body).not.toContain("fathom");
+    expect(told.find((o) => o.target === "ULUIS")!.body).toContain("Use the second take:");
+    expect(told.find((o) => o.target === "UALEX")!.body).toContain("https://fathom.video/calls/876?timestamp=12");
+  });
+
   it("tells no login about a task another login gives them, when neither is Jeremy", async () => {
     await act(OWNER_ID, "addTeamLogin", "Sam", "sam@example.com", "a long enough password");
     const sam = (await db.query<{ id: string }>("select id from users where login_email = 'sam@example.com'"))[0].id;

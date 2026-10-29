@@ -9,10 +9,11 @@ import { requestSummary } from "@/core/requests";
 import { applyRules } from "@/core/rules";
 import type {
   AddedPicture, AppState, Conversation, ConversationChange, FocusBoard, HeavyPart, JobId, JobStatus, Meeting, MessagePicture, Metric, Mode, Person, Priority, Provider, Reaction, Rule, Source, Stamps,
-  StateAnswer, StatePart, StateUpdate, Suggestion, CalendarItem, TaskLine,
+  StateAnswer, StatePart, StateUpdate, Suggestion, CalendarItem, TaskLine, HeavyUpdate,
 } from "@/core/types";
 import { aiConfigured } from "./ai";
 import { emailTags, type TaggedEmail } from "@/core/email-tags";
+import { tidyEmailText } from "@/core/email-text";
 import { isEmailAddress, parseAddress, type Address } from "./gmail";
 import { hostedProblem, keysOnScreen } from "./app-keys";
 import { disconnectGoogle, googleAccounts, googleBlocked, googleCan } from "./google";
@@ -126,6 +127,12 @@ const MESSAGES_SHOWN = 150;
  * The rest come when it is opened, so the inbox is small to read every time something changes.
  */
 const PREVIEW_SHOWN = 2;
+/**
+ * An email thread in the list brings only its newest email and the newest one Gmail knows, each
+ * tidied and cut to this many characters: whole emails are long, and the list shows one line of
+ * one. The whole thread comes when it is opened, as a chat's does. Its tags are worked out from all of it.
+ */
+const EMAIL_PREVIEW = 300;
 
 const toRule = (r: RuleRow): Rule => ({ id: r.id, source: r.source, when: r.match_on, op: r.op, value: r.value, pri: r.pri ?? undefined, line: r.line ?? undefined, mode: r.mode ?? undefined });
 
@@ -200,12 +207,12 @@ async function loadConversations(db: Db, ownerId: string, { open = null, only = 
     importantConversations(db, ownerId),
   ]);
   // How many messages each conversation would show whole, to tell which ones came cut short.
-  const whole = new Map<string, number>();
+  const inWindow = new Map<string, number>();
   const sent = new Map<string, number>();
   // An email row's text, as `refreshConversation` keeps it: its latest email from someone else, else its latest.
   const emailText = new Map<string, { incoming?: string; latest: string }>();
   for (const m of messages) {
-    whole.set(m.conversation_id, Number(m.in_window));
+    inWindow.set(m.conversation_id, Number(m.in_window));
     sent.set(m.conversation_id, (sent.get(m.conversation_id) ?? 0) + 1);
     if (!m.conversation_id.startsWith("gmail:")) continue;
     const text = emailText.get(m.conversation_id) ?? { latest: "" };
@@ -245,10 +252,20 @@ async function loadConversations(db: Db, ownerId: string, { open = null, only = 
     });
     threads.set(m.conversation_id, thread);
   }
+  const whole = only ?? open;
   return rows.map((r) => {
-    const thread = threads.get(r.id) ?? [];
+    let thread = threads.get(r.id) ?? [];
+    let text = textOf(r);
+    let cut = false;
+    if (r.source === "gmail" && r.id !== whole) {
+      const kept = new Set([thread.filter((m) => m.ts && m.status !== "queued").at(-1), thread.at(-1)].filter((m) => m !== undefined));
+      const short = (body: string) => tidyEmailText(body).slice(0, EMAIL_PREVIEW);
+      cut = thread.length > kept.size || thread.some((m) => kept.has(m) && short(m.text) !== m.text) || short(text) !== text;
+      thread = thread.filter((m) => kept.has(m)).map((m) => ({ ...m, text: short(m.text) }));
+      text = short(text);
+    }
     return {
-      id: r.id, source: r.source, from: r.from_name, ctx: r.ctx, direct: r.direct, tagged: r.tagged, text: textOf(r), at: r.last_at,
+      id: r.id, source: r.source, from: r.from_name, ctx: r.ctx, direct: r.direct, tagged: r.tagged, text, at: r.last_at,
       pri: r.pri, line: r.line, mode: r.mode, project: r.project, done: r.done, replied: r.replied, manualPri: r.manual_pri || undefined, manualMode: r.manual_mode || undefined,
       root: r.thread_ts ?? undefined,
       important: important.has(r.id) || undefined,
@@ -258,7 +275,7 @@ async function loadConversations(db: Db, ownerId: string, { open = null, only = 
       avatar: r.source !== "telegram" ? undefined : r.direct && faces.has(r.external_id) ? avatarUrl(r.external_id) : thread.findLast((m) => !m.me)?.avatar,
       thread,
       // Counted before the copies of the dashboard's own replies are left out (see `backFromTheApp`).
-      partial: (sent.get(r.id) ?? 0) < (whole.get(r.id) ?? 0) || undefined,
+      partial: cut || (sent.get(r.id) ?? 0) < (inWindow.get(r.id) ?? 0) || undefined,
     };
   });
 }
@@ -370,8 +387,10 @@ const HEAVY: HeavyPart[] = ["inbox", "calendar", "meetings"];
 
 /**
  * A fingerprint of each part of the data, worked out by the database, so only a few bytes come
- * back. Each covers what its part shows: while it stays the same, so does the part. Left out:
- * when each timer last ran, which changes every few minutes; the page reads that now and then.
+ * back. Each covers what its part shows: while it stays the same, so does the part, and the
+ * answer to a change made on the page leaves it out. Left out: when each timer last ran, which
+ * changes every few minutes, and who is in Slack, which only the checks change; the page reads
+ * those now and then.
  */
 export async function stateStamps(db: Db, ownerId: string, now = new Date()): Promise<Stamps> {
   const [row] = await db.query<Stamps>(
@@ -400,7 +419,18 @@ export async function stateStamps(db: Db, ownerId: string, now = new Date()): Pr
          ${rowsHash("row(x.provider, x.label, x.connected_at, x.scopes)", "from connections x where x.owner_id = $1")},
          ${rowsHash("row(a.email, a.scopes, a.connected_at)", "from google_accounts a where a.owner_id = $1")},
          ${rowsHash("row(u.id, u.name)", `from users u where u.id in (${teamUsersSql("$2")})`)},
-         ${rowsHash("row(tc.id, tc.name, tc.kind, tc.synced)", "from telegram_chats tc where tc.owner_id = $1")}
+         ${rowsHash("row(tc.id, tc.name, tc.kind, tc.synced)", "from telegram_chats tc where tc.owner_id = $1")},
+         ${rowsHash("r", "from rules r where r.owner_id = $1")},
+         ${rowsHash("row(j.job_id, j.interval_min, j.enabled)", "from jobs j where j.owner_id = $1")},
+         ${rowsHash("row(sc.id, sc.name, sc.kind, sc.selected)", "from slack_channels sc where sc.owner_id = $1 and sc.kind in ('public', 'private')")},
+         ${rowsHash("mt", "from metrics mt where mt.owner_id = $1")},
+         ${rowsHash("ml", "from metric_logs ml where ml.owner_id = $1")},
+         ${rowsHash("f", "from focus_items f where f.owner_id = $1")},
+         ${rowsHash("q", "from quick_links q where q.owner_id = $1")},
+         ${rowsHash("row(lu.id, lu.name, lu.login_email, lu.password_hash is null, lu.created_at)", "from users lu where lu.id = $2 or lu.login_email is not null")},
+         ${rowsHash("row(ak.id, ak.owner_id, ak.provider, ak.label, ak.retired_at)", "from app_keys ak where ak.owner_id in ($1, $2)")},
+         ${rowsHash("row(ip.source, ip.kind, ip.external_id, ip.name)", "from important ip where ip.owner_id = $1")},
+         ${rowsHash("pj.project", "from (select project from conversations where owner_id = $1 and project <> '' union select project from meetings where owner_id = $1 and project <> '') pj")}
        )) as rest`,
     [ownerId, TEAM, isoDay(now)],
   );
@@ -425,7 +455,11 @@ export async function stateUpdate(db: Db, ownerId: string, have: Partial<Stamps>
   // than the stamps, and the next check reads it.
   const stamps = await stateStamps(db, ownerId, now);
   if (have && PARTS.every((p) => have[p] === stamps[p])) return { unchanged: true, stamps };
-  return readState(db, ownerId, now, open, new Set(have ? HEAVY.filter((p) => have[p] === stamps[p]) : []), stamps);
+  const skip = new Set(have ? HEAVY.filter((p) => have[p] === stamps[p]) : []);
+  // Only big parts changed, such as the inbox after a message or a click on a chat: they come
+  // alone, and the page keeps the small part it has.
+  if (have?.rest === stamps.rest) return heavyParts(db, ownerId, open, skip, stamps);
+  return readState(db, ownerId, now, open, skip, stamps);
 }
 
 /** The stamps a page sent, as far as they are stamps: anything else counts as none. */
@@ -445,6 +479,16 @@ export function stampsFrom(value: unknown): Partial<Stamps> | null {
     if (typeof stamp === "string") have[part] = stamp;
   }
   return have;
+}
+
+/** The big parts not in `skip`, read alone. */
+async function heavyParts(db: Db, ownerId: string, open: string | null, skip: Set<HeavyPart>, stamps: Stamps): Promise<HeavyUpdate> {
+  const [inbox, meetings, calendar] = await Promise.all([
+    skip.has("inbox") ? undefined : loadConversations(db, ownerId, { open }),
+    skip.has("meetings") ? undefined : loadMeetings(db, ownerId),
+    skip.has("calendar") ? undefined : loadCalendar(db, ownerId),
+  ]);
+  return { stamps, ...(inbox ? { inbox } : {}), ...(meetings ? { meetings } : {}), ...(calendar ? { calendar } : {}) };
 }
 
 async function readState(db: Db, ownerId: string, now: Date, open: string | null, skip: Set<HeavyPart>, stamps: Stamps): Promise<StateUpdate> {
@@ -484,8 +528,10 @@ async function readState(db: Db, ownerId: string, now: Date, open: string | null
     loadRules(db, ownerId),
     teamTickets(db, ownerId),
     db.query<{ id: string; title: string; mode: Mode; dept: string; project: string; pri: Priority; due: string; why: string; src_type: "message" | "meeting" | null; src_id: string | null; status: Suggestion["status"]; delegable: boolean }>(
-      "select * from suggestions where owner_id = $1 and (status = 'new' or created_at > $2) order by created_at desc limit 300",
-      [ownerId, now.getTime() - 14 * 86_400_000],
+      // What the Meetings page offers under each call: its action items not decided on yet. The
+      // review reads everything else itself (see reviewItems).
+      "select * from suggestions where owner_id = $1 and status = 'new' and src_type = 'meeting' order by created_at desc limit 300",
+      [ownerId],
     ),
     // The team list is the team's: everyone with a login assigns from the same one.
     db.query<{ id: string; name: string; role: string; depts: string[]; handles: string[]; slack_user_id: string | null; telegram_id: string | null }>("select * from team_members where owner_id = $1 order by position, name", [TEAM]),
