@@ -10,11 +10,11 @@
 // turning one down keeps why. Assigning a ticket to a team member tells them on Slack or
 // Telegram from the account of whoever assigned it, through the outbox like every message.
 import crypto from "node:crypto";
-import { PRIORITY_NAME, REJECT_REASONS, SOURCE_NAME, TICKET_PREFIX, TICKET_STATUS_NAME, TICKET_STATUSES, type RejectReason } from "@/core/config";
+import { PRIORITY_NAME, REJECT_REASONS, SOURCE_NAME, TASK_LINE_NAME, TASK_LINES, TICKET_PREFIX, TICKET_STATUS_NAME, TICKET_STATUSES, type RejectReason } from "@/core/config";
 import { assignmentBlocks, assignmentText, CHANNEL_PICK, SLACK_PICK, ticketLink } from "@/core/delegation";
 import { isoDay, parseDay } from "@/core/dates";
 import { norm } from "@/core/rules";
-import type { Mode, MyTask, Priority, ReviewItem, Source, SourceNote, Task, TaskSource, TeamPerson, TicketEvent, TicketInput, TicketStatus } from "@/core/types";
+import type { Mode, MyTask, Priority, ReviewItem, Source, SourceNote, Task, TaskLine, TaskSource, TeamPerson, TicketEvent, TicketInput, TicketStatus } from "@/core/types";
 import type { Db } from "./db";
 import { OWNER_ID } from "./owner";
 
@@ -50,6 +50,18 @@ const TEAM_USERS = teamUsersSql("$1");
  */
 const LOGIN_SLACK = `coalesce(u.slack_user_id, (select s.id from slack_users s where s.owner_id in (${TEAM_USERS}) and not s.deleted and not s.is_bot and s.email is not null
   and lower(s.email) = lower(coalesce(u.login_email, u.email)) order by (s.owner_id = $1) desc, s.id limit 1))`;
+
+/**
+ * The line (Agency, Consulting or Sales) that a task or suggestion takes from where it was said,
+ * as the team picked in Settings (`chat_lines`): its Slack channel or Telegram group, else the
+ * person in a direct chat. Read each time, so a pick made later labels what came before too.
+ * `type`, `id` and `owner` are its src_type, src_id and whose conversation that is; `team` the team.
+ */
+const lineFromChat = (type: string, id: string, owner: string, team: string) => `(select l.line from conversations c join chat_lines l on l.owner_id = ${team} and l.source = c.source
+     and ((l.kind = 'chat' and l.external_id = c.external_id)
+       or (l.kind = 'person' and c.direct and l.external_id = coalesce((select s.user_id from slack_channels s where s.owner_id = c.owner_id and s.id = c.external_id and s.kind = 'im'), c.external_id)))
+   where ${type} = 'message' and c.owner_id = ${owner} and c.id = ${id}
+   order by (l.kind = 'chat') desc limit 1)`;
 
 /**
  * Whether the Slack account `slackId` may be told about a task that `assigner` gave them. Between
@@ -248,6 +260,7 @@ interface SuggestionRow extends SourceParts {
   mt_at: number | null;
   confidence: number | null;
   checked_at: number | null;
+  chat_line: TaskLine | null;
 }
 
 const firstName = (name: string) => norm(name).split(" ")[0] ?? "";
@@ -285,6 +298,7 @@ function guessFor(g: SuggestionRow, people: TeamPerson[], slack: InSlack[] = [])
 }
 
 const SUGGESTION_FROM = `select s.id, s.owner_id, s.title, s.why, s.project, s.pri, s.due, s.mode, s.src_type, s.src_id, s.dedupe_key, s.for_name, s.looks_done, s.delegable, s.created_at, s.confidence, s.checked_at, u.name as from_name,
+         ${lineFromChat("s.src_type", "s.src_id", "s.owner_id", "$1")} as chat_line,
          c.source as c_source, c.ctx as c_ctx, c.from_name as c_from, c.external_id as c_chat, c.last_text as c_text,
          m.body as m_body, m.at as m_at, mt.title as mt_title, mt.url as mt_url, mt.action_items as mt_items, mt.started_at as mt_at
   from suggestions s
@@ -331,6 +345,7 @@ function toReview(g: SuggestionRow, viewer: string, people: TeamPerson[], slack:
     src: g.src_type && g.src_id ? { type: g.src_type, id: g.src_id } : null,
     fromUser: g.owner_id,
     mine: g.owner_id === viewer,
+    line: g.chat_line ?? null,
   };
 }
 
@@ -411,6 +426,9 @@ interface TicketRow {
   src_quote: string | null;
   src_label: string | null;
   src_link: string | null;
+  line: TaskLine | null;
+  /** Read with the ticket: the line of the chat or person it came from (see `lineFromChat`). */
+  chat_line?: TaskLine | null;
 }
 
 /** Where a ticket stands. `done` decides done-ness, so a ticket ticked off by code that only knows `done` is still right. */
@@ -428,7 +446,11 @@ function assigneeOf(t: TicketRow): string | null {
 
 /** The team's tickets for one person: everything for the owner, the work ones for everyone else. */
 export async function teamTickets(db: Db, viewer: string): Promise<Task[]> {
-  const rows = await db.query<TicketRow>(`select * from tasks where owner_id = $1 and (mode = 'professional' or $2::boolean) order by created_at, id limit 1000`, [TEAM, viewer === TEAM]);
+  const rows = await db.query<TicketRow>(
+    `select t.*, ${lineFromChat("t.src_type", "t.src_id", "coalesce(t.source_owner, $1)", "$1")} as chat_line
+     from tasks t where t.owner_id = $1 and (t.mode = 'professional' or $2::boolean) order by t.created_at, t.id limit 1000`,
+    [TEAM, viewer === TEAM],
+  );
   if (!rows.length) return [];
   const names = new Map((await db.query<{ id: string; name: string }>("select id, name from users")).map((u) => [u.id, u.name]));
   const history = new Map<string, TicketEvent[]>();
@@ -483,6 +505,8 @@ export async function teamTickets(db: Db, viewer: string): Promise<Task[]> {
         : null,
       theirs: Boolean(from && from !== viewer) || undefined,
       history: history.get(t.id),
+      line: t.line ?? null,
+      chatLine: t.chat_line ?? null,
     };
   });
 }
@@ -527,6 +551,8 @@ export interface NewTicket {
   /** Whose inbox or call `src` is. Without one it is whoever makes it. */
   sourceOwner?: string | null;
   source?: SourceNote | null;
+  /** Agency, Consulting or Sales, set by hand. Without one, the line of where it came from. */
+  line?: TaskLine | null;
 }
 
 /** Makes a ticket on the team's board, with the next number, and says so in its history. */
@@ -535,8 +561,8 @@ export async function insertTicket(c: Ctx, t: NewTicket, said = "Created"): Prom
   const now = c.now.getTime();
   const status = t.status ?? "open";
   await c.db.run(
-    `insert into tasks (id, owner_id, number, title, description, dept, project, pri, due, status, done, done_at, src_type, src_id, delegable, mode, created_at, updated_at, created_by, source_owner, src_quote, src_label, src_link, assignee_user)
-     values ($1, $2, (select coalesce(max(number), 0) + 1 from tasks where owner_id = $2), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $16, $17, $18, $19, $20, $21, $22)`,
+    `insert into tasks (id, owner_id, number, title, description, dept, project, pri, due, status, done, done_at, src_type, src_id, delegable, mode, created_at, updated_at, created_by, source_owner, src_quote, src_label, src_link, assignee_user, line)
+     values ($1, $2, (select coalesce(max(number), 0) + 1 from tasks where owner_id = $2), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $16, $17, $18, $19, $20, $21, $22, $23)`,
     [
       id,
       TEAM,
@@ -560,6 +586,7 @@ export async function insertTicket(c: Ctx, t: NewTicket, said = "Created"): Prom
       t.source?.label ?? null,
       t.source?.link ?? null,
       t.assigneeUser === undefined ? c.ownerId : t.assigneeUser,
+      t.line ?? null,
     ],
   );
   await logEvent(c, id, said);
@@ -688,6 +715,7 @@ function checked(input: Partial<TicketInput>): Partial<TicketInput> {
   if (input.due !== undefined && !isDay(input.due)) throw new Error("Pick a due date.");
   if (input.pri !== undefined && !PRIORITIES.includes(input.pri)) throw new Error("That is not a priority.");
   if (input.notify !== undefined && (!Array.isArray(input.notify) || input.notify.some((w) => w !== "slack" && w !== "telegram"))) throw new Error("Tell them on Slack or Telegram.");
+  if (input.line !== undefined && input.line !== null && !TASK_LINES.includes(input.line)) throw new Error("That is not Agency, Consulting or Sales.");
   return input;
 }
 
@@ -787,6 +815,7 @@ async function accept(c: Ctx, g: SuggestionRow, input: Partial<TicketInput> | un
       assigneeUser: null,
       sourceOwner: g.owner_id,
       source: note,
+      line: edits.line ?? null,
     },
     `Made a ticket from ${fromWhere(note)}`,
   );
@@ -820,6 +849,7 @@ export const TICKET_ACTIONS: Record<string, (c: Ctx, ...args: any[]) => Promise<
       due: t.due ?? isoDay(c.now),
       status: t.status ?? "open",
       assigneeUser: null,
+      line: t.line ?? null,
     });
     await logEvent(c, id, await assignTo(c, id, t.assignee ?? null, t.notify ?? []));
   },
@@ -853,6 +883,10 @@ export const TICKET_ACTIONS: Record<string, (c: Ctx, ...args: any[]) => Promise<
     if (p.pri !== undefined && p.pri !== t.pri) {
       put("pri", p.pri);
       said.push(`Priority: ${PRIORITY_NAME[p.pri]}`);
+    }
+    if (p.line !== undefined && (p.line ?? null) !== (t.line ?? null)) {
+      put("line", p.line ?? null);
+      said.push(p.line ? `Line: ${TASK_LINE_NAME[p.line]}` : "Line: as its chat");
     }
     if (sets.length) {
       put("updated_at", c.now.getTime());

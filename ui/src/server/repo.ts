@@ -1,7 +1,7 @@
 // Reads and writes for the dashboard. `loadState` builds what the screens show; `ACTIONS`
 // holds every change a person can make. Jobs write through their own modules in `src/jobs`.
 import crypto from "node:crypto";
-import { INBOX_DAYS, MOST_PICTURES, PERSONAL, PRIORITIES } from "@/core/config";
+import { INBOX_DAYS, MOST_PICTURES, PERSONAL, PRIORITIES, TASK_LINES } from "@/core/config";
 import { assignmentBlocks, assignmentText, canAssignInChat, CHANNEL_PICK, SLACK_PICK, type AssignWhere } from "@/core/delegation";
 import { addDays, isoDay, monthKey, pad } from "@/core/dates";
 import { clampInterval, defaultJobSettings, JOBS } from "@/core/jobs";
@@ -9,7 +9,7 @@ import { requestSummary } from "@/core/requests";
 import { applyRules } from "@/core/rules";
 import type {
   AddedPicture, AppState, Conversation, ConversationChange, FocusBoard, HeavyPart, JobId, JobStatus, Meeting, MessagePicture, Metric, Mode, Person, Priority, Provider, Reaction, Rule, Source, Stamps,
-  StateAnswer, StatePart, StateUpdate, Suggestion, CalendarItem,
+  StateAnswer, StatePart, StateUpdate, Suggestion, CalendarItem, TaskLine,
 } from "@/core/types";
 import { aiConfigured } from "./ai";
 import { emailTags, type TaggedEmail } from "@/core/email-tags";
@@ -396,6 +396,7 @@ export async function stateStamps(db: Db, ownerId: string, now = new Date()): Pr
          ${rowsHash("p", "from team_members p where p.owner_id = $2")},
          ${rowsHash("row(l.member_id, l.email, l.password_hash is null, l.since, l.last_in)", "from task_logins l where l.owner_id = $2")},
          ${rowsHash("n", "from clients n where n.owner_id = $2")},
+         ${rowsHash("row(cl.source, cl.kind, cl.external_id, cl.name, cl.line)", "from chat_lines cl where cl.owner_id = $2")},
          ${rowsHash("row(x.provider, x.label, x.connected_at, x.scopes)", "from connections x where x.owner_id = $1")},
          ${rowsHash("row(a.email, a.scopes, a.connected_at)", "from google_accounts a where a.owner_id = $1")},
          ${rowsHash("row(u.id, u.name)", `from users u where u.id in (${teamUsersSql("$2")})`)},
@@ -474,6 +475,7 @@ async function readState(db: Db, ownerId: string, now: Date, open: string | null
     calendar,
     google,
     importantRows,
+    chatLineRows,
     telegramChats,
     telegramPeople,
     jobStatus,
@@ -510,6 +512,8 @@ async function readState(db: Db, ownerId: string, now: Date, open: string | null
     skip.has("calendar") ? undefined : loadCalendar(db, ownerId),
     googleAccounts(db, ownerId),
     db.query<{ source: "slack" | "telegram"; kind: "chat" | "person"; external_id: string; name: string }>("select source, kind, external_id, name from important where owner_id = $1 order by lower(name)", [ownerId]),
+    // Agency, Consulting or Sales: the team's picks, whoever made them.
+    db.query<{ source: "slack" | "telegram"; kind: "chat" | "person"; external_id: string; name: string; line: TaskLine }>("select source, kind, external_id, name, line from chat_lines where owner_id = $1 order by lower(name)", [TEAM]),
     telegramHere
       ? db.query<{ id: string; name: string; kind: "group" | "channel" | "direct"; synced: boolean; last_at: number | null }>(
           "select id, name, kind, synced, last_at from telegram_chats where owner_id = $1 order by lower(name)",
@@ -599,6 +603,7 @@ async function readState(db: Db, ownerId: string, now: Date, open: string | null
     channels,
     slackPeople,
     important: importantRows.map((r) => ({ source: r.source, kind: r.kind, id: r.external_id, name: r.name })),
+    chatLines: chatLineRows.map((r) => ({ source: r.source, kind: r.kind, id: r.external_id, name: r.name, line: r.line })),
     telegramChats: telegramChats.map((c) => ({ id: c.id, name: c.name, kind: c.kind, synced: c.synced, lastAt: c.last_at == null ? null : Number(c.last_at) })),
     telegramPeople: telegramPeople.sort((a, b) => a.name.localeCompare(b.name)),
     avatars: Object.fromEntries(pictures.map((p) => [p.name, p.image])),
@@ -1247,6 +1252,22 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
       await c.db.run("delete from important where owner_id = $1 and source = $2 and kind = $3 and external_id = $4", [c.ownerId, source, kind, id]);
     }
     await resortInbox(c.db, c.ownerId);
+  },
+  /**
+   * Picks the line (Agency, Consulting or Sales) of a Slack channel, Telegram group or person, for
+   * the whole team: every task that comes from it shows that line. Null takes the pick away.
+   */
+  async setChatLine(c, source: "slack" | "telegram", kind: "chat" | "person", id: string, name: string, line: TaskLine | null) {
+    if (!["slack", "telegram"].includes(source) || !["chat", "person"].includes(kind) || !id) throw new Error("That is not a chat or a person.");
+    if (line !== null && !TASK_LINES.includes(line)) throw new Error("That is not Agency, Consulting or Sales.");
+    if (line) {
+      await c.db.run(
+        "insert into chat_lines (owner_id, source, kind, external_id, name, line) values ($1, $2, $3, $4, $5, $6) on conflict (owner_id, source, kind, external_id) do update set name = excluded.name, line = excluded.line",
+        [TEAM, source, kind, id, String(name || id).slice(0, 200), line],
+      );
+    } else {
+      await c.db.run("delete from chat_lines where owner_id = $1 and source = $2 and kind = $3 and external_id = $4", [TEAM, source, kind, id]);
+    }
   },
   async setChannelSelected(c, id: string, selected: boolean) {
     await c.db.run("update slack_channels set selected = $1 where owner_id = $2 and id = $3", [selected, c.ownerId, id]);

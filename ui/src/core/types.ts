@@ -6,6 +6,8 @@ export type EmailTag = "respond" | "payment" | "newsletter" | "invite" | "notifi
 export type Priority = "high" | "mid" | "low";
 /** Business line of a conversation: the agency or the consulting offer. */
 export type Line = "agency" | "consulting";
+/** Business line of a task: the agency, the consulting offer, or sales (see `ChatLine`). */
+export type TaskLine = Line | "sales";
 /** The two sides of the dashboard. The switch in the header shows one at a time. */
 export type Mode = "professional" | "personal";
 
@@ -182,6 +184,8 @@ export interface TicketInput {
   pri?: Priority;
   /** Where to tell a team member it is theirs. Nothing: they are not told. */
   notify?: ("slack" | "telegram")[];
+  /** Agency, Consulting or Sales, set by hand. Null: the line of where it came from, if it has one. */
+  line?: TaskLine | null;
 }
 
 /** Something a check flagged, waiting for someone on the team to make it a ticket or turn it down. */
@@ -212,6 +216,8 @@ export interface ReviewItem {
   fromUser: string;
   /** From the signed-in person's own inbox or calls, so it can be opened here. */
   mine: boolean;
+  /** The line of the chat or person it came from, picked in Settings (see `ChatLine`). */
+  line: TaskLine | null;
 }
 
 export interface Delegation {
@@ -254,6 +260,10 @@ export interface Task {
   /** It came from someone else's inbox or calls: `src` cannot be opened here. */
   theirs?: boolean;
   history?: TicketEvent[];
+  /** Agency, Consulting or Sales, set by hand on the task. */
+  line?: TaskLine | null;
+  /** The line of the chat or person it came from, picked in Settings. A line set by hand wins (see `lineOf`). */
+  chatLine?: TaskLine | null;
 }
 
 export interface Suggestion {
@@ -351,6 +361,11 @@ export interface ImportantPick {
   kind: "chat" | "person";
   id: string;
   name: string;
+}
+
+/** A Slack channel, Telegram group or person picked as Agency, Consulting or Sales: the tasks from it are labelled so. The team's. */
+export interface ChatLine extends ImportantPick {
+  line: TaskLine;
 }
 
 /** A connected Google account, and what it allowed: reading Gmail, sending, reading the calendar, adding events. */
@@ -539,6 +554,8 @@ export interface AppState {
   slackPeople: { id: string; name: string }[];
   /** What is ticked as important in Settings. */
   important: ImportantPick[];
+  /** The team's picks of Agency, Consulting or Sales for chats and people (see `ChatLine`). */
+  chatLines: ChatLine[];
   /** The Telegram groups and channels, and the people, there are to tick. Empty where Telegram is not used. */
   /** The connected Telegram account's chats, and whether each is ticked to come in (see jobs/telegram.ts). */
   telegramChats: { id: string; name: string; kind: "group" | "channel" | "direct"; synced: boolean; lastAt: number | null }[];

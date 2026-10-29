@@ -4,12 +4,12 @@
 // /api/state, and every action below is one request to the server, which answers with the
 // fresh state. Nothing but small screen preferences lives only in the browser.
 import { useSyncExternalStore } from "react";
-import { MODE_NAME, PERSONAL_SIDE, PRIORITY_NAME } from "@/core/config";
+import { MODE_NAME, PERSONAL_SIDE, PRIORITY_NAME, TASK_LINE_NAME } from "@/core/config";
 import { isoDay, pad } from "@/core/dates";
 import { jobById } from "@/core/jobs";
 import { PROVIDER_NAME } from "@/core/providers";
 import type { AssignWhere } from "@/core/delegation";
-import type { AddedPicture, AppState, Conversation, ConversationChange, JobId, Mode, Person, Priority, Provider, Rule, Stamps, StateAnswer, Suggestion, Task, TicketInput } from "@/core/types";
+import type { AddedPicture, AppState, Conversation, ConversationChange, JobId, Mode, Person, Priority, Provider, Rule, Stamps, StateAnswer, Suggestion, Task, TaskLine, TicketInput } from "@/core/types";
 import type { RejectReason } from "@/core/config";
 
 export interface UiState {
@@ -569,6 +569,16 @@ export function setTelegramSync(ids: string[], on: boolean, name?: string) {
 /** Ticks something as important: its messages go to the top of the inbox. */
 export const setImportant = (source: "slack" | "telegram", kind: "chat" | "person", id: string, name: string, on: boolean) =>
   void act("setImportant", [source, kind, id, name, on], on ? `${name} is important: its messages go to the top of the inbox` : `${name} is no longer important`);
+
+/**
+ * Picks Agency, Consulting or Sales for a Slack channel, Telegram group or person, for the whole
+ * team: the tasks from it are labelled so. Null takes the pick away. Shown at once.
+ */
+export const setChatLine = (source: "slack" | "telegram", kind: "chat" | "person", id: string, name: string, line: TaskLine | null) =>
+  void act("setChatLine", [source, kind, id, name, line], line ? `${name}: ${TASK_LINE_NAME[line]}` : `${name}: no line`, (s) => ({
+    ...s,
+    chatLines: [...s.chatLines.filter((l) => !(l.source === source && l.kind === kind && l.id === id)), ...(line ? [{ source, kind, id, name, line }] : [])],
+  }));
 
 /** "Run now": runs one check straight away and says what it found. */
 export async function runJobNow(id: JobId) {

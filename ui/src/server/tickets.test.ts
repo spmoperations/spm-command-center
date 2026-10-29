@@ -425,3 +425,79 @@ describe("the team's clients", () => {
     expect(await db.query("select name from clients where owner_id = $1", [OWNER_ID])).toEqual([{ name: "Northwind Labs" }]);
   });
 });
+
+describe("Agency, Consulting or Sales", () => {
+  const pick = (who: string, source: string, kind: string, id: string, name: string, line: string | null) => act(who, "setChatLine", source, kind, id, name, line);
+  const lineOnBoard = async (title: string, viewer = OWNER_ID) => {
+    const t = (await loadState(db, viewer, now)).tasks.find((x) => x.title === title)!;
+    return [t.line ?? null, t.chatLine ?? null];
+  };
+
+  it("are picked for chats and people by anyone with a login, once for the whole team", async () => {
+    await pick(alex, "slack", "chat", "C1", "#sales", "sales");
+    await pick(OWNER_ID, "telegram", "person", "555", "Dana", "consulting");
+    for (const who of [OWNER_ID, alex]) {
+      expect((await loadState(db, who, now)).chatLines).toEqual([
+        { source: "slack", kind: "chat", id: "C1", name: "#sales", line: "sales" },
+        { source: "telegram", kind: "person", id: "555", name: "Dana", line: "consulting" },
+      ]);
+    }
+    // Picked again, it changes; taken away, it goes.
+    await pick(OWNER_ID, "slack", "chat", "C1", "#sales", "agency");
+    await pick(alex, "telegram", "person", "555", "Dana", null);
+    expect((await loadState(db, alex, now)).chatLines.map((l) => [l.id, l.line])).toEqual([["C1", "agency"]]);
+    expect(await refused(alex, "setChatLine", "slack", "chat", "C1", "#sales", "marketing")).toBe("That is not Agency, Consulting or Sales.");
+    expect(await refused(alex, "setChatLine", "gmail", "chat", "C1", "#sales", "sales")).toBe("That is not a chat or a person.");
+  });
+
+  it("label a task with its chat's line, those made before the pick too, and the review card before it is a task", async () => {
+    await suggestion("s_sales", { title: "Send Priya the call notes", src: ["message", "slack:C1"], key: "ask:slack:C1:1.0" });
+    expect((await loadState(db, alex, now)).review.find((g) => g.id === "s_sales")?.line).toBeNull();
+    await pick(OWNER_ID, "slack", "chat", "C1", "#sales", "sales");
+    expect((await loadState(db, alex, now)).review.find((g) => g.id === "s_sales")?.line).toBe("sales");
+    await act(alex, "acceptSuggestion", "s_sales");
+    expect(await lineOnBoard("Send Priya the call notes", alex)).toEqual([null, "sales"]);
+    // Picked otherwise later: the task follows.
+    await pick(alex, "slack", "chat", "C1", "#sales", "consulting");
+    expect(await lineOnBoard("Send Priya the call notes")).toEqual([null, "consulting"]);
+  });
+
+  it("take a direct chat's line from the person in it, and a channel's own pick first", async () => {
+    // The owner's direct chat with Maya on Slack (seeded as slack:D1), and Alex's own Telegram chat with Dana.
+    await db.run("insert into slack_channels (owner_id, id, name, kind, user_id) values ($1, 'D1', 'Maya Chen', 'im', 'UMAYA')", [OWNER_ID]);
+    await db.run("insert into conversations (id, owner_id, source, external_id, from_name, ctx, direct, tagged, last_text, last_at) values ('telegram:555', $1, 'telegram', '555', 'Dana', 'Direct message', true, false, 'Can you call me?', $2)", [alex, NOW]);
+    await suggestion("s_maya", { title: "Swap the hook for Maya", src: ["message", "slack:D1"] });
+    await suggestion("s_dana", { owner: alex, title: "Call Dana back", src: ["message", "telegram:555"], key: "ask:telegram:555:1" });
+    await act(OWNER_ID, "acceptSuggestion", "s_maya");
+    await act(alex, "acceptSuggestion", "s_dana");
+    await pick(OWNER_ID, "slack", "person", "UMAYA", "Maya Chen", "agency");
+    await pick(alex, "telegram", "person", "555", "Dana", "consulting");
+    expect(await lineOnBoard("Swap the hook for Maya")).toEqual([null, "agency"]);
+    expect(await lineOnBoard("Call Dana back")).toEqual([null, "consulting"]);
+    // Someone picked does not label a channel they write in: only their direct chat counts.
+    await suggestion("s_chan", { title: "From the sales channel", src: ["message", "slack:C1"], key: "ask:slack:C1:2.0" });
+    await act(OWNER_ID, "acceptSuggestion", "s_chan");
+    expect(await lineOnBoard("From the sales channel")).toEqual([null, null]);
+  });
+
+  it("can be set on a task by hand, which wins, and goes in its history", async () => {
+    await pick(OWNER_ID, "slack", "chat", "C1", "#sales", "sales");
+    await suggestion("s_hand", { title: "Book the studio", src: ["message", "slack:C1"], key: "ask:slack:C1:3.0" });
+    await act(OWNER_ID, "acceptSuggestion", "s_hand", { line: "agency" });
+    expect(await lineOnBoard("Book the studio")).toEqual(["agency", "sales"]);
+    const [t] = await db.query<{ id: string }>("select id from tasks where title = 'Book the studio'");
+    await act(alex, "updateTicket", t.id, { line: "consulting" });
+    await act(alex, "updateTicket", t.id, { line: null });
+    expect(await lineOnBoard("Book the studio")).toEqual([null, "sales"]);
+    const history = (await loadState(db, OWNER_ID, now)).tasks.find((x) => x.id === t.id)!.history!.map((e) => e.what);
+    expect(history.slice(-2)).toEqual(["Line: Consulting", "Line: as its chat"]);
+    // A task made by hand has a line only when one is picked.
+    await act(OWNER_ID, "createTicket", ticket({ title: "By hand", line: "sales" }));
+    await act(OWNER_ID, "createTicket", ticket({ title: "By hand, no line" }));
+    expect([await lineOnBoard("By hand"), await lineOnBoard("By hand, no line")]).toEqual([
+      ["sales", null],
+      [null, null],
+    ]);
+    expect(await refused(OWNER_ID, "createTicket", ticket({ title: "Wrong", line: "marketing" as never }))).toBe("That is not Agency, Consulting or Sales.");
+  });
+});

@@ -8,10 +8,11 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Seg } from "@/components/bits";
 import { reviewWaiting } from "@/core/review";
-import { assignable, SourceBox, sourceApp, StatusPill, ticketName, TicketForm, Who } from "@/components/Tickets";
-import { conversationPage, PERSONAL_SIDE, MODE_NAME, TICKET_STATUS_NAME, TICKET_STATUSES } from "@/core/config";
+import { assignable, LineChip, SourceBox, sourceApp, StatusPill, ticketName, TicketForm, Who } from "@/components/Tickets";
+import { conversationPage, PERSONAL_SIDE, MODE_NAME, TASK_LINE_NAME, TASK_LINES, TICKET_STATUS_NAME, TICKET_STATUSES } from "@/core/config";
 import { dueLabel, stamp } from "@/core/dates";
-import type { Task, TicketInput, TicketStatus } from "@/core/types";
+import { lineOf } from "@/core/delegation";
+import type { Task, TaskLine, TicketInput, TicketStatus } from "@/core/types";
 import { createTicket, openConversation, openTask, showMeeting, toggleTask, updateTicket, useApp, type App } from "@/store/store";
 
 /** Done tickets shown before "Show all": the newest. */
@@ -44,12 +45,13 @@ const asInput = (t: Task): TicketInput => ({
   status: t.status,
   pri: t.pri,
   notify: [],
+  line: t.line ?? null,
 });
 
 /** Only what was changed goes to the server, so the history says just that. */
 function changes(before: TicketInput, after: TicketInput): Partial<TicketInput> {
   const patch: Partial<TicketInput> = {};
-  for (const key of ["title", "description", "client", "due", "status", "pri"] as const) if (after[key] !== before[key]) Object.assign(patch, { [key]: after[key] });
+  for (const key of ["title", "description", "client", "due", "status", "pri", "line"] as const) if (after[key] !== before[key]) Object.assign(patch, { [key]: after[key] });
   if (after.assignee !== before.assignee)
     Object.assign(patch, {
       assignee: after.assignee,
@@ -75,7 +77,12 @@ function TicketCard({ t, app, onOpen }: { t: Task; app: App; onOpen(): void }) {
           {t.title}
         </button>
       </div>
-      {t.project && <span className="chip">{t.project}</span>}
+      {(t.project || lineOf(t)) && (
+        <div className="tk-chips">
+          {lineOf(t) && <LineChip line={lineOf(t)!} />}
+          {t.project && <span className="chip">{t.project}</span>}
+        </div>
+      )}
       <div className="tk-meta">
         <StatusSelect t={t} />
         <span className={`due ${t.done ? "" : due.tone}`}>{t.done ? "Done" : due.text}</span>
@@ -101,6 +108,7 @@ function TicketLine({ t, app, onOpen }: { t: Task; app: App; onOpen(): void }) {
       <button className="tk-title" onClick={onOpen}>
         {t.title}
       </button>
+      {lineOf(t) && <LineChip line={lineOf(t)!} />}
       {t.project && <span className="chip">{t.project}</span>}
       <StatusSelect t={t} />
       <span className={`due ${t.done ? "" : due.tone}`}>{t.done ? "Done" : due.text}</span>
@@ -188,6 +196,7 @@ function TicketDetail({ t, app, onClose }: { t: Task; app: App; onClose(): void 
       clients={state.clients}
       submit="Save"
       assigned
+      fromChat={t.chatLine ?? null}
       onSubmit={async (after) => {
         const patch = changes(before, after);
         return Object.keys(patch).length ? updateTicket(t.id, patch, "Saved") : true;
@@ -244,6 +253,7 @@ export default function TasksPage() {
   const app = useApp();
   const [who, setWho] = useState("all");
   const [client, setClient] = useState("all");
+  const [line, setLine] = useState<"all" | "none" | TaskLine>("all");
   const [adding, setAdding] = useState(false);
   const [allDone, setAllDone] = useState(false);
   const [over, setOver] = useState<TicketStatus | null>(null);
@@ -278,7 +288,12 @@ export default function TasksPage() {
   const opened = state.tasks.find((t) => t.id === ui.openTask) ?? null;
 
   const inMode = state.tasks.filter((t) => t.mode === ui.mode);
-  const shown = inMode.filter((t) => (who === "all" || (who === "none" ? !t.assignee : t.assignee === who)) && (client === "all" || t.project === client));
+  const shown = inMode.filter(
+    (t) =>
+      (who === "all" || (who === "none" ? !t.assignee : t.assignee === who)) &&
+      (client === "all" || t.project === client) &&
+      (line === "all" || (lineOf(t) ?? "none") === line),
+  );
   const open = shown.filter((t) => !t.done);
   const overdue = open.filter((t) => t.due < today).length;
   const column = (s: TicketStatus) => {
@@ -326,6 +341,15 @@ export default function TasksPage() {
             {clients.map((c) => (
               <option key={c}>{c}</option>
             ))}
+          </select>
+          <select className="f" value={line} aria-label="Agency, Consulting or Sales" onChange={(e) => setLine(e.target.value as typeof line)}>
+            <option value="all">Agency, Consulting and Sales</option>
+            {TASK_LINES.map((l) => (
+              <option key={l} value={l}>
+                {TASK_LINE_NAME[l]}
+              </option>
+            ))}
+            <option value="none">Not sorted yet</option>
           </select>
           <button className="btn primary" onClick={() => setAdding(true)}>
             + New task
@@ -387,6 +411,7 @@ export default function TasksPage() {
             due: today,
             status: "open",
             pri: "mid",
+            line: line === "all" || line === "none" ? null : line,
           }}
           people={assignable(state)}
           clients={state.clients}

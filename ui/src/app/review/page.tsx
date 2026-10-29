@@ -6,7 +6,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { Seg } from "@/components/bits";
-import { assignable, ClientPicker, defaultNotify, NotifyChoice, PersonPicker, SourceBox, ticketName, TicketForm, type Assignable } from "@/components/Tickets";
+import { assignable, ClientPicker, defaultNotify, LineChip, NotifyChoice, PersonPicker, SourceBox, ticketName, TicketForm, type Assignable } from "@/components/Tickets";
 import { conversationPage, REJECT_REASONS, REVIEW_FROM, type RejectReason } from "@/core/config";
 import { parseDay, stamp } from "@/core/dates";
 import { raisedIn, REVIEW_WHEN_NAME, reviewWaiting, type ReviewWhen } from "@/core/review";
@@ -25,6 +25,8 @@ const asInput = (g: ReviewItem, today: string, people: Assignable[]): TicketInpu
   status: "open",
   pri: g.pri,
   notify: defaultNotify(people, g.assignee),
+  // As its chat (see ChatLine), unless one is picked when editing.
+  line: null,
 });
 
 function ReviewCard({ g, app, people, picked, onPick, clients }: { g: ReviewItem; app: App; people: Assignable[]; picked: boolean; onPick(on: boolean, range: boolean): void; clients: string[] }) {
@@ -40,6 +42,7 @@ function ReviewCard({ g, app, people, picked, onPick, clients }: { g: ReviewItem
       <div className="rv-top">
         <input type="checkbox" className="pick" checked={picked} aria-label={`Select: ${g.title}`} onClick={(e) => onPick(!picked, e.shiftKey)} onChange={() => {}} />
         <span className="pill tk-new">New task</span>
+        {g.line && <LineChip line={g.line} />}
         {g.looksDone && <span className="pill tk-done">Looks done already</span>}
         {g.confidence !== null && (
           <span className="chip rv-sure" title="How sure the AI is that this is a real task">
@@ -140,7 +143,7 @@ function ReviewCard({ g, app, people, picked, onPick, clients }: { g: ReviewItem
         </div>
       )}
       {editing && (
-        <TicketForm heading="Edit and accept" initial={card} people={people} clients={clients} submit="Accept" onSubmit={(input) => acceptReview(g.id, input)} onCancel={() => setEditing(false)} />
+        <TicketForm heading="Edit and accept" initial={card} people={people} clients={clients} submit="Accept" fromChat={g.line} onSubmit={(input) => acceptReview(g.id, input)} onCancel={() => setEditing(false)} />
       )}
     </article>
   );

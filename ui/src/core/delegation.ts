@@ -2,7 +2,7 @@
 import { PRIORITY_NAME } from "./config";
 import { parseDay } from "./dates";
 import { norm } from "./rules";
-import type { Person, Priority, Task } from "./types";
+import type { Person, Priority, Task, TaskLine } from "./types";
 
 type Delegable = Pick<Task, "title" | "project" | "dept">;
 
@@ -112,3 +112,6 @@ export type TaskStatus = "done" | "overdue" | "ontrack";
 
 export const taskStatus = (t: Task, today: string): TaskStatus =>
   t.done ? "done" : t.due < today ? "overdue" : "ontrack";
+
+/** Agency, Consulting or Sales, as a task shows it: set by hand, else the line of the chat or person it came from. */
+export const lineOf = (t: Pick<Task, "line" | "chatLine">): TaskLine | null => t.line ?? t.chatLine ?? null;

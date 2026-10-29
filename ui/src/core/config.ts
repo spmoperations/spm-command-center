@@ -1,4 +1,4 @@
-import type { Line, Mode, Priority, Provider, Source, TicketStatus } from "./types";
+import type { Line, Mode, Priority, Provider, Source, TaskLine, TicketStatus } from "./types";
 
 /** Jeremy's five departments, as named in his prototype. */
 export const DEPTS = ["Client Sales", "SPM Sales", "SPM Marketing", "Operations", "Finances"] as const;
@@ -100,6 +100,9 @@ export const PRIORITY_NAME: Record<Priority, string> = { high: "High", mid: "Med
 export const PRIORITY_RANK: Record<Priority, number> = { high: 0, mid: 1, low: 2 };
 
 export const LINE_NAME: Record<Line, string> = { agency: "Agency", consulting: "Consulting" };
+/** What a task can be labelled: whose side of the business it is for (see ChatLine). */
+export const TASK_LINES: TaskLine[] = ["agency", "consulting", "sales"];
+export const TASK_LINE_NAME: Record<TaskLine, string> = { ...LINE_NAME, sales: "Sales" };
 
 export const MODES: Mode[] = ["professional", "personal"];
 export const MODE_NAME: Record<Mode, string> = { professional: "Professional", personal: "Personal" };

@@ -5,9 +5,9 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { Combo } from "@/components/Combo";
 import { Avatar } from "@/components/MessageText";
-import { PRIORITIES, PRIORITY_NAME, TICKET_PREFIX, TICKET_STATUS_NAME, TICKET_STATUSES } from "@/core/config";
+import { PRIORITIES, PRIORITY_NAME, TASK_LINE_NAME, TASK_LINES, TICKET_PREFIX, TICKET_STATUS_NAME, TICKET_STATUSES } from "@/core/config";
 import { addClient } from "@/store/store";
-import type { AppState, SourceNote, TeamPerson, TicketInput, TicketStatus } from "@/core/types";
+import type { AppState, SourceNote, TaskLine, TeamPerson, TicketInput, TicketStatus } from "@/core/types";
 
 export const ticketName = (n: number | null | undefined) => (n ? `${TICKET_PREFIX}-${n}` : "");
 
@@ -20,6 +20,9 @@ export function defaultNotify(people: TeamPerson[], assignee: string | null): No
 
 /** The app a source is in, by the first word of where it came from. */
 export const sourceApp = (note: SourceNote | null | undefined) => note?.label.split(" · ")[0] ?? "By hand";
+
+/** Agency, Consulting or Sales on a ticket or a review card, each in its own color. */
+export const LineChip = ({ line }: { line: TaskLine }) => <span className={`chip line-${line}`}>{TASK_LINE_NAME[line]}</span>;
 
 export function StatusPill({ status }: { status: TicketStatus }) {
   return <span className={`pill tk-${status}`}>{TICKET_STATUS_NAME[status]}</span>;
@@ -279,7 +282,8 @@ export function SourceBox({ note, extra }: { note: SourceNote; extra?: React.Rea
  * A ticket's fields, for a new ticket, a suggestion being edited before it is accepted, or a
  * ticket opened on the board. `onSubmit` answers true once it is saved, and the form closes.
  * `assigned` is a ticket already in someone's hands: they were told when it was given to them,
- * so being told is only asked about when it goes to someone else.
+ * so being told is only asked about when it goes to someone else. `fromChat` is the line of the
+ * chat or person it came from (see ChatLine), which it keeps unless one is picked here.
  */
 export function TicketForm({
   heading,
@@ -291,6 +295,7 @@ export function TicketForm({
   onCancel,
   children,
   assigned = false,
+  fromChat = null,
 }: {
   heading: string;
   initial: TicketInput;
@@ -301,6 +306,7 @@ export function TicketForm({
   onCancel(): void;
   children?: React.ReactNode;
   assigned?: boolean;
+  fromChat?: TaskLine | null;
 }) {
   const [t, setT] = useState<TicketInput>({
     ...initial,
@@ -368,6 +374,17 @@ export function TicketForm({
               {PRIORITIES.map((p) => (
                 <option key={p} value={p}>
                   {PRIORITY_NAME[p]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="tk-field">
+            <span className="label">Agency, Consulting or Sales</span>
+            <select className="f" value={t.line ?? ""} onChange={(e) => set({ line: (e.target.value || null) as TaskLine | null })}>
+              <option value="">{fromChat ? `As its chat: ${TASK_LINE_NAME[fromChat]}` : "Not set"}</option>
+              {TASK_LINES.map((l) => (
+                <option key={l} value={l}>
+                  {TASK_LINE_NAME[l]}
                 </option>
               ))}
             </select>

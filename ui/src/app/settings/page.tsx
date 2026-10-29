@@ -4,15 +4,15 @@ import Link from "next/link";
 import { useState } from "react";
 import { Seg } from "@/components/bits";
 import { Combo } from "@/components/Combo";
-import { DEPARTMENTS, DEPTS, LINE_NAME, liveSources, PERSONAL_SIDE, PRIORITY_NAME, SOURCE_NAME, TEAM_GOOGLE_DOMAIN } from "@/core/config";
+import { DEPARTMENTS, DEPTS, LINE_NAME, liveSources, PERSONAL_SIDE, PRIORITY_NAME, SOURCE_NAME, TASK_LINE_NAME, TASK_LINES, TEAM_GOOGLE_DOMAIN } from "@/core/config";
 import { ago } from "@/core/dates";
 import { describeInterval, jobById, liveJobs, type Connection } from "@/core/jobs";
 import { PROVIDER_NAME } from "@/core/providers";
 import { ruleHits } from "@/core/rules";
-import type { JobSetting, Line, Person, Priority, Rule, Source, TeamLogin } from "@/core/types";
+import type { AppState, JobSetting, Line, Person, Priority, Rule, Source, TaskLine, TeamLogin } from "@/core/types";
 import {
   addHandle, addPerson, addRule, addTeamLogin, clearManualPriorities, deleteRule, moveRule, removeHandle, removePerson, removeTaskLogin, runJobNow, setPersonTelegram,
-  removeTeamLogin, setChannelSelected, setImportant, setJobEnabled, setJobInterval, setTaskLogin, setTeamPassword, setTelegramSync, syncNow, toast, togglePersonDept, turnOffTeamLogin, useApp,
+  removeTeamLogin, setChannelSelected, setChatLine, setImportant, setJobEnabled, setJobInterval, setTaskLogin, setTeamPassword, setTelegramSync, syncNow, toast, togglePersonDept, turnOffTeamLogin, useApp,
   type App, type RuleKind,
 } from "@/store/store";
 
@@ -240,6 +240,19 @@ function TelegramChats({ app }: { app: App }) {
 }
 
 type ImportantTab = "slack-chat" | "slack-person" | "telegram-chat" | "telegram-person";
+type PickList = { source: "slack" | "telegram"; kind: "chat" | "person"; label: string; find: string; items: { id: string; name: string; note?: string }[] };
+
+/** The Slack channels and people, and the Telegram groups and people, the signed-in person can pick from; Telegram only where it is connected. */
+function pickLists(state: AppState): { lists: Record<ImportantTab, PickList>; tabs: ImportantTab[] } {
+  const telegram = state.telegramAvailable && state.connections.telegram.connected;
+  const lists: Record<ImportantTab, PickList> = {
+    "slack-chat": { source: "slack", kind: "chat", label: "Slack channels", find: "Find a channel", items: state.channels.map((c) => ({ id: c.id, name: `#${c.name}`, note: c.kind === "private" ? "Private" : undefined })) },
+    "slack-person": { source: "slack", kind: "person", label: "Slack people", find: "Find a person", items: state.slackPeople },
+    "telegram-chat": { source: "telegram", kind: "chat", label: "Telegram groups", find: "Find a group or channel", items: state.telegramChats.filter((c) => c.kind !== "direct").map((c) => ({ id: c.id, name: c.name, note: c.kind === "channel" ? "Channel" : undefined })) },
+    "telegram-person": { source: "telegram", kind: "person", label: "Telegram people", find: "Find a person", items: state.telegramPeople },
+  };
+  return { lists, tabs: (Object.keys(lists) as ImportantTab[]).filter((t) => telegram || lists[t].source === "slack") };
+}
 
 /**
  * The channels, chats and people that matter most. Their messages go to the top of the inbox,
@@ -247,17 +260,10 @@ type ImportantTab = "slack-chat" | "slack-person" | "telegram-chat" | "telegram-
  */
 function Important({ app }: { app: App }) {
   const { state } = app;
-  const telegram = state.telegramAvailable && state.connections.telegram.connected;
   const [tab, setTab] = useState<ImportantTab>("slack-chat");
   const [filter, setFilter] = useState("");
   const [onlyTicked, setOnlyTicked] = useState(false);
-  const lists: Record<ImportantTab, { source: "slack" | "telegram"; kind: "chat" | "person"; label: string; find: string; items: { id: string; name: string; note?: string }[] }> = {
-    "slack-chat": { source: "slack", kind: "chat", label: "Slack channels", find: "Find a channel", items: state.channels.map((c) => ({ id: c.id, name: `#${c.name}`, note: c.kind === "private" ? "Private" : undefined })) },
-    "slack-person": { source: "slack", kind: "person", label: "Slack people", find: "Find a person", items: state.slackPeople },
-    "telegram-chat": { source: "telegram", kind: "chat", label: "Telegram groups", find: "Find a group or channel", items: state.telegramChats.filter((c) => c.kind !== "direct").map((c) => ({ id: c.id, name: c.name, note: c.kind === "channel" ? "Channel" : undefined })) },
-    "telegram-person": { source: "telegram", kind: "person", label: "Telegram people", find: "Find a person", items: state.telegramPeople },
-  };
-  const tabs = (Object.keys(lists) as ImportantTab[]).filter((t) => telegram || lists[t].source === "slack");
+  const { lists, tabs } = pickLists(state);
   const current = lists[tabs.includes(tab) ? tab : "slack-chat"];
   const ticked = (source: string, kind: string, id: string) => state.important.some((i) => i.source === source && i.kind === kind && i.id === id);
   const count = (t: ImportantTab) => state.important.filter((i) => i.source === lists[t].source && i.kind === lists[t].kind).length;
@@ -302,6 +308,83 @@ function Important({ app }: { app: App }) {
               </li>
             ))}
             {shown.length === 0 && <li className="muted">{onlyTicked && !words ? "Nothing ticked here yet." : "Nothing matches that."}</li>}
+          </ul>
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Agency, Consulting or Sales for each Slack channel, Telegram group and person: every task that
+ * comes from one is labelled so on the board and in the review, those already there too. The
+ * team's: everyone with a login picks for everyone (see ChatLine).
+ */
+function ChatLines({ app }: { app: App }) {
+  const { state } = app;
+  const [tab, setTab] = useState<ImportantTab>("slack-chat");
+  const [filter, setFilter] = useState("");
+  const [onlyPicked, setOnlyPicked] = useState(false);
+  const { lists, tabs } = pickLists(state);
+  const current = lists[tabs.includes(tab) ? tab : "slack-chat"];
+  const picks = state.chatLines.filter((l) => l.source === current.source && l.kind === current.kind);
+  const pickOf = (id: string) => picks.find((l) => l.id === id)?.line ?? null;
+  const count = (t: ImportantTab) => state.chatLines.filter((l) => l.source === lists[t].source && l.kind === lists[t].kind).length;
+  // A pick for something not in this person's own lists (someone else's Telegram, or a chat gone since) still shows, by the name it was picked under.
+  const items = [...current.items, ...picks.filter((l) => !current.items.some((i) => i.id === l.id)).map((l) => ({ id: l.id, name: l.name, note: "Not in your list" }))];
+  const words = filter.trim().toLowerCase();
+  const shown = items.filter((i) => (!words || i.name.toLowerCase().includes(words)) && (!onlyPicked || pickOf(i.id)));
+  return (
+    <div className="panel set-sec" id="lines">
+      <div className="panel-head">
+        <h3>Agency, Consulting or Sales</h3>
+        <span className="muted" style={{ fontSize: 13 }}>
+          {state.chatLines.length} picked
+        </span>
+      </div>
+      <p className="set-intro">
+        Pick which side of the business each channel, group and person is for. Every task that comes from one of them is labelled with it on the board and in the review, the tasks already
+        there too, so it is clear whose it is. A person counts in your direct chat with them; a channel or group comes first. A label set on a task by hand wins. The picks are the team&apos;s:
+        everyone with a login sees the same.
+      </p>
+      <div className="imp-tabs" role="tablist" aria-label="What to pick for">
+        {tabs.map((t) => (
+          <button key={t} role="tab" aria-selected={current === lists[t]} onClick={() => setTab(t)}>
+            {lists[t].label} <span className="n">{count(t)}</span>
+          </button>
+        ))}
+      </div>
+      {items.length === 0 ? (
+        <p className="empty">{current.source === "slack" ? "This list fills in once Slack is connected and its channel and people list has been read." : "This list fills in once Telegram has been read."}</p>
+      ) : (
+        <>
+          <div className="imp-tools">
+            <input className="f" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder={current.find} aria-label={current.find} />
+            <label className="inline-check">
+              <input type="checkbox" checked={onlyPicked} onChange={(e) => setOnlyPicked(e.target.checked)} /> Only picked
+            </label>
+          </div>
+          <ul className="channel-list line-list">
+            {shown.map((i) => (
+              <li key={i.id}>
+                <span className="line-name">{i.name}</span>
+                {i.note && <span className="chip">{i.note}</span>}
+                <select
+                  className={`f line-pick ${pickOf(i.id) ? `line-${pickOf(i.id)}` : ""}`}
+                  value={pickOf(i.id) ?? ""}
+                  aria-label={`Agency, Consulting or Sales: ${i.name}`}
+                  onChange={(e) => setChatLine(current.source, current.kind, i.id, i.name, (e.target.value || null) as TaskLine | null)}
+                >
+                  <option value="">Not set</option>
+                  {TASK_LINES.map((l) => (
+                    <option key={l} value={l}>
+                      {TASK_LINE_NAME[l]}
+                    </option>
+                  ))}
+                </select>
+              </li>
+            ))}
+            {shown.length === 0 && <li className="muted">{onlyPicked && !words ? "Nothing picked here yet." : "Nothing matches that."}</li>}
           </ul>
         </>
       )}
@@ -806,6 +889,7 @@ export default function SettingsPage() {
       <nav className="set-nav" aria-label="Settings sections">
         <a href="#timers">Sync</a>
         <a href="#important">Important</a>
+        <a href="#lines">Agency, Consulting or Sales</a>
         <a href="#channels">Channels</a>
         {app.state.telegramAvailable && app.state.connections.telegram.connected && <a href="#telegram">Telegram chats</a>}
         <a href="#team">Team</a>
@@ -816,6 +900,7 @@ export default function SettingsPage() {
 
       <Timers app={app} />
       <Important app={app} />
+      <ChatLines app={app} />
       <Channels app={app} />
       <TelegramChats app={app} />
       <Team app={app} />
@@ -845,7 +930,7 @@ export default function SettingsPage() {
           kind="labelRules"
           id="labels"
           title="Agency or Consulting"
-          intro="Rules that label a chat as Agency or Consulting. They run top to bottom and the first match wins. A chat that matches no rule is Agency."
+          intro="Rules that label a chat in the inbox as Agency or Consulting. They run top to bottom and the first match wins. A chat that matches no rule is Agency. Tasks are labelled under Agency, Consulting or Sales above."
           outcomes={[["consulting", "Consulting"], ["agency", "Agency"]]}
           outcomeOf={(r) => LINE_NAME[r.line ?? "agency"]}
           makeOutcome={(line) => ({ line })}

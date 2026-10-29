@@ -754,6 +754,15 @@ img.avatar { object-fit: cover; background: var(--surface-2); }
 .imp-tabs .n { font: 600 11px var(--f-mono); padding: 0 6px; border-radius: 99px; background: var(--surface-2); border: 1px solid var(--line); }
 .imp-tools { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 0 16px 10px; }
 .imp-tools input.f { width: min(100%, 320px); }
+/* Agency, Consulting or Sales: on tickets, review cards, and the picks in Settings. */
+.chip.line-agency, .line-pick.line-agency { color: var(--cal-1); background: color-mix(in srgb, var(--cal-1) 14%, var(--surface)); border-color: transparent; font-weight: 600; }
+.chip.line-consulting, .line-pick.line-consulting { color: var(--cal-4); background: color-mix(in srgb, var(--cal-4) 14%, var(--surface)); border-color: transparent; font-weight: 600; }
+.chip.line-sales, .line-pick.line-sales { color: var(--cal-3); background: color-mix(in srgb, var(--cal-3) 14%, var(--surface)); border-color: transparent; font-weight: 600; }
+.line-list { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); max-height: 420px; }
+.line-list li { display: flex; gap: 8px; align-items: center; padding: 4px 0; font-size: 14px; min-width: 0; }
+.line-list .line-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.line-list select.line-pick { flex: none; width: 128px; padding: 3px 8px; font-size: 13px; }
+.tk-chips { display: flex; gap: 6px; flex-wrap: wrap; }
 
 /* ---------- Google setup guide ---------- */
 .gs-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 16px; }
