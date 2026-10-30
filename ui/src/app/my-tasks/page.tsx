@@ -10,7 +10,7 @@ import { Seg } from "@/components/bits";
 import { ThemeToggle } from "@/components/Shell";
 import { StatusPill } from "@/components/Tickets";
 import { PRIORITIES, PRIORITY_NAME, TICKET_STATUS_NAME, TICKET_STATUSES } from "@/core/config";
-import { addDays, dueLabel, isoDay, parseDay } from "@/core/dates";
+import { addDays, dueLabel, isOverdue, isoDay, parseDay, soonestDue } from "@/core/dates";
 import type { MyTask, Priority, TicketStatus } from "@/core/types";
 
 interface Mine {
@@ -49,7 +49,7 @@ async function signOut() {
 }
 
 const never = () => () => {};
-const soonestFirst = (a: MyTask, b: MyTask) => a.due.localeCompare(b.due) || a.ticket.localeCompare(b.ticket, undefined, { numeric: true });
+const soonestFirst = (a: MyTask, b: MyTask) => soonestDue(a.due, b.due) || a.ticket.localeCompare(b.ticket, undefined, { numeric: true });
 const newestDoneFirst = (a: MyTask, b: MyTask) => (b.doneAt ?? 0) - (a.doneAt ?? 0);
 
 function StatusSelect({ t, onStatus }: { t: MyTask; onStatus(status: TicketStatus): void }) {
@@ -123,7 +123,7 @@ function Detail({ t, today, onClose, onStatus }: { t: MyTask; today: string; onC
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
   }, [onClose]);
-  const day = parseDay(t.due).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  const day = t.due ? parseDay(t.due).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }) : "No due date";
   return (
     <div className="cal-modal" role="presentation" onClick={onClose}>
       <div className="panel tk-form" role="dialog" aria-modal="true" aria-label={t.title} onClick={(e) => e.stopPropagation()}>
@@ -260,11 +260,11 @@ export default function MyTasksPage() {
       (!typed || `${t.ticket} ${t.title} ${t.description} ${t.client}`.toLowerCase().includes(typed)) &&
       (client === "all" || t.client === client) &&
       (pri === "all" || t.pri === pri) &&
-      (due === "all" || (due === "overdue" ? t.status !== "done" && t.due < today : due === "today" ? t.due === today : t.due >= today && t.due <= weekEnd)),
+      (due === "all" || (due === "overdue" ? t.status !== "done" && isOverdue(t.due, today) : due === "today" ? t.due === today : t.due !== "" && t.due >= today && t.due <= weekEnd)),
   );
   const filtering = Boolean(typed) || client !== "all" || pri !== "all" || due !== "all";
   const openOnes = tasks.filter((t) => t.status !== "done");
-  const overdue = openOnes.filter((t) => t.due < today).length;
+  const overdue = openOnes.filter((t) => isOverdue(t.due, today)).length;
   const opened = tasks.find((t) => t.id === openId) ?? (!linkSeen && picked ? tasks.find((t) => t.ticket === picked) : undefined) ?? null;
   const column = (s: TicketStatus) => shown.filter((t) => t.status === s).sort(s === "done" ? newestDoneFirst : soonestFirst);
   const listOpen = shown.filter((t) => t.status !== "done").sort(soonestFirst);

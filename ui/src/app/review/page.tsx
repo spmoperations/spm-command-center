@@ -7,10 +7,10 @@ import Link from "next/link";
 import { useState } from "react";
 import { Seg } from "@/components/bits";
 import { assignable, ClientPicker, defaultNotify, LineChip, NotifyChoice, PersonPicker, SourceBox, ticketName, TicketForm, type Assignable } from "@/components/Tickets";
-import { conversationPage, REJECT_REASONS, REVIEW_FROM, type RejectReason } from "@/core/config";
-import { parseDay, stamp } from "@/core/dates";
+import { conversationPage, REJECT_REASONS, REVIEW_FROM, TASK_LINE_NAME, TASK_LINES, type RejectReason } from "@/core/config";
+import { isOverdue, parseDay, stamp } from "@/core/dates";
 import { raisedIn, REVIEW_WHEN_NAME, reviewWaiting, type ReviewWhen } from "@/core/review";
-import type { ReviewItem, TicketInput } from "@/core/types";
+import type { ReviewItem, TaskLine, TicketInput } from "@/core/types";
 import { acceptReview, mergeReview, openConversation, rejectReview, restoreReview, reviewMany, showMeeting, useApp, type App } from "@/store/store";
 
 const REASONS = Object.entries(REJECT_REASONS) as [RejectReason, string][];
@@ -21,7 +21,7 @@ const asInput = (g: ReviewItem, today: string, people: Assignable[]): TicketInpu
   description: g.why,
   assignee: g.assignee,
   client: g.client,
-  due: g.due < today ? today : g.due,
+  due: isOverdue(g.due, today) ? today : g.due,
   status: "open",
   pri: g.pri,
   notify: defaultNotify(people, g.assignee),
@@ -153,6 +153,7 @@ export default function ReviewPage() {
   const app = useApp();
   const [from, setFrom] = useState("all");
   const [when, setWhen] = useState<ReviewWhen>("all");
+  const [line, setLine] = useState<"all" | TaskLine>("all");
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [last, setLast] = useState<string | null>(null);
   const [reason, setReason] = useState<RejectReason>("not_task");
@@ -161,14 +162,16 @@ export default function ReviewPage() {
   const clients = state.clients;
   const people = assignable(state);
   const logins = state.people.filter((p) => p.login);
-  // Everything raised since the Review tab started (REVIEW_FROM), then narrowed by whose it is and when it was raised.
+  // Everything raised since the Review tab started (REVIEW_FROM), then narrowed by whose it is, its line and when it was raised.
   const whose = (g: ReviewItem) => from === "all" || (from === "mine" ? g.mine : `user:${g.fromUser}` === from);
+  const inLine = (g: ReviewItem) => line === "all" || g.line === line;
   const waiting = reviewWaiting(state.review).filter(whose);
-  const shown = waiting.filter((g) => raisedIn(g.raisedAt, when, app.now));
+  const shown = waiting.filter((g) => inLine(g) && raisedIn(g.raisedAt, when, app.now));
   const setAside = reviewWaiting(state.setAside)
     .filter(whose)
-    .filter((g) => raisedIn(g.raisedAt, when, app.now));
-  const count = (w: ReviewWhen) => waiting.filter((g) => raisedIn(g.raisedAt, w, app.now)).length;
+    .filter((g) => inLine(g) && raisedIn(g.raisedAt, when, app.now));
+  const count = (w: ReviewWhen) => waiting.filter((g) => inLine(g) && raisedIn(g.raisedAt, w, app.now)).length;
+  const countIn = (l: TaskLine) => waiting.filter((g) => g.line === l && raisedIn(g.raisedAt, when, app.now)).length;
   // A part of the filter with nothing in it is left out, unless it is the one picked.
   const whens = (["all", "today", "this_week", "last_week", "earlier"] as ReviewWhen[]).filter((w) => w === "all" || w === when || count(w) > 0);
   const start = parseDay(REVIEW_FROM).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
@@ -201,6 +204,7 @@ export default function ReviewPage() {
         </div>
         <div className="rv-filters">
           <Seg<ReviewWhen> value={when} label="When it was raised" onChange={setWhen} options={whens.map((w): [ReviewWhen, string] => [w, `${REVIEW_WHEN_NAME[w]} ${count(w)}`])} />
+          <Seg<"all" | TaskLine> value={line} label="Agency, Consulting or Sales" onChange={setLine} options={[["all", "All"], ...TASK_LINES.map((l): [TaskLine, string] => [l, `${TASK_LINE_NAME[l]} ${countIn(l)}`])]} />
           <Seg
             value={from}
             label="Whose"

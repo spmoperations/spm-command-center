@@ -434,7 +434,7 @@ export function editConversations(ids: string[], change: ConversationChange) {
   const picked = new Set(ids);
   void act("editConversations", [ids, change], said, (s) => ({ ...s, inbox: s.inbox.map((c) => (picked.has(c.id) ? { ...c, ...patch } : c)) }));
 }
-export const conversationToTask = (id: string, today: string) => void act("conversationToTask", [id, today], "Task added, due today", inInbox(id, { done: true }));
+export const conversationToTask = (id: string) => void act("conversationToTask", [id], "Task added", inInbox(id, { done: true }));
 
 const delegated = () => (app?.state.sendingEnabled ? "Assigned. They have been told on Slack." : "Assigned. Their Slack message waits in the outbox, because sending is off.");
 

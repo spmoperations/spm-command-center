@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Pill, PriPill, Seg, SourceLink, VisuallyHidden } from "@/components/bits";
 import Link from "next/link";
 import { DEPARTMENTS, DEPT_ABOUT, DEPTS, PRIORITY_RANK } from "@/core/config";
-import { dueLabel, shortDate } from "@/core/dates";
+import { dueLabel, isOverdue, shortDate, soonestDue } from "@/core/dates";
 import { taskStatus, type TaskStatus } from "@/core/delegation";
 import { toggleTask, useApp, type App } from "@/store/store";
 
@@ -26,7 +26,7 @@ function Department({ dept, app, onBack }: { dept: string; app: App; onBack(): v
     .sort(
       (a, b) =>
         STATUS_ORDER[taskStatus(a, today)] - STATUS_ORDER[taskStatus(b, today)] ||
-        (a.done ? (b.doneAt ?? 0) - (a.doneAt ?? 0) : a.due.localeCompare(b.due) || PRIORITY_RANK[a.pri] - PRIORITY_RANK[b.pri]),
+        (a.done ? (b.doneAt ?? 0) - (a.doneAt ?? 0) : soonestDue(a.due, b.due) || PRIORITY_RANK[a.pri] - PRIORITY_RANK[b.pri]),
     );
 
   return (
@@ -92,7 +92,7 @@ function Department({ dept, app, onBack }: { dept: string; app: App; onBack(): v
                     <PriPill p={t.pri} />
                   </td>
                   <td>
-                    <span className="due num">{shortDate(t.due)}</span>{" "}
+                    <span className="due num">{t.due ? shortDate(t.due) : "—"}</span>{" "}
                     {!t.done && (
                       <span className={`due ${due.tone}`} style={{ fontSize: 11.5 }}>
                         {due.text}
@@ -149,8 +149,8 @@ export default function DepartmentsPage() {
         {DEPTS.map((d) => {
           const tasks = state.tasks.filter((t) => t.dept === d);
           const open = tasks.filter((t) => !t.done);
-          const overdue = open.filter((t) => t.due < today);
-          const next = [...open].sort((a, b) => a.due.localeCompare(b.due))[0];
+          const overdue = open.filter((t) => isOverdue(t.due, today));
+          const next = [...open].sort((a, b) => soonestDue(a.due, b.due))[0];
           const nextDue = next && dueLabel(next.due, today);
           const people = state.team.filter((p) => p.depts.includes(d)).map((p) => p.name.split(" ")[0]);
           return (

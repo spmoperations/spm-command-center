@@ -622,8 +622,9 @@ describe("Fathom job", () => {
     const found = (s: AppState) => s.review.map((g) => [g.title, g.src?.id, g.due, g.forName, g.assignee, g.source.label, g.source.quote]).sort();
     expect(found(s)).toEqual([
       // Jeremy's own: his. Maya's: named, and for nobody on the team list until she is on it.
-      ["Send the September report", "fathom:42", "2026-10-09", null, `user:${OWNER_ID}`, "Fathom · Weekly check-in", "Send the September report"],
-      ["Share brand assets", "fathom:42", "2026-10-09", "Maya Chen", null, "Fathom · Weekly check-in", "Share brand assets"],
+      // Neither names a day, so neither has a due date.
+      ["Send the September report", "fathom:42", "", null, `user:${OWNER_ID}`, "Fathom · Weekly check-in", "Send the September report"],
+      ["Share brand assets", "fathom:42", "", "Maya Chen", null, "Fathom · Weekly check-in", "Share brand assets"],
     ]);
     // Once Maya is on the team list, her item would go to her.
     await db.run("insert into team_members (id, owner_id, name, role) values ('u_maya', $1, 'Maya Chen', 'Client')", [OWNER_ID]);
@@ -654,7 +655,8 @@ describe("task finder", () => {
     expect(sent).not.toContain("xoxp-"); // a key pasted in the chat is not passed on
     expect(result.items).toBe(2);
     const suggestions = (await suggestionsIn(db));
-    expect(suggestions.map((g) => [g.title, g.due]).sort()).toEqual([["Old date", "2026-10-11"], ["Swap the hook on clip 4", "2026-10-09"]]);
+    // A date that has passed is no due date: none is made up.
+    expect(suggestions.map((g) => [g.title, g.due]).sort()).toEqual([["Old date", ""], ["Swap the hook on clip 4", "2026-10-09"]]);
     expect(await db.query("select count(*)::int as n from messages where conversation_id = 'slack:D1' and not scanned")).toEqual([{ n: 0 }]);
   });
 

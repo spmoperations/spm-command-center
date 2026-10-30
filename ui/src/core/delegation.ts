@@ -1,6 +1,6 @@
 // Who can take a task: matched against the team list, no AI involved.
 import { PRIORITY_NAME } from "./config";
-import { parseDay } from "./dates";
+import { isOverdue, parseDay } from "./dates";
 import { norm } from "./rules";
 import type { Person, Priority, Task, TaskLine } from "./types";
 
@@ -71,11 +71,11 @@ export const canAssignInChat = (c: { ctx: string; source?: string }) =>
  */
 export function assignmentText(o: { where: AssignWhere; who: string; title: string; due: string; note: string; pri?: Priority; project?: string }): string {
   const head = o.who ? `${o.who} new task for you: ${o.title}` : o.where === "dm" ? `New task for you: ${o.title}` : `New task: ${o.title}`;
-  // What the task is, when it is due, how much it matters and what it belongs to, then the
-  // note. The task's description is not here: it follows as a reply in this message's thread.
-  const due = parseDay(o.due).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
-  const facts = [`Due ${due}`, o.pri ? `${PRIORITY_NAME[o.pri]} priority` : "", o.project?.trim() ?? ""].filter(Boolean).join(" · ");
-  return [`${head}\n${facts}`, o.note.trim()].filter(Boolean).join("\n\n");
+  // What the task is, when it is due if it has a date, how much it matters and what it belongs to,
+  // then the note. The task's description is not here: it follows as a reply in this message's thread.
+  const due = o.due ? `Due ${parseDay(o.due).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}` : "";
+  const facts = [due, o.pri ? `${PRIORITY_NAME[o.pri]} priority` : "", o.project?.trim() ?? ""].filter(Boolean).join(" · ");
+  return [[head, facts].filter(Boolean).join("\n"), o.note.trim()].filter(Boolean).join("\n\n");
 }
 
 /** Slack reads &, < and > as markup: written out, they show as themselves. */
@@ -91,14 +91,14 @@ export type SlackBlock = { type: "section"; text: { type: "mrkdwn"; text: string
  * link to it. `tag` is Slack's <@id>, or a name; `ticket` is its number, such as SPM-23.
  */
 export function assignmentBlocks(o: { tag: string; title: string; ticket?: string; due: string; note: string; pri?: Priority; project?: string; link?: string }): SlackBlock[] {
-  const due = parseDay(o.due).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  const due = o.due ? `Due *${parseDay(o.due).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}*` : "";
   const note = slackSafe(o.note.trim()).slice(0, 2500);
-  const facts = [o.ticket ? `*${o.ticket}*` : "", `Due *${due}*`, o.pri ? `${PRIORITY_NAME[o.pri]} priority` : "", slackSafe(o.project?.trim() ?? "")].filter(Boolean);
+  const facts = [o.ticket ? `*${o.ticket}*` : "", due, o.pri ? `${PRIORITY_NAME[o.pri]} priority` : "", slackSafe(o.project?.trim() ?? "")].filter(Boolean);
   const title = o.link ? `<${o.link}|${slackSafe(o.title)}>` : slackSafe(o.title);
   return [
     { type: "section", text: { type: "mrkdwn", text: o.tag ? `${o.tag} *New task for you*` : "*New task*" } },
     { type: "section", text: { type: "mrkdwn", text: `*${title}*${note ? `\n${note}` : ""}` } },
-    { type: "context", elements: [{ type: "mrkdwn", text: facts.join("  ·  ") }] },
+    ...(facts.length ? [{ type: "context" as const, elements: [{ type: "mrkdwn" as const, text: facts.join("  ·  ") }] }] : []),
   ];
 }
 
@@ -111,7 +111,7 @@ export function ticketLink(ticket: string): string | undefined {
 export type TaskStatus = "done" | "overdue" | "ontrack";
 
 export const taskStatus = (t: Task, today: string): TaskStatus =>
-  t.done ? "done" : t.due < today ? "overdue" : "ontrack";
+  t.done ? "done" : isOverdue(t.due, today) ? "overdue" : "ontrack";
 
 /** Agency, Consulting or Sales, as a task shows it: set by hand, else the line of the chat or person it came from. */
 export const lineOf = (t: Pick<Task, "line" | "chatLine">): TaskLine | null => t.line ?? t.chatLine ?? null;

@@ -2,7 +2,7 @@
 // conversations the sorting rules already marked as worth attention, and suggests tasks.
 // Plain code decides what is sent; the model only reads that and proposes.
 import { SOURCE_NAME } from "@/core/config";
-import { addDays, isoDay } from "@/core/dates";
+import { isoDay } from "@/core/dates";
 import { redactSecrets } from "@/core/slack-text";
 import { aiKeys, describeAiError, findTasks, type FoundTask, type TaskSearch } from "@/server/ai";
 import { uid } from "@/server/repo";
@@ -78,8 +78,8 @@ export async function taskSuggest({ db, ownerId, now }: JobContext, finder: Find
   for (const task of found) {
     // The model's answer is checked before it is stored: it must point at a conversation we sent.
     if (!ids.includes(task.source_id) || !task.title.trim()) continue;
-    const fallbackDays = task.priority === "high" ? 1 : task.priority === "mid" ? 3 : 7;
-    const due = validDay(task.due) && task.due >= today ? task.due : addDays(new Date(now), fallbackDays);
+    // A due date only when the source names one: the model leaves it empty otherwise.
+    const due = validDay(task.due) && task.due >= today ? task.due : "";
     added += await db.run(
       `insert into suggestions (id, owner_id, title, dept, pri, due, why, src_type, src_id, delegable, dedupe_key, created_at)
        values ($1, $2, $3, $4, $5, $6, $7, 'message', $8, $9, $10, $11) on conflict (owner_id, dedupe_key) do nothing`,

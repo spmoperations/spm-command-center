@@ -10,7 +10,7 @@ import { Seg } from "@/components/bits";
 import { reviewWaiting } from "@/core/review";
 import { assignable, LineChip, SourceBox, sourceApp, StatusPill, ticketName, TicketForm, Who } from "@/components/Tickets";
 import { conversationPage, PERSONAL_SIDE, MODE_NAME, TASK_LINE_NAME, TASK_LINES, TICKET_STATUS_NAME, TICKET_STATUSES } from "@/core/config";
-import { dueLabel, stamp } from "@/core/dates";
+import { dueLabel, isOverdue, soonestDue, stamp } from "@/core/dates";
 import { lineOf } from "@/core/delegation";
 import type { Task, TaskLine, TicketInput, TicketStatus } from "@/core/types";
 import { createTicket, openConversation, openTask, showMeeting, toggleTask, updateTicket, useApp, type App } from "@/store/store";
@@ -120,9 +120,9 @@ function TicketLine({ t, app, onOpen }: { t: Task; app: App; onOpen(): void }) {
 /** Everything one person has: what is open, soonest due first, and what they have done. */
 function PersonTickets({ name, list, app, onOpen }: { name: string | null; list: Task[]; app: App; onOpen(id: string): void }) {
   const [showDone, setShowDone] = useState(false);
-  const open = list.filter((t) => !t.done).sort((a, b) => a.due.localeCompare(b.due) || (a.number ?? 0) - (b.number ?? 0));
+  const open = list.filter((t) => !t.done).sort((a, b) => soonestDue(a.due, b.due) || (a.number ?? 0) - (b.number ?? 0));
   const done = list.filter((t) => t.done).sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0));
-  const overdue = open.filter((t) => t.due < app.today).length;
+  const overdue = open.filter((t) => isOverdue(t.due, app.today)).length;
   const waiting = open.filter((t) => t.status === "waiting").length;
   return (
     <div className="panel tk-person">
@@ -253,7 +253,7 @@ export default function TasksPage() {
   const app = useApp();
   const [who, setWho] = useState("all");
   const [client, setClient] = useState("all");
-  const [line, setLine] = useState<"all" | "none" | TaskLine>("all");
+  const [line, setLine] = useState<"all" | TaskLine>("all");
   const [adding, setAdding] = useState(false);
   const [allDone, setAllDone] = useState(false);
   const [over, setOver] = useState<TicketStatus | null>(null);
@@ -288,20 +288,18 @@ export default function TasksPage() {
   const opened = state.tasks.find((t) => t.id === ui.openTask) ?? null;
 
   const inMode = state.tasks.filter((t) => t.mode === ui.mode);
-  const shown = inMode.filter(
-    (t) =>
-      (who === "all" || (who === "none" ? !t.assignee : t.assignee === who)) &&
-      (client === "all" || t.project === client) &&
-      (line === "all" || (lineOf(t) ?? "none") === line),
-  );
+  const filtered = inMode.filter((t) => (who === "all" || (who === "none" ? !t.assignee : t.assignee === who)) && (client === "all" || t.project === client));
+  const shown = filtered.filter((t) => line === "all" || lineOf(t) === line);
   const open = shown.filter((t) => !t.done);
-  const overdue = open.filter((t) => t.due < today).length;
+  const overdue = open.filter((t) => isOverdue(t.due, today)).length;
   const column = (s: TicketStatus) => {
     const list = shown.filter((t) => t.status === s);
     // Soonest due first; what is done, newest first.
-    return s === "done" ? list.sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0)) : list.sort((a, b) => a.due.localeCompare(b.due) || (a.number ?? 0) - (b.number ?? 0));
+    return s === "done" ? list.sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0)) : list.sort((a, b) => soonestDue(a.due, b.due) || (a.number ?? 0) - (b.number ?? 0));
   };
   const clients = [...new Set(inMode.map((t) => t.project).filter(Boolean))].sort();
+  // Each line with its open tickets.
+  const openIn = (l: TaskLine) => filtered.filter((t) => !t.done && lineOf(t) === l).length;
 
   return (
     <section className="view">
@@ -324,6 +322,7 @@ export default function TasksPage() {
               ["person", "By person"],
             ]}
           />
+          <Seg<"all" | TaskLine> value={line} label="Agency, Consulting or Sales" onChange={setLine} options={[["all", "All"], ...TASK_LINES.map((l): [TaskLine, string] => [l, `${TASK_LINE_NAME[l]} ${openIn(l)}`])]} />
           <select className="f" value={who} aria-label="Whose tasks" onChange={(e) => setWho(e.target.value)}>
             <option value="all">Everyone&apos;s tasks</option>
             <option value={me}>My tasks</option>
@@ -341,15 +340,6 @@ export default function TasksPage() {
             {clients.map((c) => (
               <option key={c}>{c}</option>
             ))}
-          </select>
-          <select className="f" value={line} aria-label="Agency, Consulting or Sales" onChange={(e) => setLine(e.target.value as typeof line)}>
-            <option value="all">Agency, Consulting and Sales</option>
-            {TASK_LINES.map((l) => (
-              <option key={l} value={l}>
-                {TASK_LINE_NAME[l]}
-              </option>
-            ))}
-            <option value="none">Not sorted yet</option>
           </select>
           <button className="btn primary" onClick={() => setAdding(true)}>
             + New task
@@ -411,7 +401,7 @@ export default function TasksPage() {
             due: today,
             status: "open",
             pri: "mid",
-            line: line === "all" || line === "none" ? null : line,
+            line: line === "all" ? null : line,
           }}
           people={assignable(state)}
           clients={state.clients}

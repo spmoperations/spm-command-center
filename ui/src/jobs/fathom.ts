@@ -1,7 +1,7 @@
 // Fathom job. Read-only: brings in recorded calls with their notes, transcript and action
 // items. Every open action item becomes a suggestion for the team's review, with who Fathom
 // says it is for, and no AI of ours.
-import { addDays } from "@/core/dates";
+import { namedDay } from "@/core/requests";
 import type { ActionItem } from "@/core/types";
 import { listMeetings, type FathomMeeting } from "@/server/fathom";
 import type { Fetch } from "@/server/slack";
@@ -12,8 +12,6 @@ import type { JobContext, JobResult } from "./runner";
 // Both can be turned down in the environment while developing.
 const BACKFILL_DAYS = Number(process.env.FATHOM_BACKFILL_DAYS ?? 7);
 const MAX_PAGES = Number(process.env.FATHOM_MAX_PAGES ?? 5);
-// Fathom action items carry no due date, so they start two days out and the owner adjusts.
-const DEFAULT_DUE_DAYS = 2;
 
 /** Where a call happens, by its link. */
 export const PLACES: [RegExp, string][] = [[/zoom\./, "Zoom"], [/meet\.google\./, "Google Meet"], [/teams\.(microsoft|live)\./, "Teams"]];
@@ -68,10 +66,11 @@ export async function fathomPull({ db, ownerId, now, cursor }: JobContext, apiKe
         if (item.done) continue;
         const forWhom = item.mine ? null : item.who !== "Unassigned" ? item.who : null;
         const why = item.mine ? `Fathom listed this as your action item on "${m.title}".` : forWhom ? `Fathom listed this for ${forWhom} on "${m.title}".` : `Fathom listed this on "${m.title}", for nobody in particular.`;
+        // Due only on a day the action item names (see namedDay); otherwise it has no due date.
         suggested += await db.run(
           `insert into suggestions (id, owner_id, title, dept, pri, due, why, src_type, src_id, dedupe_key, created_at, for_name)
            values ($1, $2, $3, 'Operations', 'mid', $4, $5, 'meeting', $6, $7, $8, $9) on conflict (owner_id, dedupe_key) do nothing`,
-          [uid("s"), ownerId, item.text.slice(0, 160), addDays(new Date(m.startedAt), DEFAULT_DUE_DAYS), why, id, `${id}:action:${k}`, now, forWhom],
+          [uid("s"), ownerId, item.text.slice(0, 160), namedDay(item.text, new Date(m.startedAt)), why, id, `${id}:action:${k}`, now, forWhom],
         );
       }
       if (raw.created_at > newest) newest = raw.created_at;

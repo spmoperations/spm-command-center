@@ -13,7 +13,7 @@ import { NEEDS_UPLOAD, ReplyPictureList, useReplyPictures } from "@/components/R
 import { INBOX_DAYS, LINE_NAME, MODE_NAME, MODES, PERSONAL_SIDE, PRIORITIES, PRIORITY_NAME, SOURCE_NAME } from "@/core/config";
 import { ago, stamp } from "@/core/dates";
 import { plainPreview } from "@/core/message-format";
-import { requestSummary } from "@/core/requests";
+import { namedDay, requestSummary } from "@/core/requests";
 import { groupByThread, threadToAnswer } from "@/core/threads";
 import { canAssignInChat } from "@/core/delegation";
 import type { Conversation, ConversationChange, Mode, Priority, ThreadMessage } from "@/core/types";
@@ -682,7 +682,7 @@ export function MessageRow({ c, app, open, draft, onDraft, cleared, picked, onPi
           )}
           {!cleared && <PrioritySelect value={c.pri} onChange={(p) => setConversationPriority(c.id, p)} />}
           {!cleared && (
-            <button className="btn" title="Adds a task to reply, due today, and clears this from the inbox" onClick={() => conversationToTask(c.id, app.today)}>
+            <button className="btn" title="Adds a task to reply, due on the day the message names, if any, and clears this from the inbox" onClick={() => conversationToTask(c.id)}>
               Make task
             </button>
           )}
@@ -713,7 +713,7 @@ export function MessageRow({ c, app, open, draft, onDraft, cleared, picked, onPi
             slackPeople={app.state.slackPeople}
             channels={app.state.channels}
             today={app.today}
-            subject={{ title: `From ${c.from}: ${requestSummary(c.text, `@${app.state.owner.name}`)}`, project: c.project, dept: "", due: app.today }}
+            subject={{ title: `From ${c.from}: ${requestSummary(c.text, `@${app.state.owner.name}`)}`, project: c.project, dept: "", due: namedDay(c.text, new Date(c.at)) }}
             chat={canAssignInChat(c) ? (c.ctx.startsWith("#") ? c.ctx : "this group message") : null}
             onCancel={() => setDelegating(false)}
             onDelegate={(personId, note, due, where) => delegateConversation(c.id, personId, note, due, where)}

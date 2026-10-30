@@ -3,9 +3,9 @@
 import crypto from "node:crypto";
 import { INBOX_DAYS, MOST_PICTURES, PERSONAL, PRIORITIES, TASK_LINES } from "@/core/config";
 import { assignmentBlocks, assignmentText, canAssignInChat, CHANNEL_PICK, SLACK_PICK, type AssignWhere } from "@/core/delegation";
-import { addDays, isoDay, monthKey, pad } from "@/core/dates";
+import { addDays, isOverdue, isoDay, monthKey, pad } from "@/core/dates";
 import { clampInterval, defaultJobSettings, JOBS } from "@/core/jobs";
-import { requestSummary } from "@/core/requests";
+import { namedDay, requestSummary } from "@/core/requests";
 import { applyRules } from "@/core/rules";
 import type {
   AddedPicture, AppState, Conversation, ConversationChange, FocusBoard, HeavyPart, JobId, JobStatus, Meeting, MessagePicture, Metric, Mode, Person, Priority, Provider, Reaction, Rule, Source, Stamps,
@@ -639,8 +639,8 @@ async function readState(db: Db, ownerId: string, now: Date, open: string | null
     people: people.map((p) => (p.login && (p.id === `user:${ownerId}` || (ownerId !== TEAM && p.id !== `user:${TEAM}`)) ? { ...p, notTold: true } : p)),
     teamSlack: (await teamSlack(db)).sort((a, b) => a.name.localeCompare(b.name)),
     suggestions: suggestions.map((g) => ({
-      // A call from last week suggests a date that has passed: offer today instead.
-      id: g.id, title: g.title, mode: g.mode, dept: g.dept, project: g.project, pri: g.pri, due: g.status === "new" && g.due < today ? today : g.due, why: g.why,
+      // A call from last week named a day that has passed: offer today instead.
+      id: g.id, title: g.title, mode: g.mode, dept: g.dept, project: g.project, pri: g.pri, due: g.status === "new" && isOverdue(g.due, today) ? today : g.due, why: g.why,
       src: g.src_type && g.src_id ? { type: g.src_type, id: g.src_id } : null, status: g.status, delegable: g.delegable,
     })),
     meetings,
@@ -1104,11 +1104,12 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
       await c.db.run("update suggestions set mode = $3 where owner_id = $1 and src_type = 'message' and status = 'new' and src_id in (select jsonb_array_elements_text($2::jsonb))", [...args, asMode(change.mode)]);
     }
   },
-  async conversationToTask(c, id: string, today: string) {
+  async conversationToTask(c, id: string) {
     const conv = await conversation(c, id);
-    // A second click, or a chat that already has its task, adds nothing.
+    // A second click, or a chat that already has its task, adds nothing. Due on the day the message names, if it names one.
     if (!(await openTaskFor(c, id))) {
-      await insertTask(c, { title: await replyTitle(c, `Reply to ${conv.from_name}`, conv.last_text), dept: "Operations", project: conv.project, pri: conv.pri, due: today, mode: conv.mode, src: { type: "message", id } });
+      const due = namedDay(conv.last_text, new Date(Number(conv.last_at)));
+      await insertTask(c, { title: await replyTitle(c, `Reply to ${conv.from_name}`, conv.last_text), dept: "Operations", project: conv.project, pri: conv.pri, due, mode: conv.mode, src: { type: "message", id } });
     }
     await c.db.run("update conversations set done = true, auto_done = false where owner_id = $2 and id = $1", [id, c.ownerId]);
   },
@@ -1137,13 +1138,14 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
   },
   /** Turns one action item from a call into a task, once. Someone else's becomes a follow-up. */
   async actionItemToTask(c, meetingId: string, index: number) {
-    const [meeting] = await c.db.query<{ project: string; action_items: Meeting["actionItems"] }>("select project, action_items from meetings where owner_id = $1 and id = $2", [c.ownerId, meetingId]);
+    const [meeting] = await c.db.query<{ project: string; action_items: Meeting["actionItems"]; started_at: number }>("select project, action_items, started_at from meetings where owner_id = $1 and id = $2", [c.ownerId, meetingId]);
     const item = meeting?.action_items?.[index];
     if (!item) throw new Error("That action item no longer exists.");
     const title = (item.mine ? item.text : `Follow up with ${item.who}: ${item.text}`).slice(0, 160);
     const [{ n }] = await c.db.query<{ n: number }>("select count(*)::int as n from tasks where owner_id = $4 and coalesce(source_owner, owner_id) = $1 and src_type = 'meeting' and src_id = $2 and title = $3", [c.ownerId, meetingId, title, TEAM]);
     if (n > 0) return;
-    await insertTask(c, { title, dept: "Operations", project: meeting.project, pri: "mid", due: addDays(c.now, 2), src: { type: "meeting", id: meetingId } });
+    // Due on the day the action item names, if it names one.
+    await insertTask(c, { title, dept: "Operations", project: meeting.project, pri: "mid", due: namedDay(item.text, new Date(Number(meeting.started_at))), src: { type: "meeting", id: meetingId } });
   },
   async toggleTask(c, id: string, done: boolean) {
     await teamTask(c, id);

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { addDays, clockWithZone, dueLabel, sinceMonday, weekStart } from "./dates";
 import { assignmentBlocks, assignmentText, candidates, canAssign, canAssignInChat, fitFor, taskStatus, ticketLink } from "./delegation";
 import { clampInterval, describeInterval, isDue, JOBS, liveJobs, nextRunAt, waitUntil } from "./jobs";
-import { looksLikeRequest, requestDue, requestSummary, whereAsked } from "./requests";
+import { looksLikeRequest, namedDay, requestSummary, whereAsked } from "./requests";
 import { raisedIn, reviewWaiting, whenRaised } from "./review";
 import { findChoices } from "./search";
 import { checkFathomKey, checkPhone, checkSlackToken, checkTelegramCode, maskPhone, normalizePhone, SLACK_CREATE_APP_URL } from "./providers";
@@ -121,6 +121,9 @@ describe("delegation", () => {
     // What is not there is left out, with no empty lines in its place.
     expect(assignmentText({ ...whole, note: "", project: "" })).toBe("New task for you: Book the venue\nDue Fri, Oct 16 · High priority");
     expect(assignmentText({ ...whole, pri: "mid", note: "Before Friday." })).toBe("New task for you: Book the venue\nDue Fri, Oct 16 · Medium priority · Launch\n\nBefore Friday.");
+    // No due date: no "Due".
+    expect(assignmentText({ ...whole, due: "" })).toBe("New task for you: Book the venue\nHigh priority · Launch\n\nAsk me if the price moves.");
+    expect(assignmentText({ ...whole, due: "", pri: undefined, project: "", note: "" })).toBe("New task for you: Book the venue");
   });
 
   it("lays the message out for Slack: the tag, the task in bold with its note, and one line of facts, the task's name its link", () => {
@@ -133,6 +136,8 @@ describe("delegation", () => {
     ]);
     // Nothing to say is left out; with nobody tagged it is simply a new task.
     expect(assignmentBlocks({ tag: "", title: "Book the venue", due: "2026-10-27", note: "" }).map((b) => (b.type === "section" ? b.text.text : b.elements[0].text))).toEqual(["*New task*", "*Book the venue*", "Due *Tue, Oct 27*"]);
+    // No due date and nothing else to say: no line of facts at all.
+    expect(assignmentBlocks({ tag: "", title: "Book the venue", due: "", note: "" }).map((b) => (b.type === "section" ? b.text.text : b.elements[0].text))).toEqual(["*New task*", "*Book the venue*"]);
   });
 
   it("links to a ticket on the live site's board, and nowhere when the site's address is not known", () => {
@@ -184,13 +189,25 @@ describe("requests in messages", () => {
     expect(looksLikeRequest("Hey, can you send me the deck?")).toBe(true);
   });
 
-  it("takes the due day from the message, and says tomorrow when it names none", () => {
+  it("takes the due day from what was said, and makes none up when it names none", () => {
     const thursday = new Date("2026-10-08T12:00:00");
-    expect(requestDue("need this asap", thursday)).toBe("2026-10-08");
-    expect(requestDue("can we talk tomorrow", thursday)).toBe("2026-10-09");
-    expect(requestDue("Can we swap the hook before Friday?", thursday)).toBe("2026-10-09");
-    expect(requestDue("by monday please", thursday)).toBe("2026-10-12");
-    expect(requestDue("thoughts on this", thursday)).toBe("2026-10-09");
+    expect(namedDay("need this asap", thursday)).toBe("2026-10-08");
+    expect(namedDay("can we talk tomorrow", thursday)).toBe("2026-10-09");
+    expect(namedDay("Can we swap the hook before Friday?", thursday)).toBe("2026-10-09");
+    expect(namedDay("by monday please", thursday)).toBe("2026-10-12");
+    expect(namedDay("next Thursday works", thursday)).toBe("2026-10-15");
+    expect(namedDay("send it by end of week", thursday)).toBe("2026-10-09");
+    expect(namedDay("invoice by EOM", thursday)).toBe("2026-10-31");
+    expect(namedDay("Send the contract by Nov 6th", thursday)).toBe("2026-11-06");
+    expect(namedDay("launch on the 3rd of November", thursday)).toBe("2026-11-03");
+    expect(namedDay("budget review Jan 5", thursday)).toBe("2027-01-05");
+    // Named, but none of them a day to do it by.
+    expect(namedDay("thoughts on this", thursday)).toBe("");
+    expect(namedDay("Send the deck link to Sam", thursday)).toBe("");
+    expect(namedDay("as we said on Oct 2", thursday)).toBe("");
+    expect(namedDay("check the market 5 times", thursday)).toBe("");
+    expect(namedDay("this monitor is broken", thursday)).toBe("");
+    expect(namedDay("Feb 30 is not a day", thursday)).toBe("");
   });
 
   it("sums the request up without links or the owner's own tag", () => {

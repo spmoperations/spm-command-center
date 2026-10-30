@@ -2,7 +2,7 @@
 // still waiting on them. Plain rules and no AI: see `core/requests`. Nothing becomes a task
 // until the owner accepts the suggestion.
 import { PERSONAL } from "@/core/config";
-import { looksLikeRequest, requestDue, requestSummary, whereAsked } from "@/core/requests";
+import { looksLikeRequest, namedDay, requestSummary, whereAsked } from "@/core/requests";
 import type { Mode, Priority } from "@/core/types";
 import { uid } from "@/server/repo";
 import { TEAM } from "@/server/tickets";
@@ -65,7 +65,7 @@ export async function requestFinder({ db, ownerId, now }: JobContext): Promise<J
        values ($1, $2, $3, $4, $5, $6, $7, $8, 'message', $9, true, $10, $11, $12) on conflict (owner_id, dedupe_key) do nothing`,
       [
         uid("s"), ownerId, `Reply to ${m.sender_name}: ${requestSummary(m.body, tag)}`, personal ? PERSONAL : "Operations", personal ? PERSONAL : m.project, m.pri,
-        requestDue(m.body, new Date(now)), `${m.sender_name} asked ${whereAsked(m.ctx)} and is still waiting for your reply.`, m.conversation_id, `ask:${m.id}`, m.mode, now,
+        namedDay(m.body, new Date(Number(m.at))), `${m.sender_name} asked ${whereAsked(m.ctx)} and is still waiting for your reply.`, m.conversation_id, `ask:${m.id}`, m.mode, now,
       ],
     );
   }

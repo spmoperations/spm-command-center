@@ -27,12 +27,13 @@ async function suggestion(
     mode?: string;
     key?: string;
     src?: [string, string];
+    due?: string;
   } = {},
 ) {
   const [type, src] = over.src ?? ["message", "slack:D1"];
   await db.run(
-    "insert into suggestions (id, owner_id, title, dept, project, pri, due, why, src_type, src_id, dedupe_key, mode, created_at) values ($1, $2, $3, 'Operations', 'Harbor Realty', 'high', '2026-10-09', 'Maya asked and is still waiting.', $4, $5, $6, $7, $8)",
-    [id, over.owner ?? OWNER_ID, over.title ?? "Reply to Maya Chen: swap the hook", type, src, over.key ?? `ask:${src}:1.0`, over.mode ?? "professional", NOW],
+    "insert into suggestions (id, owner_id, title, dept, project, pri, due, why, src_type, src_id, dedupe_key, mode, created_at) values ($1, $2, $3, 'Operations', 'Harbor Realty', 'high', $9, 'Maya asked and is still waiting.', $4, $5, $6, $7, $8)",
+    [id, over.owner ?? OWNER_ID, over.title ?? "Reply to Maya Chen: swap the hook", type, src, over.key ?? `ask:${src}:1.0`, over.mode ?? "professional", NOW, over.due ?? "2026-10-09"],
   );
 }
 
@@ -226,6 +227,23 @@ describe("the board", () => {
     await act(alex, "updateTicket", id, { assignee: `user:${OWNER_ID}` });
     expect(await db.query("select id from outbox")).toEqual([]);
     expect((await loadState(db, alex, now)).tasks.find((x) => x.id === id)!.assigneeName).toBe("Jeremy Moser");
+  });
+});
+
+describe("no due date", () => {
+  it("stays empty from the review to the board, where it can be set and cleared again", async () => {
+    await suggestion("s_none", { title: "Send the deck link to Sam", src: ["meeting", "fathom:42"], key: "fathom:42:action:0", due: "" });
+    expect((await loadState(db, OWNER_ID, now)).review.find((g) => g.id === "s_none")?.due).toBe("");
+    await act(OWNER_ID, "acceptSuggestion", "s_none");
+    const t = () => loadState(db, OWNER_ID, now).then((s) => s.tasks.find((x) => x.title === "Send the deck link to Sam")!);
+    expect((await t()).due).toBe("");
+    const { id } = await t();
+    await act(OWNER_ID, "updateTicket", id, { due: "2026-10-12" });
+    await act(OWNER_ID, "updateTicket", id, { due: "" });
+    expect((await t()).history!.map((e) => e.what).slice(-2)).toEqual(["Due Mon, Oct 12", "No due date"]);
+    await act(OWNER_ID, "createTicket", ticket({ title: "Undated by hand", due: "" }));
+    expect((await loadState(db, OWNER_ID, now)).tasks.find((x) => x.title === "Undated by hand")?.due).toBe("");
+    expect(await refused(OWNER_ID, "createTicket", ticket({ title: "Wrong", due: "soon" }))).toBe("Pick a due date, or leave it empty.");
   });
 });
 

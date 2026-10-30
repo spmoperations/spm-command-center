@@ -32,7 +32,16 @@ export const daysBetween = (a: string, b: string) =>
 
 export type DueTone = "" | "today" | "over";
 
+/**
+ * A ticket or suggestion whose call or message named no day has no due date: "" where the day
+ * would be. It is never overdue nor due today, and it comes after every one with a date.
+ */
+export const isOverdue = (due: string, today: string) => due !== "" && due < today;
+export const dueBy = (due: string, today: string) => due !== "" && due <= today;
+export const soonestDue = (a: string, b: string) => Number(a === "") - Number(b === "") || a.localeCompare(b);
+
 export function dueLabel(iso: string, today: string): { text: string; tone: DueTone } {
+  if (!iso) return { text: "No due date", tone: "" };
   const diff = daysBetween(today, iso);
   if (diff === 0) return { text: "Today", tone: "today" };
   if (diff === 1) return { text: "Tomorrow", tone: "" };

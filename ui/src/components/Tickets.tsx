@@ -356,7 +356,7 @@ export function TicketForm({
           </div>
           <label className="tk-field">
             <span className="label">Due date</span>
-            <input className="f" type="date" required value={t.due} onChange={(e) => set({ due: e.target.value })} />
+            <input className="f" type="date" value={t.due} onChange={(e) => set({ due: e.target.value })} />
           </label>
           <label className="tk-field">
             <span className="label">Status</span>

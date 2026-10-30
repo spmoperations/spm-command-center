@@ -5,7 +5,7 @@ import { useState } from "react";
 import { Avatar } from "@/components/MessageText";
 import { DueText, Pill, PriPill } from "@/components/bits";
 import { conversationPage, DEPARTMENTS, PRIORITY_RANK, SUGGESTED_TASKS, TARGETS } from "@/core/config";
-import { ago, daysInMonth, isoDay, parseDay, weekStart } from "@/core/dates";
+import { ago, daysInMonth, dueBy, isoDay, parseDay, soonestDue, weekStart } from "@/core/dates";
 import { plainPreview } from "@/core/message-format";
 import { isMine } from "@/core/delegation";
 import { reviewWaiting } from "@/core/review";
@@ -184,15 +184,15 @@ export default function TodayPage() {
     ? [...unanswered].sort((a, b) => PRIORITY_RANK[a.pri] - PRIORITY_RANK[b.pri] || b.at - a.at)
     : unanswered.filter((c) => c.pri === "high").sort((a, b) => b.at - a.at);
   const tasks = state.tasks.filter((t) => t.mode === ui.mode);
-  const due = tasks.filter((t) => isMine(t, state.me.id) && t.due <= today);
-  const handedOff = tasks.filter((t) => !t.done && t.delegatedTo && t.due <= today);
+  const due = tasks.filter((t) => isMine(t, state.me.id) && dueBy(t.due, today));
+  const handedOff = tasks.filter((t) => !t.done && t.delegatedTo && dueBy(t.due, today));
   // Tasks finished today stay in the list, ticked off, below the open ones.
   const doneToday = tasks.filter((t) => t.done && (t.doneAt ? isoDay(new Date(t.doneAt)) === today : t.due === today));
   const list = [...due, ...handedOff, ...doneToday].sort(
     (a, b) =>
       Number(a.done) - Number(b.done) ||
       Number(!!a.delegatedTo) - Number(!!b.delegatedTo) ||
-      (a.done ? (b.doneAt ?? 0) - (a.doneAt ?? 0) : a.due.localeCompare(b.due) || PRIORITY_RANK[a.pri] - PRIORITY_RANK[b.pri]),
+      (a.done ? (b.doneAt ?? 0) - (a.doneAt ?? 0) : soonestDue(a.due, b.due) || PRIORITY_RANK[a.pri] - PRIORITY_RANK[b.pri]),
   );
 
   const clock = { day: now.getDate(), dim: daysInMonth(now) };

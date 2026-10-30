@@ -25,7 +25,7 @@ beforeEach(async () => {
 
 describe("database", () => {
   it("applies each migration once and records it", async () => {
-    expect(await db.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }, { name: "0006_pictures_and_reactions.sql" }, { name: "0007_media.sql" }, { name: "0008_thread_items.sql" }, { name: "0009_inbox_age.sql" }, { name: "0010_task_description.sql" }, { name: "0011_outbox_thread_reply.sql" }, { name: "0012_telegram_chats.sql" }, { name: "0013_google.sql" }, { name: "0014_google_accounts.sql" }, { name: "0015_google_send.sql" }, { name: "0016_important.sql" }, { name: "0017_calendar_edit.sql" }, { name: "0018_team.sql" }, { name: "0019_team_ids.sql" }, { name: "0020_app_keys.sql" }, { name: "0021_slack_app_keys.sql" }, { name: "0022_tickets.sql" }, { name: "0023_ai_check.sql" }, { name: "0024_clients.sql" }, { name: "0025_telegram_sync.sql" }, { name: "0026_task_logins.sql" }, { name: "0027_task_lines.sql" }]);
+    expect(await db.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }, { name: "0006_pictures_and_reactions.sql" }, { name: "0007_media.sql" }, { name: "0008_thread_items.sql" }, { name: "0009_inbox_age.sql" }, { name: "0010_task_description.sql" }, { name: "0011_outbox_thread_reply.sql" }, { name: "0012_telegram_chats.sql" }, { name: "0013_google.sql" }, { name: "0014_google_accounts.sql" }, { name: "0015_google_send.sql" }, { name: "0016_important.sql" }, { name: "0017_calendar_edit.sql" }, { name: "0018_team.sql" }, { name: "0019_team_ids.sql" }, { name: "0020_app_keys.sql" }, { name: "0021_slack_app_keys.sql" }, { name: "0022_tickets.sql" }, { name: "0023_ai_check.sql" }, { name: "0024_clients.sql" }, { name: "0025_telegram_sync.sql" }, { name: "0026_task_logins.sql" }, { name: "0027_task_lines.sql" }, { name: "0028_no_made_up_due_dates.sql" }]);
     expect(await migrate(db)).toEqual([]);
   });
 
@@ -61,8 +61,8 @@ describe("database", () => {
   it("accepts a first schema that was run by hand, then applies what came after", async () => {
     const fresh = await openDb(undefined, { migrate: false });
     for (const statement of splitStatements(fs.readFileSync("db/migrations/0001_init.sql", "utf8"))) await fresh.run(statement);
-    expect(await migrate(fresh)).toEqual(["0002_row_level_security.sql", "0003_personal_and_requests.sql", "0004_threads.sql", "0005_slack_pictures.sql", "0006_pictures_and_reactions.sql", "0007_media.sql", "0008_thread_items.sql", "0009_inbox_age.sql", "0010_task_description.sql", "0011_outbox_thread_reply.sql", "0012_telegram_chats.sql", "0013_google.sql", "0014_google_accounts.sql", "0015_google_send.sql", "0016_important.sql", "0017_calendar_edit.sql", "0018_team.sql", "0019_team_ids.sql", "0020_app_keys.sql", "0021_slack_app_keys.sql", "0022_tickets.sql", "0023_ai_check.sql", "0024_clients.sql", "0025_telegram_sync.sql", "0026_task_logins.sql", "0027_task_lines.sql"]);
-    expect(await fresh.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }, { name: "0006_pictures_and_reactions.sql" }, { name: "0007_media.sql" }, { name: "0008_thread_items.sql" }, { name: "0009_inbox_age.sql" }, { name: "0010_task_description.sql" }, { name: "0011_outbox_thread_reply.sql" }, { name: "0012_telegram_chats.sql" }, { name: "0013_google.sql" }, { name: "0014_google_accounts.sql" }, { name: "0015_google_send.sql" }, { name: "0016_important.sql" }, { name: "0017_calendar_edit.sql" }, { name: "0018_team.sql" }, { name: "0019_team_ids.sql" }, { name: "0020_app_keys.sql" }, { name: "0021_slack_app_keys.sql" }, { name: "0022_tickets.sql" }, { name: "0023_ai_check.sql" }, { name: "0024_clients.sql" }, { name: "0025_telegram_sync.sql" }, { name: "0026_task_logins.sql" }, { name: "0027_task_lines.sql" }]);
+    expect(await migrate(fresh)).toEqual(["0002_row_level_security.sql", "0003_personal_and_requests.sql", "0004_threads.sql", "0005_slack_pictures.sql", "0006_pictures_and_reactions.sql", "0007_media.sql", "0008_thread_items.sql", "0009_inbox_age.sql", "0010_task_description.sql", "0011_outbox_thread_reply.sql", "0012_telegram_chats.sql", "0013_google.sql", "0014_google_accounts.sql", "0015_google_send.sql", "0016_important.sql", "0017_calendar_edit.sql", "0018_team.sql", "0019_team_ids.sql", "0020_app_keys.sql", "0021_slack_app_keys.sql", "0022_tickets.sql", "0023_ai_check.sql", "0024_clients.sql", "0025_telegram_sync.sql", "0026_task_logins.sql", "0027_task_lines.sql", "0028_no_made_up_due_dates.sql"]);
+    expect(await fresh.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }, { name: "0006_pictures_and_reactions.sql" }, { name: "0007_media.sql" }, { name: "0008_thread_items.sql" }, { name: "0009_inbox_age.sql" }, { name: "0010_task_description.sql" }, { name: "0011_outbox_thread_reply.sql" }, { name: "0012_telegram_chats.sql" }, { name: "0013_google.sql" }, { name: "0014_google_accounts.sql" }, { name: "0015_google_send.sql" }, { name: "0016_important.sql" }, { name: "0017_calendar_edit.sql" }, { name: "0018_team.sql" }, { name: "0019_team_ids.sql" }, { name: "0020_app_keys.sql" }, { name: "0021_slack_app_keys.sql" }, { name: "0022_tickets.sql" }, { name: "0023_ai_check.sql" }, { name: "0024_clients.sql" }, { name: "0025_telegram_sync.sql" }, { name: "0026_task_logins.sql" }, { name: "0027_task_lines.sql" }, { name: "0028_no_made_up_due_dates.sql" }]);
     expect(await fresh.query("select relrowsecurity from pg_class where relname = 'messages'")).toEqual([{ relrowsecurity: true }]);
     await fresh.close();
   });
@@ -74,9 +74,30 @@ describe("database", () => {
     }
     await migrate(fresh);
     expect(await fresh.query("select relname from pg_class where relnamespace = 'public'::regnamespace and relkind = 'r' and not relrowsecurity")).toEqual([]);
-    expect(await fresh.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }, { name: "0006_pictures_and_reactions.sql" }, { name: "0007_media.sql" }, { name: "0008_thread_items.sql" }, { name: "0009_inbox_age.sql" }, { name: "0010_task_description.sql" }, { name: "0011_outbox_thread_reply.sql" }, { name: "0012_telegram_chats.sql" }, { name: "0013_google.sql" }, { name: "0014_google_accounts.sql" }, { name: "0015_google_send.sql" }, { name: "0016_important.sql" }, { name: "0017_calendar_edit.sql" }, { name: "0018_team.sql" }, { name: "0019_team_ids.sql" }, { name: "0020_app_keys.sql" }, { name: "0021_slack_app_keys.sql" }, { name: "0022_tickets.sql" }, { name: "0023_ai_check.sql" }, { name: "0024_clients.sql" }, { name: "0025_telegram_sync.sql" }, { name: "0026_task_logins.sql" }, { name: "0027_task_lines.sql" }]);
+    expect(await fresh.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }, { name: "0006_pictures_and_reactions.sql" }, { name: "0007_media.sql" }, { name: "0008_thread_items.sql" }, { name: "0009_inbox_age.sql" }, { name: "0010_task_description.sql" }, { name: "0011_outbox_thread_reply.sql" }, { name: "0012_telegram_chats.sql" }, { name: "0013_google.sql" }, { name: "0014_google_accounts.sql" }, { name: "0015_google_send.sql" }, { name: "0016_important.sql" }, { name: "0017_calendar_edit.sql" }, { name: "0018_team.sql" }, { name: "0019_team_ids.sql" }, { name: "0020_app_keys.sql" }, { name: "0021_slack_app_keys.sql" }, { name: "0022_tickets.sql" }, { name: "0023_ai_check.sql" }, { name: "0024_clients.sql" }, { name: "0025_telegram_sync.sql" }, { name: "0026_task_logins.sql" }, { name: "0027_task_lines.sql" }, { name: "0028_no_made_up_due_dates.sql" }]);
     expect(await fresh.query("select mode, asked from messages m join conversations c on c.id = m.conversation_id")).toEqual([]);
     await fresh.close();
+  });
+
+  it("clears the due dates made up for cards still waiting, and keeps those their words name", async () => {
+    const card = (id: string, title: string, src: [string, string], key: string, status = "new") =>
+      db.run("insert into suggestions (id, owner_id, title, dept, pri, due, why, src_type, src_id, dedupe_key, status, created_at) values ($1, $2, $3, 'Operations', 'mid', '2026-10-09', '', $4, $5, $6, $7, $8)", [id, OWNER_ID, title, ...src, key, status, NOW]);
+    await db.run("insert into messages (id, conversation_id, owner_id, sender_name, body, at) values ('m_named', 'slack:D1', $1, 'Maya Chen', 'Can you send it by Friday?', $2), ('m_none', 'slack:D1', $1, 'Maya Chen', 'Can you send it?', $2)", [OWNER_ID, NOW]);
+    await card("s_call", "Send the deck link to Sam", ["meeting", "fathom:42"], "fathom:42:action:0");
+    await card("s_call_named", "Send the contract by Nov 6", ["meeting", "fathom:42"], "fathom:42:action:1");
+    await card("s_ask", "Reply to Maya Chen: Can you send it?", ["message", "slack:D1"], "ask:m_none");
+    await card("s_ask_named", "Reply to Maya Chen: Can you send it by Friday?", ["message", "slack:D1"], "ask:m_named");
+    await card("s_old", "Accepted long ago", ["meeting", "fathom:42"], "fathom:42:action:2", "accepted");
+    for (let run = 0; run < 2; run++) {
+      for (const statement of splitStatements(fs.readFileSync("db/migrations/0028_no_made_up_due_dates.sql", "utf8"))) await db.run(statement);
+    }
+    expect(await db.query("select id, due from suggestions where id like 's\\_%' order by id")).toEqual([
+      { id: "s_ask", due: "" },
+      { id: "s_ask_named", due: "2026-10-09" },
+      { id: "s_call", due: "" },
+      { id: "s_call_named", due: "2026-10-09" },
+      { id: "s_old", due: "2026-10-09" },
+    ]);
   });
 
   it("splits a migration file into statements and drops comments", () => {
@@ -182,10 +203,10 @@ describe("inbox actions", () => {
     expect((await state()).inbox.find((x) => x.id === "slack:D1")!.done).toBe(true);
   });
 
-  it("turns a message into a task linked back to it", async () => {
-    await act("conversationToTask", "slack:D1", "2026-10-08");
+  it("turns a message into a task linked back to it, due on the day the message names", async () => {
+    await act("conversationToTask", "slack:D1");
     const s = await state();
-    expect(s.tasks.find((t) => t.src?.id === "slack:D1")).toMatchObject({ title: "Reply to Maya Chen: Can we swap the hook on clip 4 before Friday?", due: "2026-10-08" });
+    expect(s.tasks.find((t) => t.src?.id === "slack:D1")).toMatchObject({ title: "Reply to Maya Chen: Can we swap the hook on clip 4 before Friday?", due: "2026-10-09" });
     expect(s.inbox.find((x) => x.id === "slack:D1")!.done).toBe(true);
   });
 

@@ -12,7 +12,7 @@
 import crypto from "node:crypto";
 import { PRIORITY_NAME, REJECT_REASONS, SOURCE_NAME, TASK_LINE_NAME, TASK_LINES, TICKET_PREFIX, TICKET_STATUS_NAME, TICKET_STATUSES, type RejectReason } from "@/core/config";
 import { assignmentBlocks, assignmentText, CHANNEL_PICK, SLACK_PICK, ticketLink } from "@/core/delegation";
-import { isoDay, parseDay } from "@/core/dates";
+import { isOverdue, isoDay, parseDay } from "@/core/dates";
 import { norm } from "@/core/rules";
 import type { Mode, MyTask, Priority, ReviewItem, Source, SourceNote, Task, TaskLine, TaskSource, TeamPerson, TicketEvent, TicketInput, TicketStatus } from "@/core/types";
 import type { Db } from "./db";
@@ -31,6 +31,8 @@ const tidy = (text: unknown, most: number) =>
     .slice(0, most);
 const PRIORITIES: Priority[] = ["high", "mid", "low"];
 const isDay = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(parseDay(v).getTime());
+/** A due date, or "" for none (see `namedDay`). */
+const isDue = (v: unknown): v is string => v === "" || isDay(v);
 const shortDay = (iso: string) =>
   parseDay(iso).toLocaleDateString("en-US", {
     weekday: "short",
@@ -726,7 +728,7 @@ async function assignTo(c: Ctx, taskId: string, assignee: string | null, notify:
 function checked(input: Partial<TicketInput>): Partial<TicketInput> {
   if (input.title !== undefined && !String(input.title).trim()) throw new Error("Give the ticket a title.");
   if (input.status !== undefined && !TICKET_STATUSES.includes(input.status)) throw new Error("That is not a status on the board.");
-  if (input.due !== undefined && !isDay(input.due)) throw new Error("Pick a due date.");
+  if (input.due !== undefined && !isDue(input.due)) throw new Error("Pick a due date, or leave it empty.");
   if (input.pri !== undefined && !PRIORITIES.includes(input.pri)) throw new Error("That is not a priority.");
   if (input.notify !== undefined && (!Array.isArray(input.notify) || input.notify.some((w) => w !== "slack" && w !== "telegram"))) throw new Error("Tell them on Slack or Telegram.");
   if (input.line !== undefined && input.line !== null && !TASK_LINES.includes(input.line)) throw new Error("That is not Agency, Consulting or Sales.");
@@ -759,7 +761,7 @@ export async function memberTickets(db: Db, memberId: string, now = new Date()):
     `select t.id, t.number, t.title, t.description, t.project, t.pri, t.due, t.done, t.done_at, t.status,
        (select e.by_name from ticket_events e where e.owner_id = t.owner_id and e.task_id = t.id and e.what like '%Assigned to %' order by e.at desc, e.id desc limit 1) as given_by
      from tasks t where t.owner_id = $1 and t.delegated_to = $2 and t.mode = 'professional' and (not t.done or t.done_at > $3)
-     order by t.done, t.due, t.number, t.id limit 500`,
+     order by t.done, t.due = '', t.due, t.number, t.id limit 500`,
     [TEAM, memberId, now.getTime() - DONE_SHOWN_DAYS * 86_400_000],
   );
   // Why the dashboard found each one is for the board, and a call's recording is for the logins (see `withoutRecordings`).
@@ -818,7 +820,7 @@ async function accept(c: Ctx, g: SuggestionRow, input: Partial<TicketInput> | un
   const edits = checked(input ?? {});
   const src = g.src_type && g.src_id ? { type: g.src_type, id: g.src_id } : null;
   const note = await sourceNote(c.db, g.owner_id, src, g.dedupe_key);
-  const due = edits.due ?? (g.due < today ? today : g.due);
+  const due = edits.due ?? (isOverdue(g.due, today) ? today : g.due);
   const status = edits.status ?? "open";
   const ticket = await insertTicket(
     c,
@@ -898,7 +900,7 @@ export const TICKET_ACTIONS: Record<string, (c: Ctx, ...args: any[]) => Promise<
     }
     if (p.due !== undefined && p.due !== t.due) {
       put("due", p.due);
-      said.push(`Due ${shortDay(p.due)}`);
+      said.push(p.due ? `Due ${shortDay(p.due)}` : "No due date");
     }
     if (p.pri !== undefined && p.pri !== t.pri) {
       put("pri", p.pri);
@@ -957,7 +959,7 @@ export const TICKET_ACTIONS: Record<string, (c: Ctx, ...args: any[]) => Promise<
     const g = await heldSuggestion(c, id);
     if (!g) return;
     if (patch.pri !== undefined && !PRIORITIES.includes(patch.pri)) throw new Error("That is not a priority.");
-    if (patch.due !== undefined && !isDay(patch.due)) throw new Error("Pick a due date.");
+    if (patch.due !== undefined && !isDue(patch.due)) throw new Error("Pick a due date, or leave it empty.");
     await c.db.run("update suggestions set pri = coalesce($3, pri), due = coalesce($4, due) where owner_id = $1 and id = $2", [g.owner_id, id, patch.pri ?? null, patch.due ?? null]);
   },
   /** The same thing as a ticket already on the board: the ticket gets its words, and the suggestion is settled. */

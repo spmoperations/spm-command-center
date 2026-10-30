@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { CONNECTIONS_TAB, DEPARTMENTS, MODE_NAME, MODES, PERSONAL_SIDE, TARGETS } from "@/core/config";
-import { daysInMonth } from "@/core/dates";
+import { daysInMonth, dueBy } from "@/core/dates";
 import { isMine } from "@/core/delegation";
 import { PROVIDERS } from "@/core/providers";
 import { evalMetric } from "@/core/targets";
@@ -47,7 +47,7 @@ function navCounts({ state, now, today }: App, mode: Mode): Record<string, Count
     inbox: { text: open.length, hot: open.some((c) => c.pri === "high"), title: `${open.length} waiting for a reply` },
     emails: { text: emails.length, hot: false, title: `${emails.length} ${emails.length === 1 ? "email" : "emails"} not answered or done` },
     review: { text: toReview, hot: false, title: `${toReview} waiting to be made tickets or turned down` },
-    tasks: { text: mine.length, hot: mine.some((t) => t.due <= today), title: `${mine.length} on your plate` },
+    tasks: { text: mine.length, hot: mine.some((t) => dueBy(t.due, today)), title: `${mine.length} on your plate` },
     targets: { text: lagging ? `${lagging} off` : "OK", hot: lagging > 0, title: lagging ? `${lagging} behind pace` : "All on pace" },
     connections: { text: `${connected} of ${providers.length}`, hot: false, title: `${connected} of ${providers.length} apps connected` },
   };

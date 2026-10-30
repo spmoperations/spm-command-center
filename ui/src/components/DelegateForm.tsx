@@ -1,6 +1,7 @@
 "use client";
 
 import { useId, useState } from "react";
+import { isOverdue } from "@/core/dates";
 import { assignmentText, candidates, CHANNEL_PICK, SLACK_PICK, type AssignWhere } from "@/core/delegation";
 import type { Channel, Person, Priority } from "@/core/types";
 import { toast } from "@/store/store";
@@ -40,7 +41,7 @@ export function DelegateForm({ team, slackPeople, channels, subject, today, chat
   const [inChannel, setInChannel] = useState(false);
   const [channel, setChannel] = useState(chat ? SOURCE_CHAT : "");
   const [note, setNote] = useState("");
-  const [due, setDue] = useState(subject.due < today ? today : subject.due);
+  const [due, setDue] = useState(isOverdue(subject.due, today) ? today : subject.due);
 
   const suggested = candidates(team, subject, false);
   // With nobody suggested for this task, the whole team is shown straight away.
@@ -77,7 +78,7 @@ export function DelegateForm({ team, slackPeople, channels, subject, today, chat
         if (inChannel && !channel) return toast("Pick the channel to post in");
         if (!inChannel && !selected) return toast("Pick who should take it");
         const where: AssignWhere = !inChannel ? "dm" : channel === SOURCE_CHAT ? "chat" : `${CHANNEL_PICK}${channel}`;
-        onDelegate(selected, note.trim(), due || subject.due, where);
+        onDelegate(selected, note.trim(), due, where);
       }}
     >
       {canPost && (
@@ -193,7 +194,7 @@ export function DelegateForm({ team, slackPeople, channels, subject, today, chat
               where: inChannel ? "chat" : "dm",
               who: selectedName ? `@${selectedName}` : "",
               title: subject.title,
-              due: due || subject.due,
+              due,
               note: note.trim(),
               pri: subject.pri,
               project: subject.project,
