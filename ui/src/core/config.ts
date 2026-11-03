@@ -104,6 +104,16 @@ export const LINE_NAME: Record<Line, string> = { agency: "Agency", consulting: "
 export const TASK_LINES: TaskLine[] = ["agency", "consulting", "sales"];
 export const TASK_LINE_NAME: Record<TaskLine, string> = { ...LINE_NAME, sales: "Sales" };
 
+/**
+ * A booking link as it is kept for a pick: no https://, www., question or slash at the end, in
+ * small letters. "https://calendly.com/Team/Intro-Call?month=2026-11" is
+ * "calendly.com/team/intro-call". Null when it is not a link to a page.
+ */
+export function bookingKey(raw: string): string | null {
+  const m = /^(?:https?:\/\/)?(?:www\.)?([a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\/[^\s?#|<>]+)/i.exec(raw.trim());
+  return m ? m[1].replace(/\/+$/, "").toLowerCase() || null : null;
+}
+
 export const MODES: Mode[] = ["professional", "personal"];
 export const MODE_NAME: Record<Mode, string> = { professional: "Professional", personal: "Personal" };
 /** Department and project a personal task is filed under. Personal tasks have no real ones. */

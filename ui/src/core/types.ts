@@ -1,6 +1,6 @@
 export type Source = "slack" | "telegram" | "gmail";
 /** Services a person connects themselves, from the Connections tab. */
-export type Provider = "slack" | "telegram" | "fathom" | "google";
+export type Provider = "slack" | "telegram" | "fathom" | "google" | "calendly";
 /** What an email is about, for the filter on the Emails tab (see core/email-tags). */
 export type EmailTag = "respond" | "payment" | "newsletter" | "invite" | "notification" | "receipt";
 export type Priority = "high" | "mid" | "low";
@@ -216,7 +216,7 @@ export interface ReviewItem {
   fromUser: string;
   /** From the signed-in person's own inbox or calls, so it can be opened here. */
   mine: boolean;
-  /** The line of the chat or person it came from, picked in Settings (see `ChatLine`). */
+  /** The line of the chat, person, call or booking link it came from, picked in Settings (see `ChatLine`). */
   line: TaskLine | null;
 }
 
@@ -262,7 +262,7 @@ export interface Task {
   history?: TicketEvent[];
   /** Agency, Consulting or Sales, set by hand on the task. */
   line?: TaskLine | null;
-  /** The line of the chat or person it came from, picked in Settings. A line set by hand wins (see `lineOf`). */
+  /** The line of the chat, person, call or booking link it came from, picked in Settings. A line set by hand wins (see `lineOf`). */
   chatLine?: TaskLine | null;
 }
 
@@ -363,9 +363,28 @@ export interface ImportantPick {
   name: string;
 }
 
-/** A Slack channel, Telegram group or person picked as Agency, Consulting or Sales: the tasks from it are labelled so. The team's. */
-export interface ChatLine extends ImportantPick {
+/**
+ * A Slack channel, Telegram group or person, a call or a booking link picked as Agency,
+ * Consulting or Sales: the tasks from it are labelled so. The team's. A call ("fathom", "call")
+ * is known by its title, written small with single spaces, so every call with that title
+ * counts; a booking link ("calendly", "booking") by the link without https:// (see `bookingKey`).
+ */
+export interface ChatLine {
+  source: "slack" | "telegram" | "fathom" | "calendly";
+  kind: "chat" | "person" | "call" | "booking";
+  id: string;
+  name: string;
   line: TaskLine;
+}
+
+/** A call title or a booking link, to pick Agency, Consulting or Sales for in Settings. */
+export interface LineChoice {
+  id: string;
+  name: string;
+  /** Calls with this title, for a call. */
+  calls?: number;
+  /** A booking link Calendly no longer offers. */
+  inactive?: boolean;
 }
 
 /** A connected Google account, and what it allowed: reading Gmail, sending, reading the calendar, adding events. */
@@ -475,6 +494,7 @@ export type JobId =
   | "slack-pull"
   | "telegram-pull"
   | "fathom-pull"
+  | "calendly-pull"
   | "gmail-pull"
   | "calendar-pull"
   | "inbox-rules"
@@ -562,8 +582,12 @@ export interface AppState {
   slackPeople: { id: string; name: string }[];
   /** What is ticked as important in Settings. */
   important: ImportantPick[];
-  /** The team's picks of Agency, Consulting or Sales for chats and people (see `ChatLine`). */
+  /** The team's picks of Agency, Consulting or Sales for chats, people, calls and booking links (see `ChatLine`). */
   chatLines: ChatLine[];
+  /** The team's recorded calls by title, most calls first: what a call is picked by. */
+  callTitles: LineChoice[];
+  /** The booking links Calendly lists for the owner, by link. Empty until Calendly is connected. */
+  bookingTypes: LineChoice[];
   /**
    * The owner's Slack channels and people and Telegram groups and people: what everyone picks
    * Agency, Consulting or Sales from. Sent to a team login; the owner has them as their own lists.

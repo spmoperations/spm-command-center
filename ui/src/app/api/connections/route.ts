@@ -24,6 +24,8 @@ export async function POST(request: Request) {
         await runNow(db, "slack-pull", owner);
       } else if (provider === "fathom") {
         await runNow(db, "fathom-pull", owner);
+      } else if (provider === "calendly") {
+        await runNow(db, "calendly-pull", owner);
       }
     })().catch((error) => console.error("[command-center] first read failed:", (error as Error).message));
     return Response.json({ label, state: await loadState(db, owner) });

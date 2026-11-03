@@ -65,6 +65,33 @@ const lineFromChat = (type: string, id: string, owner: string, team: string) => 
    where ${type} = 'message' and c.owner_id = ${owner} and c.id = ${id}
    order by (l.kind = 'chat') desc limit 1)`;
 
+/** A call's title as a pick knows it (see `ChatLine`): small letters, single spaces. */
+export const callKeySql = (title: string) => `lower(regexp_replace(btrim(${title}), '\\s+', ' ', 'g'))`;
+
+/** How near a booking's start a recorded call must start to be that booking. */
+const BOOKING_WINDOW_MS = 15 * 60_000;
+
+/**
+ * The line a call (src_type 'meeting') takes, as the team picked in Settings: the Calendly
+ * booking link it was booked through, else its title. A booking is the call's when it starts
+ * within 15 minutes of the call's start on the calendar (or of the recording, for calls read
+ * before that was kept) and, where both are known, one of its hosts was invited. Read each time,
+ * like `lineFromChat`.
+ */
+const lineFromCall = (type: string, id: string, owner: string, team: string) => `(select l.line from meetings mt
+   left join lateral (select b.link from bookings b
+       where b.owner_id = mt.owner_id and b.active and abs(b.start_at - coalesce(mt.scheduled_at, mt.started_at)) <= ${BOOKING_WINDOW_MS}
+         and (coalesce(cardinality(mt.guests), 0) = 0 or cardinality(b.hosts) = 0 or b.hosts && mt.guests)
+       order by abs(b.start_at - coalesce(mt.scheduled_at, mt.started_at)) limit 1) bk on true
+   join chat_lines l on l.owner_id = ${team}
+     and ((l.source = 'calendly' and l.kind = 'booking' and l.external_id = bk.link)
+       or (l.source = 'fathom' and l.kind = 'call' and l.external_id = ${callKeySql("mt.title")}))
+   where ${type} = 'meeting' and mt.owner_id = ${owner} and mt.id = ${id}
+   order by (l.kind = 'booking') desc limit 1)`;
+
+/** The line a task or suggestion takes from where it came from: its chat or person, else its call. */
+const lineFrom = (type: string, id: string, owner: string, team: string) => `coalesce(${lineFromChat(type, id, owner, team)}, ${lineFromCall(type, id, owner, team)})`;
+
 /**
  * Whether the Slack account `slackId` may be told about a task that `assigner` gave them. Between
  * logins, only between Jeremy (the owner) and another login, either way: Jeremy giving Alex a
@@ -313,7 +340,7 @@ function guessFor(g: SuggestionRow, people: TeamPerson[], slack: InSlack[] = [])
 }
 
 const SUGGESTION_FROM = `select s.id, s.owner_id, s.title, s.why, s.project, s.pri, s.due, s.mode, s.src_type, s.src_id, s.dedupe_key, s.for_name, s.looks_done, s.delegable, s.created_at, s.confidence, s.checked_at, u.name as from_name,
-         ${lineFromChat("s.src_type", "s.src_id", "s.owner_id", "$1")} as chat_line,
+         ${lineFrom("s.src_type", "s.src_id", "s.owner_id", "$1")} as chat_line,
          c.source as c_source, c.ctx as c_ctx, c.from_name as c_from, c.external_id as c_chat, c.last_text as c_text,
          m.body as m_body, m.at as m_at, mt.title as mt_title, mt.url as mt_url, mt.action_items as mt_items, mt.started_at as mt_at
   from suggestions s
@@ -442,7 +469,7 @@ interface TicketRow {
   src_label: string | null;
   src_link: string | null;
   line: TaskLine | null;
-  /** Read with the ticket: the line of the chat or person it came from (see `lineFromChat`). */
+  /** Read with the ticket: the line of the chat, person or call it came from (see `lineFrom`). */
   chat_line?: TaskLine | null;
 }
 
@@ -462,7 +489,7 @@ function assigneeOf(t: TicketRow): string | null {
 /** The team's tickets for one person: everything for the owner, the work ones for everyone else. */
 export async function teamTickets(db: Db, viewer: string): Promise<Task[]> {
   const rows = await db.query<TicketRow>(
-    `select t.*, ${lineFromChat("t.src_type", "t.src_id", "coalesce(t.source_owner, $1)", "$1")} as chat_line
+    `select t.*, ${lineFrom("t.src_type", "t.src_id", "coalesce(t.source_owner, $1)", "$1")} as chat_line
      from tasks t where t.owner_id = $1 and (t.mode = 'professional' or $2::boolean) order by t.created_at, t.id limit 1000`,
     [TEAM, viewer === TEAM],
   );

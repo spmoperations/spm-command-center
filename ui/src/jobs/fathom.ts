@@ -30,6 +30,9 @@ export function toMeeting(m: FathomMeeting, ownerEmail: string | null) {
     externalId: String(m.recording_id),
     title: m.meeting_title || m.title || "Untitled call",
     startedAt: start,
+    // When it was on the calendar and who was invited: what tells which Calendly booking it was (see jobs/calendly).
+    scheduledAt: Number.isFinite(Date.parse(m.scheduled_start_time ?? "")) ? Date.parse(m.scheduled_start_time!) : null,
+    guests: [...new Set((m.calendar_invitees ?? []).map((p) => (p.email ?? "").trim().toLowerCase()).filter(Boolean))],
     durationMin: Math.max(0, Math.round((end - start) / 60_000)),
     who: others.join(", "),
     place: PLACES.find(([pattern]) => pattern.test(m.meeting_url ?? ""))?.[1] ?? "",
@@ -56,10 +59,11 @@ export async function fathomPull({ db, ownerId, now, cursor }: JobContext, apiKe
       const m = toMeeting(raw, ownerEmail);
       const id = `fathom:${m.externalId}`;
       await db.run(
-        `insert into meetings (id, owner_id, external_id, title, started_at, duration_min, who, place, url, summary, transcript, action_items)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-         on conflict (owner_id, id) do update set title = excluded.title, summary = excluded.summary, transcript = excluded.transcript, action_items = excluded.action_items, who = excluded.who, duration_min = excluded.duration_min`,
-        [id, ownerId, m.externalId, m.title, m.startedAt, m.durationMin, m.who, m.place, m.url, m.summary, JSON.stringify(m.transcript), JSON.stringify(m.actionItems)],
+        `insert into meetings (id, owner_id, external_id, title, started_at, duration_min, who, place, url, summary, transcript, action_items, scheduled_at, guests)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, array(select jsonb_array_elements_text($14::jsonb)))
+         on conflict (owner_id, id) do update set title = excluded.title, summary = excluded.summary, transcript = excluded.transcript, action_items = excluded.action_items, who = excluded.who, duration_min = excluded.duration_min,
+           scheduled_at = excluded.scheduled_at, guests = excluded.guests`,
+        [id, ownerId, m.externalId, m.title, m.startedAt, m.durationMin, m.who, m.place, m.url, m.summary, JSON.stringify(m.transcript), JSON.stringify(m.actionItems), m.scheduledAt, JSON.stringify(m.guests)],
       );
       calls++;
       for (const [k, item] of m.actionItems.entries()) {

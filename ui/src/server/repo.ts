@@ -1,7 +1,7 @@
 // Reads and writes for the dashboard. `loadState` builds what the screens show; `ACTIONS`
 // holds every change a person can make. Jobs write through their own modules in `src/jobs`.
 import crypto from "node:crypto";
-import { INBOX_DAYS, MOST_PICTURES, PERSONAL, PRIORITIES, TASK_LINES } from "@/core/config";
+import { bookingKey, INBOX_DAYS, MOST_PICTURES, PERSONAL, PRIORITIES, TASK_LINES } from "@/core/config";
 import { assignmentBlocks, assignmentText, canAssignInChat, CHANNEL_PICK, SLACK_PICK, type AssignWhere } from "@/core/delegation";
 import { addDays, isOverdue, isoDay, monthKey, pad } from "@/core/dates";
 import { clampInterval, defaultJobSettings, JOBS } from "@/core/jobs";
@@ -9,7 +9,7 @@ import { namedDay, requestSummary } from "@/core/requests";
 import { applyRules } from "@/core/rules";
 import type {
   AddedPicture, AppState, Conversation, ConversationChange, FocusBoard, HeavyPart, JobId, JobStatus, Meeting, MessagePicture, Metric, Mode, Person, Priority, Provider, Reaction, Rule, Source, Stamps,
-  StateAnswer, StatePart, StateUpdate, Suggestion, CalendarItem, TaskLine, HeavyUpdate, Channel, OwnerChats,
+  StateAnswer, StatePart, StateUpdate, Suggestion, CalendarItem, TaskLine, HeavyUpdate, Channel, OwnerChats, ChatLine,
 } from "@/core/types";
 import { aiConfigured } from "./ai";
 import { emailTags, type TaggedEmail } from "@/core/email-tags";
@@ -22,7 +22,7 @@ import { SLACK_FILES_SCOPE, SLACK_NEEDS_UPLOAD, SLACK_UPLOAD_SCOPE, type Fetch }
 import { emailInUse, TASK_LOGIN_ACTIONS, taskLogins } from "./task-logins";
 import { hashPassword, MIN_PASSWORD, teamLogins } from "./team";
 import { telegramBlocked } from "./telegram";
-import { insertTicket, logEvent, mayTellOnSlack, reviewItems, setAsideItems, sourceNote, TEAM, teamClients, teamPeople, teamSlack, teamTickets, teamUsersSql, ticketName, TICKET_ACTIONS } from "./tickets";
+import { callKeySql, insertTicket, logEvent, mayTellOnSlack, reviewItems, setAsideItems, sourceNote, TEAM, teamClients, teamPeople, teamSlack, teamTickets, teamUsersSql, ticketName, TICKET_ACTIONS } from "./tickets";
 import type { Db } from "./db";
 import { OWNER_ID } from "./owner";
 
@@ -416,6 +416,9 @@ export async function stateStamps(db: Db, ownerId: string, now = new Date()): Pr
          ${rowsHash("row(l.member_id, l.email, l.password_hash is null, l.since, l.last_in)", "from task_logins l where l.owner_id = $2")},
          ${rowsHash("n", "from clients n where n.owner_id = $2")},
          ${rowsHash("row(cl.source, cl.kind, cl.external_id, cl.name, cl.line)", "from chat_lines cl where cl.owner_id = $2")},
+         ${rowsHash("row(tm.id, tm.title, tm.scheduled_at, tm.guests)", `from meetings tm where tm.owner_id in (${teamUsersSql("$2")})`)},
+         ${rowsHash("row(bk.id, bk.link, bk.start_at, bk.hosts, bk.active)", `from bookings bk where bk.owner_id in (${teamUsersSql("$2")})`)},
+         ${rowsHash("row(bt.link, bt.name, bt.active)", `from booking_types bt where bt.owner_id in (${teamUsersSql("$2")})`)},
          ${rowsHash("row(x.provider, x.label, x.connected_at, x.scopes)", "from connections x where x.owner_id = $1")},
          ${rowsHash("row(a.email, a.scopes, a.connected_at)", "from google_accounts a where a.owner_id = $1")},
          ${rowsHash("row(u.id, u.name)", `from users u where u.id in (${teamUsersSql("$2")})`)},
@@ -554,6 +557,8 @@ async function readState(db: Db, ownerId: string, now: Date, open: string | null
     telegramPeople,
     jobStatus,
     ownerChats,
+    callTitles,
+    bookingTypes,
   ] = await Promise.all([
     db.query<{ name: string }>("select name from users where id = $1", [ownerId]),
     loadRules(db, ownerId),
@@ -590,7 +595,7 @@ async function readState(db: Db, ownerId: string, now: Date, open: string | null
     googleAccounts(db, ownerId),
     db.query<{ source: "slack" | "telegram"; kind: "chat" | "person"; external_id: string; name: string }>("select source, kind, external_id, name from important where owner_id = $1 order by lower(name)", [ownerId]),
     // Agency, Consulting or Sales: the team's picks, whoever made them.
-    db.query<{ source: "slack" | "telegram"; kind: "chat" | "person"; external_id: string; name: string; line: TaskLine }>("select source, kind, external_id, name, line from chat_lines where owner_id = $1 order by lower(name)", [TEAM]),
+    db.query<{ source: ChatLine["source"]; kind: ChatLine["kind"]; external_id: string; name: string; line: TaskLine }>("select source, kind, external_id, name, line from chat_lines where owner_id = $1 order by lower(name)", [TEAM]),
     telegramHere ? telegramChatsOf(db, ownerId) : Promise.resolve([]),
     telegramHere ? telegramPeopleOf(db, ownerId) : Promise.resolve([]),
     loadJobStatus(db, ownerId),
@@ -600,6 +605,17 @@ async function readState(db: Db, ownerId: string, now: Date, open: string | null
       : Promise.all([slackChannelsOf(db, TEAM), slackPeopleOf(db, TEAM), telegramHere ? telegramChatsOf(db, TEAM) : [], telegramHere ? telegramPeopleOf(db, TEAM) : []]).then(
           ([channels, slackPeople, telegramChats, telegramPeople]): OwnerChats => ({ channels, slackPeople, telegramChats, telegramPeople }),
         ),
+    // The team's calls by title and the booking links, to pick Agency, Consulting or Sales for: everyone picks from the same.
+    db.query<{ id: string; name: string; calls: number }>(
+      `select ${callKeySql("title")} as id, (array_agg(title order by started_at desc))[1] as name, count(*)::int as calls
+       from meetings where owner_id in (${teamUsersSql("$1")}) group by 1 order by 3 desc, 1 limit 500`,
+      [TEAM],
+    ),
+    db.query<{ id: string; name: string; active: boolean }>(
+      `select link as id, (array_agg(name order by active desc, saved_at desc))[1] as name, bool_or(active) as active
+       from booking_types where owner_id in (${teamUsersSql("$1")}) group by link order by 3 desc, lower((array_agg(name))[1])`,
+      [TEAM],
+    ),
   ]);
 
   const people = await teamPeople(db);
@@ -663,6 +679,7 @@ async function readState(db: Db, ownerId: string, now: Date, open: string | null
       slack: connection("slack"),
       telegram: telegramHere ? connection("telegram") : { connected: false },
       fathom: connection("fathom"),
+      calendly: connection("calendly"),
       // Google's accounts are kept apart (see `google_accounts`): connected when there is at least one.
       google: google.length ? { connected: true, connectedAt: google[0].connectedAt, label: google.length === 1 ? google[0].email : `${google.length} accounts` } : { connected: false },
     },
@@ -671,6 +688,8 @@ async function readState(db: Db, ownerId: string, now: Date, open: string | null
     slackPeople,
     important: importantRows.map((r) => ({ source: r.source, kind: r.kind, id: r.external_id, name: r.name })),
     chatLines: chatLineRows.map((r) => ({ source: r.source, kind: r.kind, id: r.external_id, name: r.name, line: r.line })),
+    callTitles: callTitles.map((c) => ({ id: c.id, name: c.name, calls: Number(c.calls) })),
+    bookingTypes: bookingTypes.map((b) => ({ id: b.id, name: b.name, ...(b.active ? {} : { inactive: true }) })),
     ownerChats,
     telegramChats,
     telegramPeople,
@@ -1324,11 +1343,17 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
     await resortInbox(c.db, c.ownerId);
   },
   /**
-   * Picks the line (Agency, Consulting or Sales) of a Slack channel, Telegram group or person, for
-   * the whole team: every task that comes from it shows that line. Null takes the pick away.
+   * Picks the line (Agency, Consulting or Sales) of a Slack channel, Telegram group or person, a
+   * call by its title, or a booking link, for the whole team: every task that comes from it shows
+   * that line. Null takes the pick away.
    */
-  async setChatLine(c, source: "slack" | "telegram", kind: "chat" | "person", id: string, name: string, line: TaskLine | null) {
-    if (!["slack", "telegram"].includes(source) || !["chat", "person"].includes(kind) || !id) throw new Error("That is not a chat or a person.");
+  async setChatLine(c, source: ChatLine["source"], kind: ChatLine["kind"], id: string, name: string, line: TaskLine | null) {
+    const chat = ["slack", "telegram"].includes(source) && ["chat", "person"].includes(kind);
+    if (!chat && !(source === "fathom" && kind === "call") && !(source === "calendly" && kind === "booking")) throw new Error("That is not a chat, a person, a call or a booking link.");
+    // A call is known by its title written small with single spaces, a booking link without https:// (see ChatLine).
+    if (kind === "call") id = String(id ?? "").trim().replace(/\s+/g, " ").toLowerCase().slice(0, 500);
+    if (kind === "booking") id = bookingKey(String(id ?? "")) ?? "";
+    if (!id) throw new Error(kind === "booking" ? "That is not a booking link. Paste the whole link, such as https://calendly.com/your-team/intro-call." : "That is not a chat, a person, a call or a booking link.");
     if (line !== null && !TASK_LINES.includes(line)) throw new Error("That is not Agency, Consulting or Sales.");
     if (line) {
       await c.db.run(

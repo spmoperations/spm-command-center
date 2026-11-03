@@ -4,12 +4,12 @@ import Link from "next/link";
 import { useState } from "react";
 import { Seg } from "@/components/bits";
 import { Combo } from "@/components/Combo";
-import { DEPARTMENTS, DEPTS, LINE_NAME, liveSources, PERSONAL_SIDE, PRIORITY_NAME, SOURCE_NAME, TASK_LINE_NAME, TASK_LINES, TEAM_GOOGLE_DOMAIN } from "@/core/config";
+import { bookingKey, DEPARTMENTS, DEPTS, LINE_NAME, liveSources, PERSONAL_SIDE, PRIORITY_NAME, SOURCE_NAME, TASK_LINE_NAME, TASK_LINES, TEAM_GOOGLE_DOMAIN } from "@/core/config";
 import { ago } from "@/core/dates";
 import { describeInterval, jobById, liveJobs, type Connection } from "@/core/jobs";
 import { PROVIDER_NAME } from "@/core/providers";
 import { ruleHits } from "@/core/rules";
-import type { AppState, JobSetting, Line, OwnerChats, Person, Priority, Rule, Source, TaskLine, TeamLogin } from "@/core/types";
+import type { AppState, ChatLine, JobSetting, Line, OwnerChats, Person, Priority, Rule, Source, TaskLine, TeamLogin } from "@/core/types";
 import {
   addHandle, addPerson, addRule, addTeamLogin, clearManualPriorities, deleteRule, moveRule, removeHandle, removePerson, removeTaskLogin, runJobNow, setPersonTelegram,
   removeTeamLogin, setChannelSelected, setChatLine, setImportant, setJobEnabled, setJobInterval, setTaskLogin, setTeamPassword, setTelegramSync, syncNow, toast, togglePersonDept, turnOffTeamLogin, useApp,
@@ -317,29 +317,105 @@ function Important({ app }: { app: App }) {
   );
 }
 
+type LineTab = ImportantTab | "call" | "booking";
+type LineList = {
+  source: ChatLine["source"];
+  kind: ChatLine["kind"];
+  label: string;
+  find: string;
+  items: { id: string; name: string; note?: string; link?: string }[];
+  /** The note on a pick no longer in the list, which still shows by the name it was picked under. */
+  gone?: string;
+  /** Why the list is empty. */
+  empty: string;
+};
+
+/** Adds a booking link by hand, with its line: for links Calendly does not list, or before it is connected. */
+function AddBookingLink() {
+  const [link, setLink] = useState("");
+  const [line, setLine] = useState<TaskLine>("agency");
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <form
+      className="imp-tools"
+      onSubmit={(e) => {
+        e.preventDefault();
+        const key = bookingKey(link);
+        if (!key) return setError("Paste the whole booking link, such as https://calendly.com/your-team/intro-call.");
+        setError(null);
+        setChatLine("calendly", "booking", key, key, line);
+        setLink("");
+      }}
+    >
+      <input className="f" value={link} onChange={(e) => setLink(e.target.value)} placeholder="Paste a booking link" aria-label="Booking link" />
+      <select className={`f line-pick line-${line}`} value={line} onChange={(e) => setLine(e.target.value as TaskLine)} aria-label="Agency, Consulting or Sales for this link">
+        {TASK_LINES.map((l) => (
+          <option key={l} value={l}>
+            {TASK_LINE_NAME[l]}
+          </option>
+        ))}
+      </select>
+      <button className="btn">Add</button>
+      {error && (
+        <span className="form-error" role="alert">
+          {error}
+        </span>
+      )}
+    </form>
+  );
+}
+
 /**
- * Agency, Consulting or Sales for each Slack channel, Telegram group and person: every task that
- * comes from one is labelled so on the board and in the review, those already there too. The
- * team's: everyone with a login picks from the owner's chats and people, for everyone (see ChatLine).
+ * Agency, Consulting or Sales for each Slack channel, Telegram group and person, call and
+ * booking link: every task that comes from one is labelled so on the board and in the review,
+ * those already there too. The team's: everyone with a login picks from the owner's chats and
+ * people and the team's calls, for everyone (see ChatLine).
  */
 function ChatLines({ app }: { app: App }) {
   const { state } = app;
-  const [tab, setTab] = useState<ImportantTab>("slack-chat");
+  const [tab, setTab] = useState<LineTab>("slack-chat");
   const [filter, setFilter] = useState("");
   const [onlyPicked, setOnlyPicked] = useState(false);
   // The owner's own lists: a team login is sent them (ownerChats); the owner has them as their own.
   const chats = state.ownerChats ?? ownChats(state);
   const telegram = state.ownerChats ? chats.telegramChats.length + chats.telegramPeople.length > 0 : state.telegramAvailable && state.connections.telegram.connected;
   const ownerName = state.me.isOwner ? null : (state.people.find((p) => p.role === "Owner")?.name ?? "the owner");
-  const { lists, tabs } = pickLists(chats, telegram);
+  const chatLists = pickLists(chats, telegram);
+  const filled = (source: "slack" | "telegram") =>
+    ownerName
+      ? `This list fills in once ${ownerName}'s ${source === "slack" ? "Slack" : "Telegram"} has been read.`
+      : source === "slack"
+        ? "This list fills in once Slack is connected and its channel and people list has been read."
+        : "This list fills in once Telegram has been read.";
+  const lists = {
+    ...Object.fromEntries(chatLists.tabs.map((t) => [t, { ...chatLists.lists[t], gone: "No longer in the list", empty: filled(chatLists.lists[t].source) }])),
+    call: {
+      source: "fathom",
+      kind: "call",
+      label: "Calls",
+      find: "Find a call",
+      items: state.callTitles.map((c) => ({ id: c.id, name: c.name, note: `${c.calls} ${c.calls === 1 ? "call" : "calls"}` })),
+      gone: "No calls with this title now",
+      empty: "This list fills in once calls have come in from Fathom.",
+    },
+    booking: {
+      source: "calendly",
+      kind: "booking",
+      label: "Booking links",
+      find: "Find a booking link",
+      items: state.bookingTypes.map((b) => ({ id: b.id, name: b.name, link: b.id, note: b.inactive ? "No longer offered" : undefined })),
+      empty: "",
+    },
+  } as Record<LineTab, LineList>;
+  const tabs: LineTab[] = [...chatLists.tabs, "call", "booking"];
   const current = lists[tabs.includes(tab) ? tab : "slack-chat"];
   const picks = state.chatLines.filter((l) => l.source === current.source && l.kind === current.kind);
   const pickOf = (id: string) => picks.find((l) => l.id === id)?.line ?? null;
-  const count = (t: ImportantTab) => state.chatLines.filter((l) => l.source === lists[t].source && l.kind === lists[t].kind).length;
-  // A pick for a chat or person gone from the list since still shows, by the name it was picked under.
-  const items = [...current.items, ...picks.filter((l) => !current.items.some((i) => i.id === l.id)).map((l) => ({ id: l.id, name: l.name, note: "No longer in the list" }))];
+  const count = (t: LineTab) => state.chatLines.filter((l) => l.source === lists[t].source && l.kind === lists[t].kind).length;
+  // A pick for a chat, person or call gone from the list since still shows, by the name it was picked under.
+  const items = [...current.items, ...picks.filter((l) => !current.items.some((i) => i.id === l.id)).map((l) => ({ id: l.id, name: l.name, note: current.gone, link: current.kind === "booking" ? l.id : undefined }))];
   const words = filter.trim().toLowerCase();
-  const shown = items.filter((i) => (!words || i.name.toLowerCase().includes(words)) && (!onlyPicked || pickOf(i.id)));
+  const shown = items.filter((i) => (!words || `${i.name} ${i.link ?? ""}`.toLowerCase().includes(words)) && (!onlyPicked || pickOf(i.id)));
   return (
     <div className="panel set-sec" id="lines">
       <div className="panel-head">
@@ -349,9 +425,10 @@ function ChatLines({ app }: { app: App }) {
         </span>
       </div>
       <p className="set-intro">
-        Pick which side of the business each channel, group and person is for. Every task that comes from one of them is labelled with it on the board and in the review, the tasks already
-        there too, so it is clear whose it is. A person counts in a direct chat with them; a channel or group comes first. A label set on a task by hand wins. The list is{" "}
-        {ownerName ? `${ownerName}'s` : "your"} channels, groups and people, and the picks are the team&apos;s: everyone with a login sees and sets the same.
+        Pick which side of the business each channel, group, person, call and booking link is for. Every task that comes from one of them is labelled with it on the board and in the review,
+        the tasks already there too, so it is clear whose it is. A person counts in a direct chat with them; a channel or group comes first. A call takes the line of the Calendly link it was
+        booked through, else of its title: every call with the same title counts, so a weekly check-in is picked once. A label set on a task by hand wins. The list is{" "}
+        {ownerName ? `${ownerName}'s` : "your"} channels, groups and people and the team&apos;s calls, and the picks are the team&apos;s: everyone with a login sees and sets the same.
       </p>
       <div className="imp-tabs" role="tablist" aria-label="What to pick for">
         {tabs.map((t) => (
@@ -360,14 +437,19 @@ function ChatLines({ app }: { app: App }) {
           </button>
         ))}
       </div>
+      {current.kind === "booking" && (
+        <>
+          {state.bookingTypes.length === 0 && (
+            <p className="st-help" style={{ padding: "0 16px" }}>
+              Calendly is not connected yet. Once it is, on the <Link href="/connections#calendly">Connections</Link> page by whoever owns the booking links, every link is listed here,
+              and a call booked through a picked link is labelled. Links added here now are kept for then.
+            </p>
+          )}
+          <AddBookingLink />
+        </>
+      )}
       {items.length === 0 ? (
-        <p className="empty">
-          {ownerName
-            ? `This list fills in once ${ownerName}'s ${current.source === "slack" ? "Slack" : "Telegram"} has been read.`
-            : current.source === "slack"
-              ? "This list fills in once Slack is connected and its channel and people list has been read."
-              : "This list fills in once Telegram has been read."}
-        </p>
+        current.empty && <p className="empty">{current.empty}</p>
       ) : (
         <>
           <div className="imp-tools">
@@ -379,7 +461,10 @@ function ChatLines({ app }: { app: App }) {
           <ul className="channel-list line-list">
             {shown.map((i) => (
               <li key={i.id}>
-                <span className="line-name">{i.name}</span>
+                <span className="line-name" title={i.link ?? i.name}>
+                  {i.name}
+                  {i.link && i.link !== i.name && <span className="muted line-link">{i.link}</span>}
+                </span>
                 {i.note && <span className="chip">{i.note}</span>}
                 <select
                   className={`f line-pick ${pickOf(i.id) ? `line-${pickOf(i.id)}` : ""}`}

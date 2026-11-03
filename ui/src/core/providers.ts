@@ -2,18 +2,19 @@
 // type before anything is sent. Plain logic, no network.
 import type { Provider } from "./types";
 
-export const PROVIDERS: Provider[] = ["slack", "telegram", "fathom", "google"];
+export const PROVIDERS: Provider[] = ["slack", "telegram", "fathom", "google", "calendly"];
 /** The ones that can be connected on this server. Telegram and Google only where the server says they can be used. */
 export const liveProviders = (telegram: boolean, google = false): Provider[] =>
   PROVIDERS.filter((p) => (p !== "telegram" || telegram) && (p !== "google" || google));
 
-export const PROVIDER_NAME: Record<Provider, string> = { slack: "Slack", telegram: "Telegram", fathom: "Fathom", google: "Google" };
+export const PROVIDER_NAME: Record<Provider, string> = { slack: "Slack", telegram: "Telegram", fathom: "Fathom", google: "Google", calendly: "Calendly" };
 
 export const PROVIDER_ABOUT: Record<Provider, string> = {
   slack: "Reads your messages and sends your replies from your own account.",
   telegram: "Reads your one-to-one chats and the group messages addressed to you, and sends your replies from your own account.",
   fathom: "Brings in your recorded calls with notes, transcript and action items.",
   google: "Brings in your emails and your calendar. You can answer and write emails, and add, change and answer events, from here. Nothing is sent or changed unless you do it.",
+  calendly: "Reads which booking link each call was booked through, so tasks from the call take that link's Agency, Consulting or Sales. Nothing is changed in Calendly.",
 };
 
 /**
@@ -62,6 +63,7 @@ export const GOOGLE_PERMISSIONS: [string, string][] = [
 ];
 
 export const FATHOM_API_ACCESS_URL = "https://fathom.video/customize#api-access-header";
+export const CALENDLY_API_ACCESS_URL = "https://calendly.com/integrations/api_webhooks";
 
 /** Each check returns a message for the person, or null when the value looks right. */
 export function checkSlackToken(raw: string): string | null {
@@ -77,6 +79,13 @@ export function checkFathomKey(raw: string): string | null {
   const v = raw.trim();
   if (!v) return "Paste the API key from Fathom.";
   if (/\s/.test(v) || v.length < 12) return "That key looks cut off. Copy the whole thing.";
+  return null;
+}
+
+export function checkCalendlyKey(raw: string): string | null {
+  const v = raw.trim();
+  if (!v) return "Paste the personal access token from Calendly.";
+  if (/\s/.test(v) || v.length < 40) return "That token looks cut off. Copy the whole thing.";
   return null;
 }
 

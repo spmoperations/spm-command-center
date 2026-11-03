@@ -11,6 +11,7 @@ import { pictureResponse, SLACK_NEEDS_FILES } from "@/server/pictures";
 import { seal } from "@/server/secrets";
 import { RateLimited, slackClient } from "@/server/slack";
 import { fakeSlack, NOW, reset, seed, stateOpened, suggestionsIn, testDb, TINY } from "@/server/testing";
+import { calendlyPull } from "./calendly";
 import { fathomPull, toMeeting } from "./fathom";
 import { outboxSend } from "./outbox";
 import { requestFinder } from "./request-finder";
@@ -634,6 +635,80 @@ describe("Fathom job", () => {
   it("stops with a wait time when Fathom says slow down", async () => {
     const limited: typeof fetch = async () => new Response("", { status: 429, headers: { "ratelimit-reset": "42" } });
     await expect(fathomPull(ctx(), "key", limited)).rejects.toMatchObject({ waitSeconds: 42 });
+  });
+
+  it("keeps when the call was on the calendar and who was invited, to tell which Calendly booking it was", async () => {
+    await fathomPull(ctx(), "key", fathom([{ ...call, scheduled_start_time: "2026-10-07T08:58:00Z", calendar_invitees: [...call.calendar_invitees!, { name: "Maya again", email: "MAYA@client.com" }] }]));
+    expect(await db.query("select scheduled_at, guests from meetings")).toEqual([{ scheduled_at: Date.parse("2026-10-07T08:58:00Z"), guests: ["jeremy@example.com", "maya@client.com"] }]);
+  });
+});
+
+describe("Calendly job", () => {
+  const API = "https://api.calendly.com";
+  const me = { uri: `${API}/users/U1`, name: "Jeremy Moser", email: "jeremy@example.com", current_organization: `${API}/organizations/O1` };
+  const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+  /** Calendly as the job sees it with a key that is not an admin's: the organization's lists are refused, the person's own are read. */
+  function calendly(over: { nextPage?: string } = {}) {
+    const asked: string[] = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      asked.push(`${url.pathname}${url.search}`);
+      expect((init?.headers as Record<string, string>).authorization).toBe("Bearer the-token");
+      if (url.pathname === "/users/me") return json({ resource: me });
+      if (url.searchParams.get("organization")) return json({ message: "You do not have permission" }, 403);
+      if (url.pathname === "/event_types" && !url.searchParams.get("page_token")) {
+        return json({
+          collection: [{ uri: `${API}/event_types/E1`, name: "Client Check-In call", scheduling_url: "https://calendly.com/Team/client-check-in-call", active: true }],
+          pagination: { next_page: over.nextPage ?? `${API}/event_types?user=x&page_token=2` },
+        });
+      }
+      if (url.pathname === "/event_types") return json({ collection: [{ uri: `${API}/event_types/E2`, name: "Introduction Session", scheduling_url: "https://calendly.com/team/intro", active: false }], pagination: { next_page: null } });
+      if (url.pathname === "/event_types/E9") return json({ resource: { uri: `${API}/event_types/E9`, name: "A secret one", scheduling_url: "https://calendly.com/team/secret" } });
+      if (url.pathname === "/scheduled_events") {
+        return json({
+          collection: [
+            { uri: `${API}/scheduled_events/S1`, status: "active", start_time: "2026-10-06T15:00:00Z", end_time: "2026-10-06T15:30:00Z", event_type: `${API}/event_types/E1`, event_memberships: [{ user_email: "Jeremy@Example.com" }] },
+            { uri: `${API}/scheduled_events/S2`, status: "canceled", start_time: "2026-10-07T15:00:00Z", end_time: "2026-10-07T15:30:00Z", event_type: `${API}/event_types/E9`, event_memberships: [] },
+          ],
+          pagination: { next_page: null },
+        });
+      }
+      return json({}, 404);
+    };
+    return { fetchImpl, asked };
+  }
+
+  it("keeps the booking links and the calls booked through them, read with the key's own person when it may not read the organization", async () => {
+    const { fetchImpl, asked } = calendly();
+    const first = await calendlyPull(ctx(), "the-token", fetchImpl);
+    expect(first).toEqual({ items: 2, cursor: { read: true }, message: "1 booking from 3 booking links, 1 cancelled" });
+    expect(await db.query("select link, name, active from booking_types order by link")).toEqual([
+      { link: "calendly.com/team/client-check-in-call", name: "Client Check-In call", active: true },
+      { link: "calendly.com/team/intro", name: "Introduction Session", active: false },
+    ]);
+    expect(await db.query("select id, link, start_at, hosts, active from bookings order by id")).toEqual([
+      { id: "S1", link: "calendly.com/team/client-check-in-call", start_at: Date.parse("2026-10-06T15:00:00Z"), hosts: ["jeremy@example.com"], active: true },
+      { id: "S2", link: "calendly.com/team/secret", start_at: Date.parse("2026-10-07T15:00:00Z"), hosts: [], active: false },
+    ]);
+    // The first read goes 90 days back; later ones 14, for bookings moved or cancelled lately.
+    const since = (from: string) => new URL(`${API}${from}`).searchParams.get("min_start_time");
+    expect(since(asked.find((a) => a.startsWith("/scheduled_events?user="))!)).toBe(new Date(NOW - 90 * 86_400_000).toISOString());
+    asked.length = 0;
+    await calendlyPull(ctx({ read: true }), "the-token", fetchImpl);
+    expect(since(asked.find((a) => a.startsWith("/scheduled_events?user="))!)).toBe(new Date(NOW - 14 * 86_400_000).toISOString());
+  });
+
+  it("sends the key nowhere but Calendly's API, and stops with a wait time when Calendly says slow down", async () => {
+    await expect(calendlyPull(ctx(), "the-token", calendly({ nextPage: "https://elsewhere.example/steal" }).fetchImpl)).rejects.toThrow("an address outside Calendly's API");
+    const limited: typeof fetch = async () => new Response("", { status: 429, headers: { "x-ratelimit-reset": "30" } });
+    await expect(calendlyPull(ctx(), "the-token", limited)).rejects.toMatchObject({ waitSeconds: 30 });
+  });
+
+  it("is connected with a token Calendly accepts, named after whose it is", async () => {
+    await seed(db);
+    expect(await connect(db, OWNER_ID, "calendly", " the-token ", calendly().fetchImpl)).toEqual({ label: "Jeremy Moser" });
+    const refusing: typeof fetch = async () => json({ title: "Unauthenticated" }, 401);
+    await expect(connect(db, OWNER_ID, "calendly", "a-bad-token", refusing)).rejects.toThrow(/^Calendly did not accept that token \(Calendly answered 401/);
   });
 });
 

@@ -1,5 +1,6 @@
 // Connecting a service: check the key with the service first, then store it encrypted.
 import type { Provider } from "@/core/types";
+import { verifyCalendlyKey } from "./calendly";
 import type { Db } from "./db";
 import { verifyFathomKey } from "./fathom";
 import { seal, unseal } from "./secrets";
@@ -24,6 +25,11 @@ export async function connect(db: Db, ownerId: string, provider: Provider, secre
     });
     label = who.label;
     if (who.email) await db.run("update users set email = coalesce(email, $1) where id = $2", [who.email, ownerId]);
+  } else if (provider === "calendly") {
+    const who = await verifyCalendlyKey(value, fetchImpl).catch((e: Error) => {
+      throw new ConnectionError(`Calendly did not accept that token (${e.message}).`);
+    });
+    label = who.label;
   } else if (provider === "google") {
     throw new ConnectionError("Google is connected with the Connect Google button, not with a key.");
   } else {

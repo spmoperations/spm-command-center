@@ -4,12 +4,12 @@
 // /api/state, and every action below is one request to the server, which answers with the
 // fresh state. Nothing but small screen preferences lives only in the browser.
 import { useSyncExternalStore } from "react";
-import { MODE_NAME, PERSONAL_SIDE, PRIORITY_NAME, TASK_LINE_NAME } from "@/core/config";
+import { bookingKey, MODE_NAME, PERSONAL_SIDE, PRIORITY_NAME, TASK_LINE_NAME } from "@/core/config";
 import { isoDay, pad } from "@/core/dates";
 import { jobById } from "@/core/jobs";
 import { PROVIDER_NAME } from "@/core/providers";
 import type { AssignWhere } from "@/core/delegation";
-import type { AddedPicture, AppState, Conversation, ConversationChange, JobId, Mode, Person, Priority, Provider, Rule, Stamps, StateAnswer, Suggestion, Task, TaskLine, TicketInput } from "@/core/types";
+import type { AddedPicture, AppState, ChatLine, Conversation, ConversationChange, JobId, Mode, Person, Priority, Provider, Rule, Stamps, StateAnswer, Suggestion, Task, TaskLine, TicketInput } from "@/core/types";
 import type { RejectReason } from "@/core/config";
 
 export interface UiState {
@@ -589,14 +589,18 @@ export const setImportant = (source: "slack" | "telegram", kind: "chat" | "perso
   }));
 
 /**
- * Picks Agency, Consulting or Sales for a Slack channel, Telegram group or person, for the whole
- * team: the tasks from it are labelled so. Null takes the pick away. Shown at once.
+ * Picks Agency, Consulting or Sales for a Slack channel, Telegram group or person, a call or a
+ * booking link, for the whole team: the tasks from it are labelled so. Null takes the pick away.
+ * Shown at once.
  */
-export const setChatLine = (source: "slack" | "telegram", kind: "chat" | "person", id: string, name: string, line: TaskLine | null) =>
+export const setChatLine = (source: ChatLine["source"], kind: ChatLine["kind"], id: string, name: string, line: TaskLine | null) => {
+  // A booking link is kept as the server keeps it (see bookingKey), so the pick shows where it will stay.
+  const key = kind === "booking" ? (bookingKey(id) ?? id) : id;
   void act("setChatLine", [source, kind, id, name, line], line ? `${name}: ${TASK_LINE_NAME[line]}` : `${name}: no line`, (s) => ({
     ...s,
-    chatLines: [...s.chatLines.filter((l) => !(l.source === source && l.kind === kind && l.id === id)), ...(line ? [{ source, kind, id, name, line }] : [])],
+    chatLines: [...s.chatLines.filter((l) => !(l.source === source && l.kind === kind && l.id === key)), ...(line ? [{ source, kind, id: key, name, line }] : [])],
   }));
+};
 
 /** "Run now": runs one check straight away and says what it found. */
 export async function runJobNow(id: JobId) {

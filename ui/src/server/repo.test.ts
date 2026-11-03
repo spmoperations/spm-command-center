@@ -25,7 +25,7 @@ beforeEach(async () => {
 
 describe("database", () => {
   it("applies each migration once and records it", async () => {
-    expect(await db.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }, { name: "0006_pictures_and_reactions.sql" }, { name: "0007_media.sql" }, { name: "0008_thread_items.sql" }, { name: "0009_inbox_age.sql" }, { name: "0010_task_description.sql" }, { name: "0011_outbox_thread_reply.sql" }, { name: "0012_telegram_chats.sql" }, { name: "0013_google.sql" }, { name: "0014_google_accounts.sql" }, { name: "0015_google_send.sql" }, { name: "0016_important.sql" }, { name: "0017_calendar_edit.sql" }, { name: "0018_team.sql" }, { name: "0019_team_ids.sql" }, { name: "0020_app_keys.sql" }, { name: "0021_slack_app_keys.sql" }, { name: "0022_tickets.sql" }, { name: "0023_ai_check.sql" }, { name: "0024_clients.sql" }, { name: "0025_telegram_sync.sql" }, { name: "0026_task_logins.sql" }, { name: "0027_task_lines.sql" }, { name: "0028_no_made_up_due_dates.sql" }]);
+    expect(await db.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }, { name: "0006_pictures_and_reactions.sql" }, { name: "0007_media.sql" }, { name: "0008_thread_items.sql" }, { name: "0009_inbox_age.sql" }, { name: "0010_task_description.sql" }, { name: "0011_outbox_thread_reply.sql" }, { name: "0012_telegram_chats.sql" }, { name: "0013_google.sql" }, { name: "0014_google_accounts.sql" }, { name: "0015_google_send.sql" }, { name: "0016_important.sql" }, { name: "0017_calendar_edit.sql" }, { name: "0018_team.sql" }, { name: "0019_team_ids.sql" }, { name: "0020_app_keys.sql" }, { name: "0021_slack_app_keys.sql" }, { name: "0022_tickets.sql" }, { name: "0023_ai_check.sql" }, { name: "0024_clients.sql" }, { name: "0025_telegram_sync.sql" }, { name: "0026_task_logins.sql" }, { name: "0027_task_lines.sql" }, { name: "0028_no_made_up_due_dates.sql" }, { name: "0029_call_lines.sql" }]);
     expect(await migrate(db)).toEqual([]);
   });
 
@@ -61,8 +61,8 @@ describe("database", () => {
   it("accepts a first schema that was run by hand, then applies what came after", async () => {
     const fresh = await openDb(undefined, { migrate: false });
     for (const statement of splitStatements(fs.readFileSync("db/migrations/0001_init.sql", "utf8"))) await fresh.run(statement);
-    expect(await migrate(fresh)).toEqual(["0002_row_level_security.sql", "0003_personal_and_requests.sql", "0004_threads.sql", "0005_slack_pictures.sql", "0006_pictures_and_reactions.sql", "0007_media.sql", "0008_thread_items.sql", "0009_inbox_age.sql", "0010_task_description.sql", "0011_outbox_thread_reply.sql", "0012_telegram_chats.sql", "0013_google.sql", "0014_google_accounts.sql", "0015_google_send.sql", "0016_important.sql", "0017_calendar_edit.sql", "0018_team.sql", "0019_team_ids.sql", "0020_app_keys.sql", "0021_slack_app_keys.sql", "0022_tickets.sql", "0023_ai_check.sql", "0024_clients.sql", "0025_telegram_sync.sql", "0026_task_logins.sql", "0027_task_lines.sql", "0028_no_made_up_due_dates.sql"]);
-    expect(await fresh.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }, { name: "0006_pictures_and_reactions.sql" }, { name: "0007_media.sql" }, { name: "0008_thread_items.sql" }, { name: "0009_inbox_age.sql" }, { name: "0010_task_description.sql" }, { name: "0011_outbox_thread_reply.sql" }, { name: "0012_telegram_chats.sql" }, { name: "0013_google.sql" }, { name: "0014_google_accounts.sql" }, { name: "0015_google_send.sql" }, { name: "0016_important.sql" }, { name: "0017_calendar_edit.sql" }, { name: "0018_team.sql" }, { name: "0019_team_ids.sql" }, { name: "0020_app_keys.sql" }, { name: "0021_slack_app_keys.sql" }, { name: "0022_tickets.sql" }, { name: "0023_ai_check.sql" }, { name: "0024_clients.sql" }, { name: "0025_telegram_sync.sql" }, { name: "0026_task_logins.sql" }, { name: "0027_task_lines.sql" }, { name: "0028_no_made_up_due_dates.sql" }]);
+    expect(await migrate(fresh)).toEqual(["0002_row_level_security.sql", "0003_personal_and_requests.sql", "0004_threads.sql", "0005_slack_pictures.sql", "0006_pictures_and_reactions.sql", "0007_media.sql", "0008_thread_items.sql", "0009_inbox_age.sql", "0010_task_description.sql", "0011_outbox_thread_reply.sql", "0012_telegram_chats.sql", "0013_google.sql", "0014_google_accounts.sql", "0015_google_send.sql", "0016_important.sql", "0017_calendar_edit.sql", "0018_team.sql", "0019_team_ids.sql", "0020_app_keys.sql", "0021_slack_app_keys.sql", "0022_tickets.sql", "0023_ai_check.sql", "0024_clients.sql", "0025_telegram_sync.sql", "0026_task_logins.sql", "0027_task_lines.sql", "0028_no_made_up_due_dates.sql", "0029_call_lines.sql"]);
+    expect(await fresh.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }, { name: "0006_pictures_and_reactions.sql" }, { name: "0007_media.sql" }, { name: "0008_thread_items.sql" }, { name: "0009_inbox_age.sql" }, { name: "0010_task_description.sql" }, { name: "0011_outbox_thread_reply.sql" }, { name: "0012_telegram_chats.sql" }, { name: "0013_google.sql" }, { name: "0014_google_accounts.sql" }, { name: "0015_google_send.sql" }, { name: "0016_important.sql" }, { name: "0017_calendar_edit.sql" }, { name: "0018_team.sql" }, { name: "0019_team_ids.sql" }, { name: "0020_app_keys.sql" }, { name: "0021_slack_app_keys.sql" }, { name: "0022_tickets.sql" }, { name: "0023_ai_check.sql" }, { name: "0024_clients.sql" }, { name: "0025_telegram_sync.sql" }, { name: "0026_task_logins.sql" }, { name: "0027_task_lines.sql" }, { name: "0028_no_made_up_due_dates.sql" }, { name: "0029_call_lines.sql" }]);
     expect(await fresh.query("select relrowsecurity from pg_class where relname = 'messages'")).toEqual([{ relrowsecurity: true }]);
     await fresh.close();
   });
@@ -74,7 +74,7 @@ describe("database", () => {
     }
     await migrate(fresh);
     expect(await fresh.query("select relname from pg_class where relnamespace = 'public'::regnamespace and relkind = 'r' and not relrowsecurity")).toEqual([]);
-    expect(await fresh.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }, { name: "0006_pictures_and_reactions.sql" }, { name: "0007_media.sql" }, { name: "0008_thread_items.sql" }, { name: "0009_inbox_age.sql" }, { name: "0010_task_description.sql" }, { name: "0011_outbox_thread_reply.sql" }, { name: "0012_telegram_chats.sql" }, { name: "0013_google.sql" }, { name: "0014_google_accounts.sql" }, { name: "0015_google_send.sql" }, { name: "0016_important.sql" }, { name: "0017_calendar_edit.sql" }, { name: "0018_team.sql" }, { name: "0019_team_ids.sql" }, { name: "0020_app_keys.sql" }, { name: "0021_slack_app_keys.sql" }, { name: "0022_tickets.sql" }, { name: "0023_ai_check.sql" }, { name: "0024_clients.sql" }, { name: "0025_telegram_sync.sql" }, { name: "0026_task_logins.sql" }, { name: "0027_task_lines.sql" }, { name: "0028_no_made_up_due_dates.sql" }]);
+    expect(await fresh.query("select name from schema_migrations order by name")).toEqual([{ name: "0001_init.sql" }, { name: "0002_row_level_security.sql" }, { name: "0003_personal_and_requests.sql" }, { name: "0004_threads.sql" }, { name: "0005_slack_pictures.sql" }, { name: "0006_pictures_and_reactions.sql" }, { name: "0007_media.sql" }, { name: "0008_thread_items.sql" }, { name: "0009_inbox_age.sql" }, { name: "0010_task_description.sql" }, { name: "0011_outbox_thread_reply.sql" }, { name: "0012_telegram_chats.sql" }, { name: "0013_google.sql" }, { name: "0014_google_accounts.sql" }, { name: "0015_google_send.sql" }, { name: "0016_important.sql" }, { name: "0017_calendar_edit.sql" }, { name: "0018_team.sql" }, { name: "0019_team_ids.sql" }, { name: "0020_app_keys.sql" }, { name: "0021_slack_app_keys.sql" }, { name: "0022_tickets.sql" }, { name: "0023_ai_check.sql" }, { name: "0024_clients.sql" }, { name: "0025_telegram_sync.sql" }, { name: "0026_task_logins.sql" }, { name: "0027_task_lines.sql" }, { name: "0028_no_made_up_due_dates.sql" }, { name: "0029_call_lines.sql" }]);
     expect(await fresh.query("select mode, asked from messages m join conversations c on c.id = m.conversation_id")).toEqual([]);
     await fresh.close();
   });
@@ -100,6 +100,23 @@ describe("database", () => {
     ]);
   });
 
+  it("adds the call and booking link picks by hand, more than once, keeping every pick and connection there is", async () => {
+    await db.run("insert into chat_lines (owner_id, source, kind, external_id, name, line) values ($1, 'slack', 'chat', 'C1', '#sales', 'sales')", [OWNER_ID]);
+    await db.run("insert into meetings (id, owner_id, external_id, title, started_at) values ('fathom:42', $1, '42', 'Weekly', $2)", [OWNER_ID, NOW]);
+    for (let run = 0; run < 2; run++) {
+      for (const statement of splitStatements(fs.readFileSync("db/migrations/0029_call_lines.sql", "utf8"))) await db.run(statement);
+    }
+    await db.run("insert into chat_lines (owner_id, source, kind, external_id, name, line) values ($1, 'fathom', 'call', 'weekly', 'Weekly', 'agency'), ($1, 'calendly', 'booking', 'calendly.com/team/intro', 'Intro', 'sales')", [OWNER_ID]);
+    await db.run("insert into connections (owner_id, provider, secret, connected_at) values ($1, 'calendly', 'sealed', $2)", [OWNER_ID, NOW]);
+    expect(await db.query("select source, kind from chat_lines order by source")).toEqual([
+      { source: "calendly", kind: "booking" },
+      { source: "fathom", kind: "call" },
+      { source: "slack", kind: "chat" },
+    ]);
+    expect(await db.query("select scheduled_at, guests from meetings")).toEqual([{ scheduled_at: null, guests: null }]);
+    await expect(db.run("insert into chat_lines (owner_id, source, kind, external_id, name, line) values ($1, 'gmail', 'chat', 'x', 'x', 'sales')", [OWNER_ID])).rejects.toThrow();
+  });
+
   it("splits a migration file into statements and drops comments", () => {
     expect(splitStatements("-- note\ncreate table a (id text);\n\ncreate index b on a (id);\n")).toEqual(["create table a (id text)", "create index b on a (id)"]);
   });
@@ -109,7 +126,7 @@ describe("database", () => {
     expect(s.jobs.map((j) => j.id)).toEqual(JOBS.map((j) => j.id));
     expect(s.priorityRules.map((r) => [r.when, r.pri])).toEqual([["tagged", "high"], ["direct", "mid"]]);
     expect(s.metrics.filter((m) => !m.parent).map((m) => m.name)).toEqual(["Calls Booked", "Client Cash Collected", "Overall Agency Revenue"]);
-    expect(s.connections).toEqual({ slack: { connected: false }, telegram: { connected: false }, fathom: { connected: false }, google: { connected: false } });
+    expect(s.connections).toEqual({ slack: { connected: false }, telegram: { connected: false }, fathom: { connected: false }, google: { connected: false }, calendly: { connected: false } });
   });
 });
 

@@ -140,7 +140,7 @@ describe("where Telegram may be used", () => {
   });
 
   it("joins the list of apps, sources and checks only where it can be used", () => {
-    expect([liveProviders(false), liveProviders(true)]).toEqual([["slack", "fathom"], ["slack", "telegram", "fathom"]]);
+    expect([liveProviders(false), liveProviders(true)]).toEqual([["slack", "fathom", "calendly"], ["slack", "telegram", "fathom", "calendly"]]);
     expect([liveSources(false), liveSources(true)]).toEqual([["slack"], ["slack", "telegram"]]);
   });
 

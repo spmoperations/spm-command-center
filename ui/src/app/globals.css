@@ -512,6 +512,7 @@ nav.tabs a[data-tab="settings"] { margin-left: 0; }
 .prov-head .about { font-size: 13.5px; color: var(--muted); }
 .prov-body { border-top: 1px solid var(--line); padding: 16px; display: grid; gap: 12px; }
 .src-fathom { background: var(--accent); }
+.src-calendly { background: var(--cal-2); }
 .steps { list-style: none; margin: 0; padding: 0; counter-reset: st; display: grid; gap: 16px; }
 .steps > li { counter-increment: st; display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 12px; align-items: start; }
 .steps > li::before { content: counter(st); width: 24px; height: 24px; border-radius: 50%; background: var(--surface-2); border: 1px solid var(--line); display: grid; place-items: center; font: 600 12px var(--f-mono); color: var(--muted); }
@@ -761,6 +762,7 @@ img.avatar { object-fit: cover; background: var(--surface-2); }
 .line-list { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); max-height: 420px; }
 .line-list li { display: flex; gap: 8px; align-items: center; padding: 4px 0; font-size: 14px; min-width: 0; }
 .line-list .line-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.line-list .line-link { display: block; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
 .line-list select.line-pick { flex: none; width: 128px; padding: 3px 8px; font-size: 13px; }
 .tk-chips { display: flex; gap: 6px; flex-wrap: wrap; }
 

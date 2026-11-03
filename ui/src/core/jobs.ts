@@ -33,6 +33,7 @@ export const JOBS: JobDefinition[] = [
   // Local-only for now: it runs only where the server says Telegram can be used (see `liveJobs`).
   { id: "telegram-pull", name: "Gets new Telegram messages", tab: "Inbox", defaultMin: 60, minMin: 30, usesAI: false, needs: "telegram", live: false },
   { id: "fathom-pull", name: "Gets new calls from Fathom", tab: "Meetings", defaultMin: 60, minMin: 15, usesAI: false, needs: "fathom", live: true },
+  { id: "calendly-pull", name: "Gets which booking link each call came from", tab: "Tasks", defaultMin: 60, minMin: 15, usesAI: false, needs: "calendly", live: true },
   // Like Telegram, these run only where the server says Google can be used (see `liveJobs`).
   { id: "gmail-pull", name: "Gets new emails from Gmail", tab: "Inbox", defaultMin: 15, minMin: 5, usesAI: false, needs: "google", live: false },
   { id: "calendar-pull", name: "Gets the meetings coming up", tab: "Meetings", defaultMin: 30, minMin: 10, usesAI: false, needs: "google", live: false },

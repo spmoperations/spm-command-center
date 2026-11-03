@@ -477,7 +477,8 @@ describe("Agency, Consulting or Sales", () => {
     await pick(alex, "telegram", "person", "555", "Dana", null);
     expect((await loadState(db, alex, now)).chatLines.map((l) => [l.id, l.line])).toEqual([["C1", "agency"]]);
     expect(await refused(alex, "setChatLine", "slack", "chat", "C1", "#sales", "marketing")).toBe("That is not Agency, Consulting or Sales.");
-    expect(await refused(alex, "setChatLine", "gmail", "chat", "C1", "#sales", "sales")).toBe("That is not a chat or a person.");
+    expect(await refused(alex, "setChatLine", "gmail", "chat", "C1", "#sales", "sales")).toBe("That is not a chat, a person, a call or a booking link.");
+    expect(await refused(alex, "setChatLine", "fathom", "booking", "x", "x", "sales")).toBe("That is not a chat, a person, a call or a booking link.");
   });
 
   it("are picked from the owner's channels and people, by Alex too, while everything else shows Alex her own", async () => {
@@ -521,6 +522,92 @@ describe("Agency, Consulting or Sales", () => {
     await suggestion("s_chan", { title: "From the sales channel", src: ["message", "slack:C1"], key: "ask:slack:C1:2.0" });
     await act(OWNER_ID, "acceptSuggestion", "s_chan");
     expect(await lineOnBoard("From the sales channel")).toEqual([null, null]);
+  });
+
+  describe("for calls", () => {
+    const MIN = 60_000;
+    /** A call Fathom recorded, with an action item: on the calendar at `scheduled` (null for calls read before that was kept), recorded from `started`. */
+    async function call(n: number, title: string, started: number, over: { scheduled?: number | null; guests?: string[] | null; owner?: string } = {}) {
+      await db.run(
+        `insert into meetings (id, owner_id, external_id, title, started_at, scheduled_at, guests, action_items)
+         values ($1, $2, $3, $4, $5, $6, case when $7::jsonb is null then null else array(select jsonb_array_elements_text($7::jsonb)) end, $8)`,
+        [`fathom:${n}`, over.owner ?? OWNER_ID, String(n), title, started, over.scheduled === undefined ? started : over.scheduled, over.guests === null ? null : JSON.stringify(over.guests ?? []), JSON.stringify([{ text: `Item from call ${n}`, who: "Unassigned", mine: false, done: false }])],
+      );
+      await suggestion(`s_call${n}`, { title: `Item from call ${n}`, src: ["meeting", `fathom:${n}`], key: `fathom:${n}:action:0` });
+    }
+    async function booking(id: string, link: string, start: number, over: { hosts?: string[]; active?: boolean } = {}) {
+      await db.run(
+        "insert into bookings (owner_id, id, link, start_at, end_at, hosts, active, saved_at) values ($1, $2, $3, $4, $5, array(select jsonb_array_elements_text($6::jsonb)), $7, $8)",
+        [OWNER_ID, id, link, start, start + 30 * MIN, JSON.stringify(over.hosts ?? []), over.active ?? true, NOW],
+      );
+    }
+    const cardLine = async (n: number) => (await loadState(db, alex, now)).review.find((g) => g.id === `s_call${n}`)?.line ?? null;
+
+    it("are listed by title for everyone with a login, most calls first, and every call with a picked title is labelled", async () => {
+      await call(1, "Client Check-In - Harbor", NOW - 14 * 86_400_000);
+      await call(2, "Client  check-in - Harbor ", NOW - 7 * 86_400_000);
+      await call(3, "Kickoff with Dana", NOW - 3 * 86_400_000);
+      for (const who of [OWNER_ID, alex]) {
+        expect((await loadState(db, who, now)).callTitles).toEqual([
+          // The newest call's title is the one shown.
+          { id: "client check-in - harbor", name: "Client  check-in - Harbor ", calls: 2 },
+          { id: "kickoff with dana", name: "Kickoff with Dana", calls: 1 },
+        ]);
+      }
+      expect([await cardLine(1), await cardLine(2), await cardLine(3)]).toEqual([null, null, null]);
+      await pick(alex, "fathom", "call", "client check-in - harbor", "Client Check-In - Harbor", "agency");
+      expect([await cardLine(1), await cardLine(2), await cardLine(3)]).toEqual(["agency", "agency", null]);
+      // On the board too, and a call picked by the way its title is written counts the same.
+      await act(OWNER_ID, "acceptSuggestion", "s_call1");
+      expect(await lineOnBoard("Item from call 1")).toEqual([null, "agency"]);
+      await pick(OWNER_ID, "fathom", "call", "  Client CHECK-IN -  Harbor", "Client Check-In - Harbor", "consulting");
+      expect(await lineOnBoard("Item from call 1", alex)).toEqual([null, "consulting"]);
+      expect((await loadState(db, OWNER_ID, now)).chatLines).toEqual([{ source: "fathom", kind: "call", id: "client check-in - harbor", name: "Client Check-In - Harbor", line: "consulting" }]);
+    });
+
+    it("take the line of the Calendly link they were booked through first, then their title", async () => {
+      const at = NOW - 2 * 86_400_000;
+      await call(1, "Maya Chen and Jeremy Moser", at + 4 * MIN, { scheduled: at, guests: ["maya@harbor.example", "jeremy@example.com"] });
+      await booking("b1", "calendly.com/team/client-check-in-call", at, { hosts: ["jeremy@example.com"] });
+      await pick(OWNER_ID, "calendly", "booking", "https://calendly.com/Team/client-check-in-call/?month=2026-10", "Client Check-In call", "consulting");
+      expect(await cardLine(1)).toBe("consulting");
+      // Its title picked as well: the booking link still comes first.
+      await pick(OWNER_ID, "fathom", "call", "maya chen and jeremy moser", "Maya Chen and Jeremy Moser", "sales");
+      expect(await cardLine(1)).toBe("consulting");
+      await pick(OWNER_ID, "calendly", "booking", "calendly.com/team/client-check-in-call", "Client Check-In call", null);
+      expect(await cardLine(1)).toBe("sales");
+      expect(await refused(OWNER_ID, "setChatLine", "calendly", "booking", "client check-in", "x", "sales")).toBe(
+        "That is not a booking link. Paste the whole link, such as https://calendly.com/your-team/intro-call.",
+      );
+    });
+
+    it("match a booking only near the call's time, with one of its hosts invited, and not once cancelled", async () => {
+      const at = NOW - 2 * 86_400_000;
+      await pick(OWNER_ID, "calendly", "booking", "calendly.com/team/intro", "Intro", "sales");
+      // Booked for 16 minutes before the call was on the calendar: another call.
+      await call(1, "Call one", at, { guests: ["jeremy@example.com"] });
+      await booking("b1", "calendly.com/team/intro", at - 16 * MIN, { hosts: ["jeremy@example.com"] });
+      // At the same time, but a teammate's booking: nobody on it was invited to this call.
+      await call(2, "Call two", at + 3 * 3_600_000, { guests: ["jeremy@example.com", "dana@client.example"] });
+      await booking("b2", "calendly.com/team/intro", at + 3 * 3_600_000, { hosts: ["sam@example.com"] });
+      // Booked, then cancelled.
+      await call(3, "Call three", at + 6 * 3_600_000, { guests: ["jeremy@example.com"] });
+      await booking("b3", "calendly.com/team/intro", at + 6 * 3_600_000, { hosts: ["jeremy@example.com"], active: false });
+      // Read before calls kept their calendar time and guests: the recording's start, 10 minutes in, still matches.
+      await call(4, "Call four", at + 9 * 3_600_000 + 10 * MIN, { scheduled: null, guests: null });
+      await booking("b4", "calendly.com/team/intro", at + 9 * 3_600_000, { hosts: ["jeremy@example.com"] });
+      expect([await cardLine(1), await cardLine(2), await cardLine(3), await cardLine(4)]).toEqual([null, null, null, "sales"]);
+    });
+
+    it("list the booking links Calendly has, and keep a link added by hand", async () => {
+      await db.run("insert into booking_types (owner_id, link, name, active, saved_at) values ($1, 'calendly.com/team/intro', 'Introduction Session', true, $2), ($1, 'calendly.com/team/old', 'Old call', false, $2)", [OWNER_ID, NOW]);
+      expect((await loadState(db, alex, now)).bookingTypes).toEqual([
+        { id: "calendly.com/team/intro", name: "Introduction Session" },
+        { id: "calendly.com/team/old", name: "Old call", inactive: true },
+      ]);
+      await pick(alex, "calendly", "booking", "https://www.calendly.com/team/strategy-session|", "calendly.com/team/strategy-session", "sales");
+      expect((await loadState(db, OWNER_ID, now)).chatLines).toEqual([{ source: "calendly", kind: "booking", id: "calendly.com/team/strategy-session", name: "calendly.com/team/strategy-session", line: "sales" }]);
+    });
   });
 
   it("can be set on a task by hand, which wins, and goes in its history", async () => {

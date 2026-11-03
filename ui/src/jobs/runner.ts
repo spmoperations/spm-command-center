@@ -12,6 +12,7 @@ import { ageOutInbox, clearAnswered, ensureJobs, OWNER_ID, resortInbox, sendingE
 import { RateLimited, slackClient } from "@/server/slack";
 import { telegramApi, telegramConnected } from "@/server/telegram";
 import { calendarPull } from "./calendar";
+import { calendlyPull } from "./calendly";
 import { fathomPull } from "./fathom";
 import { gmailPull } from "./gmail";
 import { outboxSend } from "./outbox";
@@ -61,6 +62,11 @@ async function execute(jobId: JobId, ctx: JobContext): Promise<JobResult> {
       const key = await secretFor(ctx.db, ctx.ownerId, "fathom");
       if (!key) throw new NotReady("Fathom is not connected");
       return fathomPull(ctx, key);
+    }
+    case "calendly-pull": {
+      const key = await secretFor(ctx.db, ctx.ownerId, "calendly");
+      if (!key) throw new NotReady("Calendly is not connected");
+      return calendlyPull(ctx, key);
     }
     case "inbox-rules": {
       const changed = await resortInbox(ctx.db, ctx.ownerId);

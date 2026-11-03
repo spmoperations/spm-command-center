@@ -6,14 +6,14 @@ import { Pill } from "@/components/bits";
 import { SecretField } from "@/components/SecretField";
 import { ago } from "@/core/dates";
 import {
-  checkFathomKey, checkPhone, checkSlackToken, checkTelegramCode, FATHOM_API_ACCESS_URL, PROVIDER_ABOUT, PROVIDER_NAME, PROVIDERS, SLACK_CREATE_APP_URL, SLACK_USER_SCOPES,
+  CALENDLY_API_ACCESS_URL, checkCalendlyKey, checkFathomKey, checkPhone, checkSlackToken, checkTelegramCode, FATHOM_API_ACCESS_URL, PROVIDER_ABOUT, PROVIDER_NAME, PROVIDERS, SLACK_CREATE_APP_URL, SLACK_USER_SCOPES,
 } from "@/core/providers";
 import type { JobId, Provider } from "@/core/types";
 import { disconnectGoogle, disconnectProvider, disconnectTelegram, refresh, saveAppKeys, telegramStep, toast, useApp, type App, type TelegramReply } from "@/store/store";
 
-const BADGE: Record<Provider, string> = { slack: "SL", telegram: "TG", fathom: "FA", google: "GO" };
+const BADGE: Record<Provider, string> = { slack: "SL", telegram: "TG", fathom: "FA", google: "GO", calendly: "CA" };
 // The check that reads each service, shown on its card.
-const READER: Partial<Record<Provider, JobId>> = { slack: "slack-pull", telegram: "telegram-pull", fathom: "fathom-pull", google: "gmail-pull" };
+const READER: Partial<Record<Provider, JobId>> = { slack: "slack-pull", telegram: "telegram-pull", fathom: "fathom-pull", google: "gmail-pull", calendly: "calendly-pull" };
 
 function Step({ title, help, children }: { title: string; help?: React.ReactNode; children?: React.ReactNode }) {
   return (
@@ -72,6 +72,23 @@ function FathomSteps() {
       <Step title="Paste the key" help="The key sees what you can see in Fathom: your own calls and the ones shared with you.">
         <SecretField provider="fathom" label="Fathom API key" placeholder="Fathom API key" check={checkFathomKey} />
       </Step>
+    </ol>
+  );
+}
+
+function CalendlySteps() {
+  return (
+    <ol className="steps">
+      <Step
+        title="Create a personal access token in Calendly"
+        help="Sign in to Calendly as the account that owns the team's booking links, ideally an admin, so every teammate's bookings are read. Open Integrations & apps, then API and webhooks, click Generate new token, name it Command Center, and copy it straight away: Calendly shows it only once."
+      >
+        <ExternalLink href={CALENDLY_API_ACCESS_URL}>Open Calendly: API and webhooks</ExternalLink>
+      </Step>
+      <Step title="Paste the token" help="The dashboard only reads with it: the booking links and when each call was booked. Nothing is changed in Calendly.">
+        <SecretField provider="calendly" label="Calendly token" placeholder="Calendly personal access token" check={checkCalendlyKey} />
+      </Step>
+      <Step title="Pick a line for each booking link" help={<>Then, in <Link href="/settings#lines">Settings, Agency, Consulting or Sales</Link>, under Booking links, pick Agency, Consulting or Sales for each link.</>} />
     </ol>
   );
 }
@@ -397,12 +414,13 @@ function TeamSlackApp({ app }: { app: App }) {
   );
 }
 
-const STEPS: Record<Provider, (props: { local?: boolean }) => React.ReactNode> = { slack: SlackSteps, telegram: TelegramSteps, fathom: FathomSteps, google: GoogleSteps };
+const STEPS: Record<Provider, (props: { local?: boolean }) => React.ReactNode> = { slack: SlackSteps, telegram: TelegramSteps, fathom: FathomSteps, google: GoogleSteps, calendly: CalendlySteps };
 
 const TURN_OFF: Record<Provider, string> = {
   slack: "Disconnecting removes the stored token and stops the Command Center reading Slack. To remove the access for good, also delete the app in Slack.",
   telegram: "Disconnecting signs this connection out of Telegram and deletes the saved login. The chats already read stay in the dashboard unless you also remove them. You can check it is gone in Telegram under Settings, Devices.",
   fathom: "Disconnecting removes the stored key and stops new calls coming in. To remove the access for good, also delete the key in Fathom.",
+  calendly: "Disconnecting removes the stored token and stops new bookings being read. The lines already picked stay. To remove the access for good, also delete the token in Calendly.",
   google: "Disconnecting ends the login on Google's side too and deletes it here. The emails already read stay in the dashboard unless you also remove them. You can check it is gone in your Google Account under Security, Your connections to third-party apps.",
 };
 
@@ -496,7 +514,7 @@ function ProviderCard({ provider, app }: { provider: Provider; app: App }) {
             )
           ) : (
             <>
-              {provider !== "google" && (
+              {provider !== "google" && provider !== "calendly" && (
                 <p className="st-help guide-link">
                   New to this? <Link href={`/connections/${provider}`}>Open the step-by-step guide, with pictures</Link>.
                 </p>
