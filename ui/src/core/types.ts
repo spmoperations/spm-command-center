@@ -410,6 +410,8 @@ export interface Person {
   telegramId?: string | null;
   /** How they sign in to see their own tasks. Shown to the owner only; absent when they cannot. */
   taskLogin?: TaskLoginInfo;
+  /** They may send the owner tasks from their own task page. Shown to the owner only. */
+  sendsTasks?: boolean;
 }
 
 /** Someone on the team list who signs in to see only their own tasks (see server/task-logins.ts). Never the password. */
@@ -434,6 +436,26 @@ export interface MyTask {
   /** Who gave it to them, when the history says. */
   from: string | null;
   doneAt: number | null;
+}
+
+/** A task someone on the team list sent the owner from their task page, as that page lists it. */
+export interface SentTask {
+  id: string;
+  /** Its name on the board, such as SPM-12. */
+  ticket: string;
+  title: string;
+  due: string;
+  status: TicketStatus;
+  line: TaskLine | null;
+  sentAt: number;
+}
+
+/** What a task page is told: whose it is, the tickets given to them and, when they may, those they sent the owner. */
+export interface MyTasksAnswer {
+  name: string;
+  tasks: MyTask[];
+  /** Who they may send tasks to, and what they sent lately. Absent when they may not. */
+  send?: { to: string; sent: SentTask[] };
 }
 
 /**

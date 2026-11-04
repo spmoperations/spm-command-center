@@ -166,4 +166,10 @@ export const TASK_LOGIN_ACTIONS: Record<string, (c: Ctx, ...args: any[]) => Prom
     onlyOwner(c);
     await c.db.run("delete from task_logins where owner_id = $1 and member_id = $2", [TEAM, memberId]);
   },
+  /** Lets someone on the team list send the owner tasks from their task page, or stops it. The tasks they sent stay. */
+  async setMemberSends(c, memberId: string, on: unknown) {
+    onlyOwner(c);
+    const changed = await c.db.run("update team_members set sends_tasks = $3 where owner_id = $1 and id = $2", [TEAM, String(memberId), on === true]);
+    if (!changed) throw new Error("That person is no longer on the team list.");
+  },
 };

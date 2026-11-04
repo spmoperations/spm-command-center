@@ -545,6 +545,9 @@ const inTeam = (personId: string, change: (p: Person) => Person | null) => (s: A
 });
 export const removeTaskLogin = (personId: string, name: string) =>
   void act("removeTaskLogin", [personId], `${name} can no longer sign in`, inTeam(personId, (p) => ({ ...p, taskLogin: undefined })));
+/** Whether someone on the team list may send the owner tasks from their task page. */
+export const setMemberSends = (personId: string, name: string, on: boolean) =>
+  void act("setMemberSends", [personId, on], on ? `${name} can send you tasks` : `${name} can no longer send you tasks`, inTeam(personId, (p) => ({ ...p, sendsTasks: on })));
 
 export const togglePersonDept = (personId: string, dept: string) =>
   void act("togglePersonDept", [personId, dept], undefined, inTeam(personId, (p) => ({ ...p, depts: p.depts.includes(dept) ? p.depts.filter((d) => d !== dept) : [...p.depts, dept] })));

@@ -4,13 +4,13 @@ import { NextRequest } from "next/server";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { GET as googleCallbackRoute } from "@/app/api/google/callback/route";
 import { POST as login } from "@/app/api/login/route";
-import type { MyTask, TicketInput } from "@/core/types";
+import type { MyTask, MyTasksAnswer, TicketInput } from "@/core/types";
 import { proxy } from "@/proxy";
 import { saveKeys } from "./app-keys";
 import type { Db } from "./db";
 import { GOOGLE_SIGN_IN_COOKIE, googleSignInCallback, googleSignInOffered, googleSignInRedirect } from "./google-sign-in";
 import { signedInAs } from "./http";
-import { moveMyTask, myTasks as myTasksOf } from "./my-tasks";
+import { moveMyTask, myTasks as myTasksOf, sendMyTask } from "./my-tasks";
 import { applyAction, loadState, OWNER_ID, stateStamps } from "./repo";
 import { clearFailures, createSession, readSession, SESSION_COOKIE } from "./session";
 import type { Fetch } from "./slack";
@@ -26,6 +26,7 @@ const LUIS = { email: "luis@team.example.com", password: "luis long password" };
 
 const myTasks = (request: Request) => myTasksOf(request, db);
 const moveMine = (request: Request) => moveMyTask(request, db);
+const sendMine = (request: Request) => sendMyTask(request, db);
 const act = (who: string, type: string, ...args: unknown[]) => applyAction(db, type, args, who, now);
 const refused = (who: string, type: string, ...args: unknown[]) =>
   act(who, type, ...args).then(
@@ -151,7 +152,7 @@ describe("what a task login can open", () => {
 
   it("is its own tasks and signing out; any other page opens its tasks, keeping a ticket's link", async () => {
     const token = tokenOf(await luisCookie());
-    expect([passes(visit("/my-tasks", token)), passes(visit("/api/my-tasks", token)), passes(visit("/api/logout", token))]).toEqual([true, true, true]);
+    expect([passes(visit("/my-tasks", token)), passes(visit("/api/my-tasks", token)), passes(visit("/api/my-tasks/send", token)), passes(visit("/api/logout", token))]).toEqual([true, true, true, true]);
     expect(visit("/inbox", token).headers.get("location")).toBe(`${SITE}/my-tasks`);
     expect(visit("/tasks?task=SPM-3", token).headers.get("location")).toBe(`${SITE}/my-tasks?task=SPM-3`);
     expect(visit("/login", token).headers.get("location")).toBe(`${SITE}/my-tasks`);
@@ -240,6 +241,65 @@ describe("their own tasks", () => {
     expect((await listed(cookie)).tasks.map((t) => t.status)).toEqual(["done"]);
     await db.run("update tasks set done_at = $1", [Date.now() - 15 * 86_400_000]);
     expect((await listed(cookie)).tasks).toEqual([]);
+  });
+});
+
+describe("sending the owner a task", () => {
+  const listed = async (cookie: string) => (await (await myTasks(get("/api/my-tasks", cookie))).json()) as MyTasksAnswer;
+  const send = (cookie: string, body: unknown, origin?: string) => sendMine(post("/api/my-tasks/send", cookie, body, origin));
+
+  it("is offered only to someone the owner allowed, and only the owner allows it", async () => {
+    const cookie = await luisCookie();
+    expect((await listed(cookie)).send).toBeUndefined();
+    expect(await (await send(cookie, { title: "Call the printer" })).json()).toEqual({ error: "Sending tasks is not turned on for you. Ask the owner to turn it on." });
+    expect(await refused(alex, "setMemberSends", "u_luis", true)).toBe("Only the owner can change who signs in.");
+    expect(await refused(OWNER_ID, "setMemberSends", "u_nobody", true)).toBe("That person is no longer on the team list.");
+    await act(OWNER_ID, "setMemberSends", "u_luis", true);
+    expect((await loadState(db, OWNER_ID, now)).team.map((p) => [p.name, p.sendsTasks])).toEqual([
+      ["Luis Ramos", true],
+      ["Rene Park", false],
+    ]);
+    expect((await loadState(db, alex, now)).team.some((p) => "sendsTasks" in p)).toBe(false);
+    expect((await listed(cookie)).send).toEqual({ to: "Jeremy Moser", sent: [] });
+    expect(await db.query("select count(*)::int as n from tasks where sent_by is not null")).toEqual([{ n: 0 }]);
+  });
+
+  it("lands on the owner's board as theirs, marked as sent by them, and their page shows how far it has got", async () => {
+    await act(OWNER_ID, "setMemberSends", "u_luis", true);
+    const cookie = await luisCookie();
+    const res = await send(cookie, { title: "  Review the Q4 proposal ", description: "The Harbor one.", due: "2026-10-12", line: "consulting" });
+    expect(res.status).toBe(200);
+    const answer = (await res.json()) as MyTasksAnswer & { ticket: string };
+    expect(answer.ticket).toMatch(/^SPM-\d+$/);
+    expect(answer.send?.sent).toEqual([{ id: expect.any(String), ticket: answer.ticket, title: "Review the Q4 proposal", due: "2026-10-12", status: "open", line: "consulting", sentAt: expect.any(Number) }]);
+    // Not one of his own tasks: it is the owner's.
+    expect(answer.tasks).toEqual([]);
+    for (const who of [OWNER_ID, alex]) {
+      const board = (await loadState(db, who, now)).tasks.find((t) => t.title === "Review the Q4 proposal")!;
+      expect(board).toMatchObject({ description: "The Harbor one.", due: "2026-10-12", status: "open", line: "consulting", assignee: `user:${OWNER_ID}`, createdBy: null, source: { label: "Sent by Luis Ramos", quote: "", from: "" } });
+      expect(board.history).toEqual([{ at: expect.any(Number), by: "Luis Ramos", what: "Sent to Jeremy Moser" }]);
+    }
+    // The owner works on it: his page shows how far it has got.
+    const [t] = await db.query<{ id: string }>("select id from tasks where sent_by = 'u_luis'");
+    await act(OWNER_ID, "updateTicket", t.id, { status: "in_progress" });
+    expect((await listed(cookie)).send?.sent.map((s) => s.status)).toEqual(["in_progress"]);
+  });
+
+  it("checks what is sent, takes it only from the dashboard and someone signed in, and stops when turned off", async () => {
+    await act(OWNER_ID, "setMemberSends", "u_luis", true);
+    const cookie = await luisCookie();
+    expect(await (await send(cookie, { title: "  " })).json()).toEqual({ error: "Give the task a title." });
+    expect(await (await send(cookie, { title: "X", due: "next week" })).json()).toEqual({ error: "Pick a due date, or leave it empty." });
+    expect(await (await send(cookie, { title: "X", line: "marketing" })).json()).toEqual({ error: "That is not Agency, Consulting or Sales." });
+    expect((await send(cookie, { title: "X" }, "https://evil.example")).status).toBe(403);
+    expect((await sendMine(post("/api/my-tasks/send", "", { title: "X" }))).status).toBe(401);
+    expect(await db.query("select count(*)::int as n from tasks where sent_by is not null")).toEqual([{ n: 0 }]);
+    // Turned off again: nothing more, and what was sent stays on the board.
+    expect((await send(cookie, { title: "Kept" })).status).toBe(200);
+    await act(OWNER_ID, "setMemberSends", "u_luis", false);
+    expect((await send(cookie, { title: "Another" })).status).toBe(400);
+    expect((await listed(cookie)).send).toBeUndefined();
+    expect(await db.query("select title from tasks where sent_by = 'u_luis'")).toEqual([{ title: "Kept" }]);
   });
 });
 

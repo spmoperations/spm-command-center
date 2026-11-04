@@ -939,7 +939,13 @@ select.f.tk-done { background: var(--good-soft); color: var(--good); }
 .my-facts dd { margin: 0; font-size: 14px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .chip.my-pri.p-high { background: var(--bad-soft); color: var(--bad); border-color: transparent; font-weight: 600; }
 .chip.my-pri.p-mid { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
-@media (max-width: 640px) { .my-search { width: 100%; } }
+.my-send-help { margin: 0; font-size: 13px; }
+.tk-field > span { font-size: 12.5px; color: var(--muted); }
+.my-notice { margin: 0 0 12px; padding: 8px 12px; border-radius: 8px; background: var(--good-soft); color: var(--good); font-size: 14px; }
+.my-sent { margin-top: 16px; }
+.my-sent h3 { margin: 0; font-size: 15px; }
+.inline-check.person-sends { margin-top: 8px; font-size: 13px; white-space: normal; }
+@media (max-width: 640px) { .my-search { width: 100%; } .my-send-btn { width: 100%; } }
 
 .tk-form { width: min(620px, 100%); max-height: calc(100vh - 32px); overflow: auto; display: grid; gap: 12px; padding: 18px; }
 .tk-form h3 { margin: 0; font-size: 17px; overflow-wrap: anywhere; }

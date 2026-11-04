@@ -12,7 +12,7 @@ import { ruleHits } from "@/core/rules";
 import type { AppState, ChatLine, JobSetting, Line, OwnerChats, Person, Priority, Rule, Source, TaskLine, TeamLogin } from "@/core/types";
 import {
   addHandle, addPerson, addRule, addTeamLogin, bookingPageName, clearManualPriorities, deleteRule, moveRule, removeHandle, removePerson, removeTaskLogin, runJobNow, setPersonTelegram,
-  removeTeamLogin, setChannelSelected, setChatLine, setImportant, setJobEnabled, setJobInterval, setTaskLogin, setTeamPassword, setTelegramSync, syncNow, toast, togglePersonDept, turnOffTeamLogin, useApp,
+  removeTeamLogin, setChannelSelected, setChatLine, setImportant, setJobEnabled, setJobInterval, setMemberSends, setTaskLogin, setTeamPassword, setTelegramSync, syncNow, toast, togglePersonDept, turnOffTeamLogin, useApp,
   type App, type RuleKind,
 } from "@/store/store";
 
@@ -605,6 +605,11 @@ function PersonRow({ p, telegram, owner, now }: { p: Person; telegram: { id: str
           </div>
         )}
         {owner && <TaskLoginEdit p={p} now={now} />}
+        {owner && (
+          <label className="inline-check person-sends" title="They see a Send a task form on their task page. What they send lands on your board, marked as sent by them.">
+            <input type="checkbox" checked={Boolean(p.sendsTasks)} onChange={(e) => setMemberSends(p.id, p.name, e.target.checked)} /> Can send you tasks from their task page
+          </label>
+        )}
       </td>
       {DEPARTMENTS && (
         <td>

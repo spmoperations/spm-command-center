@@ -8,9 +8,10 @@ import { readSession, SESSION_COOKIE } from "@/server/session";
 // back among them. So is the scheduler's route: it has no session, and checks its own secret instead.
 const OPEN = new Set(["/login", "/api/login", "/api/login/google", "/api/google/callback", "/api/cron"]);
 
-// All that a task login may open: its own tickets, and signing out (see server/task-logins.ts).
+// All that a task login may open: its own tickets, sending the owner a task when the owner
+// allowed it, and signing out (see server/task-logins.ts).
 const MY_TASKS = "/my-tasks";
-const FOR_MEMBERS = new Set([MY_TASKS, "/api/my-tasks", "/api/logout"]);
+const FOR_MEMBERS = new Set([MY_TASKS, "/api/my-tasks", "/api/my-tasks/send", "/api/logout"]);
 
 export function proxy(request: NextRequest) {
   const { pathname, protocol, host, search, searchParams } = request.nextUrl;

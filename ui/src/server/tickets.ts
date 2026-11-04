@@ -14,7 +14,7 @@ import { PRIORITY_NAME, REJECT_REASONS, SOURCE_NAME, TASK_LINE_NAME, TASK_LINES,
 import { assignmentBlocks, assignmentText, CHANNEL_PICK, SLACK_PICK, ticketLink } from "@/core/delegation";
 import { isOverdue, isoDay, parseDay } from "@/core/dates";
 import { norm } from "@/core/rules";
-import type { Mode, MyTask, Priority, ReviewItem, Source, SourceNote, Task, TaskLine, TaskSource, TeamPerson, TicketEvent, TicketInput, TicketStatus } from "@/core/types";
+import type { Mode, MyTask, Priority, ReviewItem, SentTask, Source, SourceNote, Task, TaskLine, TaskSource, TeamPerson, TicketEvent, TicketInput, TicketStatus } from "@/core/types";
 import type { Db } from "./db";
 import { OWNER_ID } from "./owner";
 
@@ -600,6 +600,8 @@ export interface NewTicket {
   source?: SourceNote | null;
   /** Agency, Consulting or Sales, set by hand. Without one, the line of where it came from. */
   line?: TaskLine | null;
+  /** Someone on the team list who sent it from their task page (see `memberSendsTicket`): it is theirs, not a login's. */
+  sentBy?: { id: string; name: string } | null;
 }
 
 /** Makes a ticket on the team's board, with the next number, and says so in its history. */
@@ -608,8 +610,8 @@ export async function insertTicket(c: Ctx, t: NewTicket, said = "Created"): Prom
   const now = c.now.getTime();
   const status = t.status ?? "open";
   await c.db.run(
-    `insert into tasks (id, owner_id, number, title, description, dept, project, pri, due, status, done, done_at, src_type, src_id, delegable, mode, created_at, updated_at, created_by, source_owner, src_quote, src_label, src_link, assignee_user, line)
-     values ($1, $2, (select coalesce(max(number), 0) + 1 from tasks where owner_id = $2), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $16, $17, $18, $19, $20, $21, $22, $23)`,
+    `insert into tasks (id, owner_id, number, title, description, dept, project, pri, due, status, done, done_at, src_type, src_id, delegable, mode, created_at, updated_at, created_by, source_owner, src_quote, src_label, src_link, assignee_user, line, sent_by)
+     values ($1, $2, (select coalesce(max(number), 0) + 1 from tasks where owner_id = $2), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
     [
       id,
       TEAM,
@@ -627,17 +629,24 @@ export async function insertTicket(c: Ctx, t: NewTicket, said = "Created"): Prom
       t.delegable ?? true,
       t.mode ?? "professional",
       now,
-      c.ownerId,
+      t.sentBy ? null : c.ownerId,
       t.src ? (t.sourceOwner ?? c.ownerId) : null,
       t.source?.quote ?? null,
       t.source?.label ?? null,
       t.source?.link ?? null,
       t.assigneeUser === undefined ? c.ownerId : t.assigneeUser,
       t.line ?? null,
+      t.sentBy?.id ?? null,
     ],
   );
-  await logEvent(c, id, said);
+  if (t.sentBy) await memberEvent(c.db, t.sentBy.name, id, said, c.now);
+  else await logEvent(c, id, said);
   return id;
+}
+
+/** A line in a ticket's history by someone on the team list: not a login, so no `by_user`, and the name says who. */
+async function memberEvent(db: Db, name: string, taskId: string, what: string, now: Date): Promise<void> {
+  await db.run("insert into ticket_events (id, owner_id, task_id, at, by_user, by_name, what) values ($1, $2, $3, $4, null, $5, $6)", [eventId(), TEAM, taskId, now.getTime(), name, what]);
 }
 
 /** A ticket of the team's, held for this change. Someone other than the owner never reaches a personal one. */
@@ -827,15 +836,63 @@ export async function memberSetsStatus(db: Db, member: { id: string; name: strin
   if (!t) throw new Error("That task is no longer yours. Reload the page.");
   if (statusOf(t) === status) return;
   await setStatus({ db, ownerId: TEAM, now }, taskId, status);
-  // Not a login, so no `by_user`: the name says who.
-  await db.run("insert into ticket_events (id, owner_id, task_id, at, by_user, by_name, what) values ($1, $2, $3, $4, null, $5, $6)", [
-    eventId(),
-    TEAM,
-    taskId,
-    now.getTime(),
-    member.name,
-    `Status: ${TICKET_STATUS_NAME[status]}`,
-  ]);
+  await memberEvent(db, member.name, taskId, `Status: ${TICKET_STATUS_NAME[status]}`, now);
+}
+
+/** How long a task they sent stays on their page once it is done. */
+const SENT_DONE_SHOWN_DAYS = 14;
+
+/**
+ * Whether someone on the team list may send the owner tasks from their task page, and who that
+ * is: the owner turns it on for each person (see `setMemberSends`). Null when they may not.
+ */
+export async function mayMemberSend(db: Db, memberId: string): Promise<{ to: string } | null> {
+  const [row] = await db.query<{ owner: string }>("select u.name as owner from team_members m join users u on u.id = m.owner_id where m.owner_id = $1 and m.id = $2 and m.sends_tasks", [TEAM, memberId]);
+  return row ? { to: row.owner } : null;
+}
+
+/** The tasks someone on the team list sent the owner: the open ones, and those done in the last two weeks, newest first. */
+export async function memberSentTickets(db: Db, memberId: string, now = new Date()): Promise<SentTask[]> {
+  const rows = await db.query<Pick<TicketRow, "id" | "number" | "title" | "due" | "done" | "status" | "line" | "created_at">>(
+    `select id, number, title, due, done, status, line, created_at from tasks
+     where owner_id = $1 and sent_by = $2 and mode = 'professional' and (not done or done_at > $3)
+     order by created_at desc, id limit 200`,
+    [TEAM, memberId, now.getTime() - SENT_DONE_SHOWN_DAYS * 86_400_000],
+  );
+  return rows.map((t) => ({ id: t.id, ticket: ticketName(t.number), title: t.title, due: t.due, status: statusOf(t), line: t.line ?? null, sentAt: Number(t.created_at) }));
+}
+
+/**
+ * Someone on the team list sends the owner a task from their task page, as the owner allowed
+ * (see `mayMemberSend`). It lands on the board as the owner's, open, marked as sent by them, and
+ * goes in its history under their name. Answers its name on the board, such as SPM-57.
+ */
+export async function memberSendsTicket(db: Db, member: { id: string; name: string }, input: { title?: unknown; description?: unknown; due?: unknown; line?: unknown }, now = new Date()): Promise<string> {
+  const allowed = await mayMemberSend(db, member.id);
+  if (!allowed) throw new Error("Sending tasks is not turned on for you. Ask the owner to turn it on.");
+  const title = tidy(input.title, 300);
+  if (!title) throw new Error("Give the task a title.");
+  const due = input.due ?? "";
+  if (!isDue(due)) throw new Error("Pick a due date, or leave it empty.");
+  const line = input.line || null;
+  if (line !== null && !TASK_LINES.includes(line as TaskLine)) throw new Error("That is not Agency, Consulting or Sales.");
+  const id = await insertTicket(
+    { db, ownerId: TEAM, now },
+    {
+      title,
+      description: tidy(input.description, 4000),
+      project: "",
+      pri: "mid",
+      due,
+      assigneeUser: OWNER_ID,
+      source: { label: `Sent by ${member.name}`, quote: "", from: "" },
+      line: line as TaskLine | null,
+      sentBy: member,
+    },
+    `Sent to ${allowed.to}`,
+  );
+  const [t] = await db.query<{ number: number | null }>("select number from tasks where owner_id = $1 and id = $2", [TEAM, id]);
+  return ticketName(t?.number ?? null);
 }
 
 /** A suggestion anyone on the team may act on, held for this change. */

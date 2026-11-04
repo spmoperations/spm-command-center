@@ -570,7 +570,7 @@ async function readState(db: Db, ownerId: string, now: Date, open: string | null
       [ownerId],
     ),
     // The team list is the team's: everyone with a login assigns from the same one.
-    db.query<{ id: string; name: string; role: string; depts: string[]; handles: string[]; slack_user_id: string | null; telegram_id: string | null }>("select * from team_members where owner_id = $1 order by position, name", [TEAM]),
+    db.query<{ id: string; name: string; role: string; depts: string[]; handles: string[]; slack_user_id: string | null; telegram_id: string | null; sends_tasks: boolean }>("select * from team_members where owner_id = $1 order by position, name", [TEAM]),
     db.query<{ id: string; parent: string | null; name: string; target: number; unit: Metric["unit"]; is_sum: boolean }>("select * from metrics where owner_id = $1 order by position", [ownerId]),
     db.query<{ metric_id: string; day: string; value: number }>("select metric_id, day, value from metric_logs where owner_id = $1 and day like $2", [ownerId, `${month}-%`]),
     db.query<{ id: string; scope: "day" | "week"; period: string; body: string; done: boolean; mode: Mode }>("select * from focus_items where owner_id = $1 and period >= $2 order by position", [ownerId, addDays(now, -14)]),
@@ -661,7 +661,7 @@ async function readState(db: Db, ownerId: string, now: Date, open: string | null
     })),
     meetings,
     calendar,
-    team: team.map((p): Person => ({ id: p.id, name: p.name, role: p.role, depts: p.depts ?? [], handles: p.handles ?? [], slackUserId: p.slack_user_id, telegramId: p.telegram_id, ...(signIns?.has(p.id) ? { taskLogin: signIns.get(p.id) } : {}) })),
+    team: team.map((p): Person => ({ id: p.id, name: p.name, role: p.role, depts: p.depts ?? [], handles: p.handles ?? [], slackUserId: p.slack_user_id, telegramId: p.telegram_id, ...(signIns?.has(p.id) ? { taskLogin: signIns.get(p.id) } : {}), ...(signIns ? { sendsTasks: Boolean(p.sends_tasks) } : {}) })),
     projects: projects.map((p) => p.project),
     labelRules,
     priorityRules,

@@ -2,21 +2,19 @@
 
 // The page of someone on the team list who signs in to see their own tasks (see
 // server/task-logins.ts): the tickets given to them, and nothing else of the dashboard. Like the
-// board, in four columns by status or as a list, with filters. It reads only /api/my-tasks, never
-// the dashboard's data, and stands alone without its tabs (Shell.tsx).
+// board, in four columns by status or as a list, with filters. When the owner allowed it, they
+// also send the owner tasks from here, and see how far those have got. It reads only
+// /api/my-tasks, never the dashboard's data, and stands alone without its tabs (Shell.tsx).
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { Seg } from "@/components/bits";
 import { ThemeToggle } from "@/components/Shell";
-import { StatusPill } from "@/components/Tickets";
-import { PRIORITIES, PRIORITY_NAME, TICKET_STATUS_NAME, TICKET_STATUSES } from "@/core/config";
+import { LineChip, StatusPill } from "@/components/Tickets";
+import { PRIORITIES, PRIORITY_NAME, TASK_LINE_NAME, TASK_LINES, TICKET_STATUS_NAME, TICKET_STATUSES } from "@/core/config";
 import { addDays, dueLabel, isOverdue, isoDay, parseDay, soonestDue } from "@/core/dates";
-import type { MyTask, Priority, TicketStatus } from "@/core/types";
+import type { MyTask, MyTasksAnswer, Priority, SentTask, TaskLine, TicketStatus } from "@/core/types";
 
-interface Mine {
-  name: string;
-  tasks: MyTask[];
-}
+type Mine = MyTasksAnswer;
 
 /** Which way the page was last looked at, kept in this browser only. */
 const VIEW_KEY = "cc-my-tasks-view";
@@ -25,8 +23,8 @@ type View = "board" | "list";
 type DueWhen = "all" | "overdue" | "today" | "week";
 const DUE_NAME: Record<DueWhen, string> = { all: "Any due date", overdue: "Overdue", today: "Due today", week: "Due in the next 7 days" };
 
-async function ask(init?: RequestInit): Promise<Mine> {
-  const res = await fetch("/api/my-tasks", { cache: "no-store", ...init });
+async function ask(init?: RequestInit, path = "/api/my-tasks"): Promise<Mine & { ticket?: string }> {
+  const res = await fetch(path, { cache: "no-store", ...init });
   const data = await res.json().catch(() => ({}));
   // Signed out, or the login was changed or taken away: back to the login page.
   if (res.status === 401) {
@@ -174,6 +172,120 @@ function Detail({ t, today, onClose, onStatus }: { t: MyTask; today: string; onC
   );
 }
 
+/** First name only, as a person is spoken of: "Jeremy". */
+const firstName = (name: string) => name.trim().split(/\s+/)[0] || name;
+
+/** The form to send the owner a task: what it is, the details, when it is due, and Agency, Consulting or Sales. */
+function SendForm({ to, onClose, onSent }: { to: string; onClose(): void; onSent(answer: Mine & { ticket?: string }): void }) {
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [due, setDue] = useState("");
+  const [line, setLine] = useState<TaskLine | "">("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    const close = (e: KeyboardEvent) => e.key === "Escape" && !busy && onClose();
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [onClose, busy]);
+  async function send(e: React.FormEvent) {
+    e.preventDefault();
+    if (!title.trim()) return setError("Give the task a title.");
+    setBusy(true);
+    setError(null);
+    try {
+      onSent(await ask({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title, description, due, line }) }, "/api/my-tasks/send"));
+    } catch (failure) {
+      setError((failure as Error).message);
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="cal-modal" role="presentation" onClick={() => !busy && onClose()}>
+      <form className="panel tk-form my-send" role="dialog" aria-modal="true" aria-label={`Send ${firstName(to)} a task`} onClick={(e) => e.stopPropagation()} onSubmit={(e) => void send(e)}>
+        <h3>Send {firstName(to)} a task</h3>
+        <p className="muted my-send-help">It goes on {firstName(to)}&apos;s board, marked as sent by you. You see below how far it has got.</p>
+        <label className="tk-field">
+          <span>What needs doing</span>
+          <input
+            className="f"
+            value={title}
+            onChange={(e) => {
+              setTitle(e.target.value);
+              setError(null);
+            }}
+            maxLength={300} placeholder="Such as: review the Q4 proposal" autoFocus />
+        </label>
+        <label className="tk-field">
+          <span>Details</span>
+          <textarea className="f" value={description} onChange={(e) => setDescription(e.target.value)} maxLength={4000} rows={4} placeholder="Anything that helps: links, context, what done looks like" />
+        </label>
+        <div className="tk-grid">
+          <label className="tk-field">
+            <span>Due</span>
+            <input className="f" type="date" value={due} onChange={(e) => setDue(e.target.value)} />
+          </label>
+          <label className="tk-field">
+            <span>Agency, Consulting or Sales</span>
+            <select className={`f line-pick ${line ? `line-${line}` : ""}`} value={line} onChange={(e) => setLine(e.target.value as TaskLine | "")}>
+              <option value="">Not set</option>
+              {TASK_LINES.map((l) => (
+                <option key={l} value={l}>
+                  {TASK_LINE_NAME[l]}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="tk-form-foot">
+          <button type="button" className="btn" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button className="btn primary" disabled={busy}>
+            {busy ? "Sending…" : `Send to ${firstName(to)}`}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/** What they sent the owner lately, newest first, and how far each has got. */
+function SentList({ to, sent, today }: { to: string; sent: SentTask[]; today: string }) {
+  return (
+    <section className="panel tk-person my-sent" aria-label={`Sent to ${firstName(to)}`}>
+      <div className="tk-col-head">
+        <h3>Sent to {firstName(to)}</h3>
+        <span className="num muted">{sent.length}</span>
+      </div>
+      {sent.length === 0 ? (
+        <p className="muted tk-empty">Nothing sent yet. What you send shows here, with how far it has got.</p>
+      ) : (
+        <ul className="tk-lines">
+          {sent.map((t) => {
+            const due = dueLabel(t.due, today);
+            return (
+              <li key={t.id} className={`tk-line ${t.status === "done" ? "done" : ""}`}>
+                <span className="tk-num">{t.ticket}</span>
+                <span className="tk-title">{t.title}</span>
+                {t.line && <LineChip line={t.line} />}
+                <StatusPill status={t.status} />
+                <span className={`due ${t.status === "done" ? "" : due.tone}`}>{t.status === "done" ? "Done" : due.text}</span>
+                <span className="muted">Sent {new Date(t.sentAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 export default function MyTasksPage() {
   const [mine, setMine] = useState<Mine | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -191,6 +303,8 @@ export default function MyTasksPage() {
   const [showDone, setShowDone] = useState(false);
   const [over, setOver] = useState<TicketStatus | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   // The ticket a Slack message linked to, such as ?task=SPM-12, opens once, until it is closed.
   const [linkSeen, setLinkSeen] = useState(false);
   const query = useSyncExternalStore(never, () => window.location.search, () => "");
@@ -299,6 +413,11 @@ export default function MyTasksPage() {
           </p>
         )}
         {!mine && !error && <p className="loading">Loading…</p>}
+        {notice && (
+          <p className="my-notice" role="status">
+            {notice}
+          </p>
+        )}
         {mine && (
           <>
             <div className="view-head">
@@ -306,6 +425,11 @@ export default function MyTasksPage() {
                 {openOnes.length} open {openOnes.length === 1 ? "task" : "tasks"}
                 {overdue > 0 && <strong className="due over"> · {overdue} overdue</strong>}. Change a task&apos;s status as you work on it: the team sees it on their board straight away.
               </div>
+              {mine.send && (
+                <button className="btn primary my-send-btn" onClick={() => setSending(true)}>
+                  Send {firstName(mine.send.to)} a task
+                </button>
+              )}
               <div className="tk-filters">
                 <Seg
                   value={view}
@@ -414,7 +538,19 @@ export default function MyTasksPage() {
             )}
           </>
         )}
+        {mine?.send && <SentList to={mine.send.to} sent={mine.send.sent} today={today} />}
         {opened && <Detail key={opened.id} t={opened} today={today} onClose={close} onStatus={(st) => void setStatus(opened.id, st)} />}
+        {sending && mine?.send && (
+          <SendForm
+            to={mine.send.to}
+            onClose={() => setSending(false)}
+            onSent={({ ticket, ...answer }) => {
+              setMine(answer);
+              setSending(false);
+              setNotice(`Sent to ${firstName(answer.send?.to ?? "")}${ticket ? ` as ${ticket}` : ""}.`);
+            }}
+          />
+        )}
       </main>
     </>
   );
