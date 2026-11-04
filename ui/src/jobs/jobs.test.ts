@@ -12,6 +12,7 @@ import { seal } from "@/server/secrets";
 import { RateLimited, slackClient } from "@/server/slack";
 import { fakeSlack, NOW, reset, seed, stateOpened, suggestionsIn, testDb, TINY } from "@/server/testing";
 import { calendlyPull } from "./calendly";
+import { bookingPageName, inviteBookingName } from "@/server/calendly";
 import { fathomPull, toMeeting } from "./fathom";
 import { outboxSend } from "./outbox";
 import { requestFinder } from "./request-finder";
@@ -667,7 +668,7 @@ describe("Calendly job", () => {
       if (url.pathname === "/scheduled_events") {
         return json({
           collection: [
-            { uri: `${API}/scheduled_events/S1`, status: "active", start_time: "2026-10-06T15:00:00Z", end_time: "2026-10-06T15:30:00Z", event_type: `${API}/event_types/E1`, event_memberships: [{ user_email: "Jeremy@Example.com" }] },
+            { uri: `${API}/scheduled_events/S1`, name: "Client Check-In call", status: "active", start_time: "2026-10-06T15:00:00Z", end_time: "2026-10-06T15:30:00Z", event_type: `${API}/event_types/E1`, event_memberships: [{ user_email: "Jeremy@Example.com" }] },
             { uri: `${API}/scheduled_events/S2`, status: "canceled", start_time: "2026-10-07T15:00:00Z", end_time: "2026-10-07T15:30:00Z", event_type: `${API}/event_types/E9`, event_memberships: [] },
           ],
           pagination: { next_page: null },
@@ -686,9 +687,9 @@ describe("Calendly job", () => {
       { link: "calendly.com/team/client-check-in-call", name: "Client Check-In call", active: true },
       { link: "calendly.com/team/intro", name: "Introduction Session", active: false },
     ]);
-    expect(await db.query("select id, link, start_at, hosts, active from bookings order by id")).toEqual([
-      { id: "S1", link: "calendly.com/team/client-check-in-call", start_at: Date.parse("2026-10-06T15:00:00Z"), hosts: ["jeremy@example.com"], active: true },
-      { id: "S2", link: "calendly.com/team/secret", start_at: Date.parse("2026-10-07T15:00:00Z"), hosts: [], active: false },
+    expect(await db.query("select id, link, name, start_at, hosts, active from bookings order by id")).toEqual([
+      { id: "S1", link: "calendly.com/team/client-check-in-call", name: "Client Check-In call", start_at: Date.parse("2026-10-06T15:00:00Z"), hosts: ["jeremy@example.com"], active: true },
+      { id: "S2", link: "calendly.com/team/secret", name: null, start_at: Date.parse("2026-10-07T15:00:00Z"), hosts: [], active: false },
     ]);
     // The first read goes 90 days back; later ones 14, for bookings moved or cancelled lately.
     const since = (from: string) => new URL(`${API}${from}`).searchParams.get("min_start_time");
@@ -696,6 +697,28 @@ describe("Calendly job", () => {
     asked.length = 0;
     await calendlyPull(ctx({ read: true }), "the-token", fetchImpl);
     expect(since(asked.find((a) => a.startsWith("/scheduled_events?user="))!)).toBe(new Date(NOW - 14 * 86_400_000).toISOString());
+  });
+
+  it("reads a booking page's name from a Calendly invite, and from the page itself", async () => {
+    const cancel = "Cancel: https://calendly.com/cancellations/abc";
+    expect(inviteBookingName(`Event Name\nIntroduction Session\n\nLocation: Zoom\n${cancel}`)).toBe("Introduction Session");
+    expect(inviteBookingName(`Event Name: SPMC - Roadmap Session \r\n${cancel}`)).toBe("SPMC - Roadmap Session");
+    expect([inviteBookingName("Event Name\nIntroduction Session"), inviteBookingName(cancel), inviteBookingName(null)]).toEqual([null, null, null]);
+
+    const asked: string[] = [];
+    const page = (html: string, status = 200): typeof fetch => async (input) => {
+      asked.push(String(input));
+      return new Response(html, { status });
+    };
+    const head = '<meta property="og:title" content="SPMC - Roadmap Session - SPM - Sales"><meta property="og:author" content="SPM - Sales">';
+    expect(await bookingPageName("https://www.Calendly.com/team/spmc-roadmap-session|", page(head))).toBe("SPMC - Roadmap Session");
+    expect(asked).toEqual(["https://calendly.com/team/spmc-roadmap-session"]);
+    expect(await bookingPageName("calendly.com/team/x", page('<meta property="og:title" content="Q&amp;A Call">'))).toBe("Q&A Call");
+    expect(await bookingPageName("calendly.com/team/gone", page('<meta property="og:title" content="404 | Calendly">', 404))).toBeNull();
+    // Only Calendly's own pages are opened.
+    expect(await bookingPageName("https://savvycal.com/team/intro", page(head))).toBeNull();
+    expect(asked).toHaveLength(3);
+    expect(await bookingPageName("calendly.com/team/x", async () => Promise.reject(new Error("offline")))).toBeNull();
   });
 
   it("sends the key nowhere but Calendly's API, and stops with a wait time when Calendly says slow down", async () => {

@@ -535,10 +535,11 @@ describe("Agency, Consulting or Sales", () => {
       );
       await suggestion(`s_call${n}`, { title: `Item from call ${n}`, src: ["meeting", `fathom:${n}`], key: `fathom:${n}:action:0` });
     }
-    async function booking(id: string, link: string, start: number, over: { hosts?: string[]; active?: boolean } = {}) {
+    /** A booking: read from Calendly, with its link, or from the Calendly invite on the calendar, with only the page's name. */
+    async function booking(id: string, link: string | null, start: number, over: { hosts?: string[]; active?: boolean; name?: string } = {}) {
       await db.run(
-        "insert into bookings (owner_id, id, link, start_at, end_at, hosts, active, saved_at) values ($1, $2, $3, $4, $5, array(select jsonb_array_elements_text($6::jsonb)), $7, $8)",
-        [OWNER_ID, id, link, start, start + 30 * MIN, JSON.stringify(over.hosts ?? []), over.active ?? true, NOW],
+        "insert into bookings (owner_id, id, link, name, start_at, end_at, hosts, active, saved_at) values ($1, $2, $3, $4, $5, $6, array(select jsonb_array_elements_text($7::jsonb)), $8, $9)",
+        [OWNER_ID, id, link, over.name ?? null, start, start + 30 * MIN, JSON.stringify(over.hosts ?? []), over.active ?? true, NOW],
       );
     }
     const cardLine = async (n: number) => (await loadState(db, alex, now)).review.find((g) => g.id === `s_call${n}`)?.line ?? null;
@@ -597,6 +598,31 @@ describe("Agency, Consulting or Sales", () => {
       await call(4, "Call four", at + 9 * 3_600_000 + 10 * MIN, { scheduled: null, guests: null });
       await booking("b4", "calendly.com/team/intro", at + 9 * 3_600_000, { hosts: ["jeremy@example.com"] });
       expect([await cardLine(1), await cardLine(2), await cardLine(3), await cardLine(4)]).toEqual([null, null, null, "sales"]);
+    });
+
+    it("take the line of a booking link by its page's name when the booking was read from the calendar, and stay as they are otherwise", async () => {
+      const at = NOW - 2 * 86_400_000;
+      // Booked through Calendly, as the owner's calendar shows it: the page's name, no link.
+      await call(1, "Maya Chen and Jeremy Moser", at + 3 * MIN, { scheduled: at });
+      await booking("calendar:jeremy@example.com:e1", null, at, { name: "Strategy Session - Jeremy" });
+      // Booked through a page nobody picked, and not booked at all: their title's line, as before.
+      await call(2, "Weekly sync", at + 3 * 3_600_000);
+      await booking("calendar:jeremy@example.com:e2", null, at + 3 * 3_600_000, { name: "30 Minute Meeting" });
+      await call(3, "Weekly sync", at + 6 * 3_600_000);
+      await call(4, "Kickoff with Dana", at + 9 * 3_600_000);
+      await pick(OWNER_ID, "fathom", "call", "weekly sync", "Weekly sync", "agency");
+      expect([await cardLine(1), await cardLine(2), await cardLine(3), await cardLine(4)]).toEqual([null, "agency", "agency", null]);
+      // The link picked under the page's name, however it is written.
+      await pick(OWNER_ID, "calendly", "booking", "calendly.com/team/strategy-session-jeremy", "strategy session -  Jeremy", "sales");
+      expect([await cardLine(1), await cardLine(2), await cardLine(3), await cardLine(4)]).toEqual(["sales", "agency", "agency", null]);
+      // A link added before its name was known counts once Calendly names it.
+      await pick(OWNER_ID, "calendly", "booking", "calendly.com/team/thirty", "calendly.com/team/thirty", "consulting");
+      expect(await cardLine(2)).toBe("agency");
+      await db.run("insert into booking_types (owner_id, link, name, active, saved_at) values ($1, 'calendly.com/team/thirty', '30 Minute Meeting', true, $2)", [OWNER_ID, NOW]);
+      expect(await cardLine(2)).toBe("consulting");
+      // Cancelled: back to its title's line.
+      await db.run("update bookings set active = false where id = 'calendar:jeremy@example.com:e2'");
+      expect(await cardLine(2)).toBe("agency");
     });
 
     it("list the booking links Calendly has, and keep a link added by hand", async () => {

@@ -1,5 +1,7 @@
 // A small client for Calendly's API. Read-only: whose key it is, the booking links (event
-// types), and the calls booked through them.
+// types), and the calls booked through them. And, with no key, a booking page's name and the
+// page a Calendly invite on the calendar was booked through.
+import { bookingKey } from "@/core/config";
 import { RateLimited, type Fetch } from "./slack";
 
 const BASE = "https://api.calendly.com";
@@ -31,6 +33,8 @@ export interface CalendlyEventType {
 /** A call booked through a link. */
 export interface CalendlyEvent {
   uri: string;
+  /** The booking page's name. */
+  name?: string | null;
   status?: string | null;
   start_time: string;
   end_time: string;
@@ -85,6 +89,47 @@ export const scheduledEvents = (token: string, me: CalendlyUser, from: number, t
 /** One booking link by its address in the API, such as one that is no longer listed. */
 export async function eventType(token: string, uri: string, fetchImpl: Fetch = fetch): Promise<CalendlyEventType> {
   return (await get<{ resource: CalendlyEventType }>(token, uri, fetchImpl)).resource;
+}
+
+/**
+ * The booking page a Calendly invite on the calendar was booked through, by name, such as
+ * "Introduction Session": Calendly writes "Event Name" in the invite and the page's name after
+ * it, on the next line. Null for an invite Calendly did not make, or one without the name.
+ */
+export function inviteBookingName(description: string | null | undefined): string | null {
+  const text = description ?? "";
+  if (!/calendly\.com\//i.test(text)) return null;
+  const name = /Event Name:?\s*([^\r\n]+)/i.exec(text)?.[1]?.trim();
+  return name ? name.slice(0, 200) : null;
+}
+
+const ENTITIES: Record<string, string> = { amp: "&", quot: '"', apos: "'", lt: "<", gt: ">", "#39": "'", "#x27": "'" };
+const metaOf = (html: string, property: string) => {
+  const raw = new RegExp(`<meta[^>]*property=["']${property}["'][^>]*content=["']([^"']*)["']`, "i").exec(html)?.[1];
+  return raw?.replace(/&(amp|quot|apos|lt|gt|#39|#x27);/g, (_, e: string) => ENTITIES[e]).trim() || null;
+};
+
+/**
+ * The name a Calendly booking page gives itself, such as "Introduction Session", read from the
+ * public page as anyone opening the link sees it: its title is the name, then " - " and whose
+ * page it is. Kept with a booking link added by hand, so the calls booked through it are known
+ * from the calendar (see `inviteBookingName`). Null for a link that is not Calendly's or a page
+ * that does not open.
+ */
+export async function bookingPageName(link: string, fetchImpl: Fetch = fetch): Promise<string | null> {
+  const key = bookingKey(link);
+  if (!key?.startsWith("calendly.com/")) return null;
+  try {
+    const res = await fetchImpl(`https://${key}`, { headers: { "user-agent": "Mozilla/5.0 (compatible; SPM-Command-Center)" }, signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return null;
+    const html = (await res.text()).slice(0, 50_000);
+    const title = metaOf(html, "og:title");
+    const owner = metaOf(html, "og:author");
+    const name = title && owner && title.endsWith(` - ${owner}`) ? title.slice(0, -(owner.length + 3)).trim() : title;
+    return name ? name.slice(0, 200) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Checks a key and says whose it is. Used when connecting, before anything is stored. */

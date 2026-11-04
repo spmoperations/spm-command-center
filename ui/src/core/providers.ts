@@ -14,7 +14,7 @@ export const PROVIDER_ABOUT: Record<Provider, string> = {
   telegram: "Reads your one-to-one chats and the group messages addressed to you, and sends your replies from your own account.",
   fathom: "Brings in your recorded calls with notes, transcript and action items.",
   google: "Brings in your emails and your calendar. You can answer and write emails, and add, change and answer events, from here. Nothing is sent or changed unless you do it.",
-  calendly: "Reads which booking link each call was booked through, so tasks from the call take that link's Agency, Consulting or Sales. Nothing is changed in Calendly.",
+  calendly: "Optional. Calls booked through a booking link are already known from the Calendly invite on the calendar. Connecting Calendly also lists every booking link in Settings and keeps a renamed link working. Nothing is changed in Calendly.",
 };
 
 /**

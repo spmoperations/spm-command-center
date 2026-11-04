@@ -602,6 +602,15 @@ export const setChatLine = (source: ChatLine["source"], kind: ChatLine["kind"], 
   }));
 };
 
+/** The name a Calendly booking page gives itself, such as "Introduction Session", or null when it cannot be read. */
+export async function bookingPageName(link: string): Promise<string | null> {
+  try {
+    return (await request<{ name: string | null }>("/api/booking-name", { link })).name;
+  } catch {
+    return null;
+  }
+}
+
 /** "Run now": runs one check straight away and says what it found. */
 export async function runJobNow(id: JobId) {
   if (ui.running.includes(id)) return;

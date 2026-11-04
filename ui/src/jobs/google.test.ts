@@ -659,6 +659,27 @@ describe("Calendar check", () => {
     expect((await loadState(db, OWNER_ID, new Date(NOW))).calendar.map((m) => m.title)).toEqual(["Podcast"]);
   });
 
+  it("keeps a Calendly invite as a booking by its page's name, after it leaves the copy, and not once it is cancelled", async () => {
+    await connected();
+    const invite = (id: string, start: number, name: string) =>
+      event(id, start, {
+        summary: "Sam Lee and Jeremy Moser",
+        description: `Event Name\n${name}\n\nLocation: This is a Zoom web conference.\n\nNeed to make changes to this event?\nCancel: https://calendly.com/cancellations/abc\nReschedule: https://calendly.com/reschedulings/abc`,
+      });
+    const typed = event("typed", NOW + 5 * HOUR, { description: "Event Name\nNot from Calendly" });
+    await calendarPull(ctx(), [account()], opener(fakeGoogle(JEREMY_MAIL, [invite("b1", NOW - 2 * DAY, "Introduction Session"), invite("b2", NOW + DAY, "Strategy Session - Jeremy"), typed])));
+    expect(await db.query("select id, link, name, start_at, hosts, active from bookings order by id")).toEqual([
+      { id: `calendar:${JEREMY_MAIL}:b1`, link: null, name: "Introduction Session", start_at: NOW - 2 * DAY, hosts: [], active: true },
+      { id: `calendar:${JEREMY_MAIL}:b2`, link: null, name: "Strategy Session - Jeremy", start_at: NOW + DAY, hosts: [], active: true },
+    ]);
+    // Two weeks on: the first is older than the copy keeps and stays; the second is gone from the calendar, so it was cancelled.
+    await calendarPull(ctx({}, NOW + 14 * DAY), [account()], opener(fakeGoogle(JEREMY_MAIL, [])));
+    expect(await db.query("select id, active from bookings order by id")).toEqual([
+      { id: `calendar:${JEREMY_MAIL}:b1`, active: true },
+      { id: `calendar:${JEREMY_MAIL}:b2`, active: false },
+    ]);
+  });
+
   it("says Now, Today or Tomorrow in the timezone of whoever is looking", () => {
     const now = new Date(2026, 9, 15, 10, 0);
     const local = (day: number, hour: number) => new Date(2026, 9, day, hour, 0).getTime();

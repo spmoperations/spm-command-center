@@ -11,7 +11,7 @@ import { PROVIDER_NAME } from "@/core/providers";
 import { ruleHits } from "@/core/rules";
 import type { AppState, ChatLine, JobSetting, Line, OwnerChats, Person, Priority, Rule, Source, TaskLine, TeamLogin } from "@/core/types";
 import {
-  addHandle, addPerson, addRule, addTeamLogin, clearManualPriorities, deleteRule, moveRule, removeHandle, removePerson, removeTaskLogin, runJobNow, setPersonTelegram,
+  addHandle, addPerson, addRule, addTeamLogin, bookingPageName, clearManualPriorities, deleteRule, moveRule, removeHandle, removePerson, removeTaskLogin, runJobNow, setPersonTelegram,
   removeTeamLogin, setChannelSelected, setChatLine, setImportant, setJobEnabled, setJobInterval, setTaskLogin, setTeamPassword, setTelegramSync, syncNow, toast, togglePersonDept, turnOffTeamLogin, useApp,
   type App, type RuleKind,
 } from "@/store/store";
@@ -330,20 +330,27 @@ type LineList = {
   empty: string;
 };
 
-/** Adds a booking link by hand, with its line: for links Calendly does not list, or before it is connected. */
+/**
+ * Adds a booking link by hand, with its line, kept with the page's name in Calendly: a call
+ * booked through it is known by that name from the invite on the calendar.
+ */
 function AddBookingLink() {
   const [link, setLink] = useState("");
   const [line, setLine] = useState<TaskLine>("agency");
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   return (
     <form
       className="imp-tools"
-      onSubmit={(e) => {
+      onSubmit={async (e) => {
         e.preventDefault();
         const key = bookingKey(link);
         if (!key) return setError("Paste the whole booking link, such as https://calendly.com/your-team/intro-call.");
         setError(null);
-        setChatLine("calendly", "booking", key, key, line);
+        setBusy(true);
+        const name = await bookingPageName(key);
+        setBusy(false);
+        setChatLine("calendly", "booking", key, name ?? key, line);
         setLink("");
       }}
     >
@@ -355,7 +362,9 @@ function AddBookingLink() {
           </option>
         ))}
       </select>
-      <button className="btn">Add</button>
+      <button className="btn" disabled={busy}>
+        {busy ? "Adding…" : "Add"}
+      </button>
       {error && (
         <span className="form-error" role="alert">
           {error}
@@ -439,12 +448,16 @@ function ChatLines({ app }: { app: App }) {
       </div>
       {current.kind === "booking" && (
         <>
-          {state.bookingTypes.length === 0 && (
-            <p className="st-help" style={{ padding: "0 16px" }}>
-              Calendly is not connected yet. Once it is, on the <Link href="/connections#calendly">Connections</Link> page by whoever owns the booking links, every link is listed here,
-              and a call booked through a picked link is labelled. Links added here now are kept for then.
-            </p>
-          )}
+          <p className="st-help" style={{ padding: "0 16px" }}>
+            A call booked through a picked link is known from the Calendly invite on the calendar, by the link&apos;s name, such as &ldquo;Introduction Session&rdquo;.
+            {state.bookingTypes.length === 0 && (
+              <>
+                {" "}
+                Connecting Calendly on the <Link href="/connections#calendly">Connections</Link> page is not needed for that. If it is connected, every link is listed here, and a link
+                renamed in Calendly keeps working.
+              </>
+            )}
+          </p>
           <AddBookingLink />
         </>
       )}

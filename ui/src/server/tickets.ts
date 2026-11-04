@@ -75,19 +75,24 @@ const BOOKING_WINDOW_MS = 15 * 60_000;
  * The line a call (src_type 'meeting') takes, as the team picked in Settings: the Calendly
  * booking link it was booked through, else its title. A booking is the call's when it starts
  * within 15 minutes of the call's start on the calendar (or of the recording, for calls read
- * before that was kept) and, where both are known, one of its hosts was invited. Read each time,
- * like `lineFromChat`.
+ * before that was kept) and, where both are known, one of its hosts was invited. A booking read
+ * from Calendly names its link; one read from the Calendly invite on the calendar names only
+ * the page, such as "Introduction Session", and counts for the picked link of that name (the
+ * name kept with the link, or Calendly's for it). No booking or no pick for it: the title's
+ * line, else none. Read each time, like `lineFromChat`.
  */
 const lineFromCall = (type: string, id: string, owner: string, team: string) => `(select l.line from meetings mt
-   left join lateral (select b.link from bookings b
+   left join lateral (select b.link, ${callKeySql("b.name")} as name from bookings b
        where b.owner_id = mt.owner_id and b.active and abs(b.start_at - coalesce(mt.scheduled_at, mt.started_at)) <= ${BOOKING_WINDOW_MS}
          and (coalesce(cardinality(mt.guests), 0) = 0 or cardinality(b.hosts) = 0 or b.hosts && mt.guests)
-       order by abs(b.start_at - coalesce(mt.scheduled_at, mt.started_at)) limit 1) bk on true
+       order by abs(b.start_at - coalesce(mt.scheduled_at, mt.started_at)), b.link is null limit 1) bk on true
    join chat_lines l on l.owner_id = ${team}
-     and ((l.source = 'calendly' and l.kind = 'booking' and l.external_id = bk.link)
+     and ((l.source = 'calendly' and l.kind = 'booking'
+           and (l.external_id = bk.link or ${callKeySql("l.name")} = bk.name
+             or exists (select 1 from booking_types bt where bt.link = l.external_id and ${callKeySql("bt.name")} = bk.name)))
        or (l.source = 'fathom' and l.kind = 'call' and l.external_id = ${callKeySql("mt.title")}))
    where ${type} = 'meeting' and mt.owner_id = ${owner} and mt.id = ${id}
-   order by (l.kind = 'booking') desc limit 1)`;
+   order by (l.kind = 'booking') desc, coalesce(l.external_id = bk.link, false) desc, l.line limit 1)`;
 
 /** The line a task or suggestion takes from where it came from: its chat or person, else its call. */
 const lineFrom = (type: string, id: string, owner: string, team: string) => `coalesce(${lineFromChat(type, id, owner, team)}, ${lineFromCall(type, id, owner, team)})`;

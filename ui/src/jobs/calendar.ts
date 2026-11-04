@@ -8,6 +8,7 @@
 import type { Db } from "@/server/db";
 import { isEmailAddress } from "@/server/gmail";
 import { hostedProblem } from "@/server/app-keys";
+import { inviteBookingName } from "@/server/calendly";
 import { googleCan, GoogleSaid, type CalendarEvent, type GoogleAccount, type GoogleApi, type InviteAnswer, type NewEvent } from "@/server/google";
 import { sendingEnabled } from "@/server/repo";
 import { PLACES } from "./fathom";
@@ -90,6 +91,37 @@ async function saveRows(db: Db, ownerId: string, rows: ReturnType<typeof toRows>
        location = excluded.location, link = excluded.link, html_link = excluded.html_link, organizer = excluded.organizer, attendees = excluded.attendees, response = excluded.response,
        mine = excluded.mine, description = excluded.description, recurring = excluded.recurring, saved_at = excluded.saved_at`,
     [ownerId, JSON.stringify(rows), now],
+  );
+}
+
+/**
+ * The Calendly invites among these rows, kept as bookings by the name of the page they were
+ * booked through (see `inviteBookingName`), so a call recorded at that time takes the line of
+ * the booking link of that name (see `lineFromCall` in tickets.ts), with Calendly not connected.
+ * They stay after the invite leaves the calendar copy, so the call keeps its line. One of an
+ * account read now, in the window read, that is not among them any more was cancelled, moved
+ * away or declined, and no longer counts.
+ */
+async function saveBookings(db: Db, ownerId: string, rows: ReturnType<typeof toRows>, accounts: string[], from: number, to: number, now: number): Promise<void> {
+  const booked = rows.flatMap((r) => {
+    const name = r.all_day ? null : inviteBookingName(r.description);
+    return name ? [{ id: `calendar:${r.account}:${r.id}`, name, start_at: r.start_at, end_at: r.end_at }] : [];
+  });
+  if (booked.length) {
+    await db.run(
+      `insert into bookings (owner_id, id, link, name, start_at, end_at, hosts, active, saved_at)
+       select $1, r.id, null, r.name, r.start_at, r.end_at, '{}', true, $3
+       from jsonb_to_recordset($2::jsonb) as r(id text, name text, start_at bigint, end_at bigint)
+       on conflict (owner_id, id) do update set name = excluded.name, start_at = excluded.start_at, end_at = excluded.end_at, active = true, saved_at = excluded.saved_at`,
+      [ownerId, JSON.stringify(booked), now],
+    );
+  }
+  if (!accounts.length) return;
+  await db.run(
+    `update bookings set active = false
+     where owner_id = $1 and active and saved_at < $4 and start_at >= $2 and start_at < $3
+       and split_part(id, ':', 1) = 'calendar' and split_part(id, ':', 2) in (select jsonb_array_elements_text($5::jsonb))`,
+    [ownerId, from, to, now, JSON.stringify(accounts)],
   );
 }
 
@@ -220,6 +252,8 @@ export async function calendarPull({ db, ownerId, now }: JobContext, accounts: G
   await db.transaction(async (tx) => {
     await tx.run("delete from calendar_events where owner_id = $1", [ownerId]);
     await saveRows(tx, ownerId, rows, now);
+    const read = reading.map((a) => a.email).filter((email) => !signedOut.includes(email));
+    await saveBookings(tx, ownerId, rows, read, now - BEHIND, now + AHEAD, now);
   });
 
   // A meeting on two connected calendars is counted once.

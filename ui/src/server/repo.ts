@@ -417,7 +417,7 @@ export async function stateStamps(db: Db, ownerId: string, now = new Date()): Pr
          ${rowsHash("n", "from clients n where n.owner_id = $2")},
          ${rowsHash("row(cl.source, cl.kind, cl.external_id, cl.name, cl.line)", "from chat_lines cl where cl.owner_id = $2")},
          ${rowsHash("row(tm.id, tm.title, tm.scheduled_at, tm.guests)", `from meetings tm where tm.owner_id in (${teamUsersSql("$2")})`)},
-         ${rowsHash("row(bk.id, bk.link, bk.start_at, bk.hosts, bk.active)", `from bookings bk where bk.owner_id in (${teamUsersSql("$2")})`)},
+         ${rowsHash("row(bk.id, bk.link, bk.name, bk.start_at, bk.hosts, bk.active)", `from bookings bk where bk.owner_id in (${teamUsersSql("$2")})`)},
          ${rowsHash("row(bt.link, bt.name, bt.active)", `from booking_types bt where bt.owner_id in (${teamUsersSql("$2")})`)},
          ${rowsHash("row(x.provider, x.label, x.connected_at, x.scopes)", "from connections x where x.owner_id = $1")},
          ${rowsHash("row(a.email, a.scopes, a.connected_at)", "from google_accounts a where a.owner_id = $1")},
