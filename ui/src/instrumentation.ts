@@ -9,8 +9,12 @@ export async function register() {
   if (holder.__commandCenterTicker) return;
   const { ready } = await import("./server/boot");
   const { tick } = await import("./jobs/runner");
+  const { makeRepeats } = await import("./server/repeats");
   const beat = async () => {
     try {
+      // The repeating tasks due at 6:00 CET, as the scheduler does on a host (see app/api/cron).
+      const { made, failed } = await makeRepeats(await ready());
+      if (made || failed) console.log(`[command-center] repeating tasks: ${made} made${failed ? `, ${failed} failed` : ""}`);
       const runs = await tick(await ready());
       for (const run of runs) console.log(`[command-center] ${run.jobId}: ${run.ok ? "ok" : "failed"} - ${run.message}`);
     } catch (error) {

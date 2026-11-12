@@ -3,6 +3,7 @@ import { tick, type JobRun } from "@/jobs/runner";
 import { ready } from "@/server/boot";
 import { failed, fromScheduler } from "@/server/http";
 import { OWNER_ID } from "@/server/owner";
+import { makeRepeats } from "@/server/repeats";
 import { scheduledOwners } from "@/server/team";
 
 // Reading Slack and Fathom can take a while. This is the most a host lets one request run.
@@ -21,6 +22,13 @@ export async function GET(request: Request) {
   if (!fromScheduler(request)) return new Response("Unauthorized", { status: 401 });
   try {
     const db = await ready();
+    // The repeating tasks due at 6:00 CET first, so the checks below send their Slack messages in the same run.
+    let repeats: { made: number; failed: number } = { made: 0, failed: 0 };
+    try {
+      repeats = await makeRepeats(db);
+    } catch (error) {
+      console.error(`[command-center] repeating tasks failed: ${(error as Error).message}`);
+    }
     const runs: (JobRun & { owner: string })[] = [];
     for (const owner of await scheduledOwners(db)) {
       // One person's failing checks never hold up the next person's.
@@ -31,7 +39,7 @@ export async function GET(request: Request) {
       }
     }
     // Which person a run was for is not said: only the owner's runs are named, the rest are counted.
-    return Response.json({ ok: runs.every((r) => r.ok), ran: runs.filter((r) => r.owner === OWNER_ID).map((r) => ({ check: r.jobId, ok: r.ok, result: r.message })), team: runs.filter((r) => r.owner !== OWNER_ID).length });
+    return Response.json({ ok: runs.every((r) => r.ok), ran: runs.filter((r) => r.owner === OWNER_ID).map((r) => ({ check: r.jobId, ok: r.ok, result: r.message })), team: runs.filter((r) => r.owner !== OWNER_ID).length, repeats });
   } catch (error) {
     return failed(error, 500);
   }

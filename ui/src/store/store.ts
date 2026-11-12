@@ -9,7 +9,7 @@ import { isoDay, pad } from "@/core/dates";
 import { jobById } from "@/core/jobs";
 import { PROVIDER_NAME } from "@/core/providers";
 import type { AssignWhere } from "@/core/delegation";
-import type { AddedPicture, AppState, ChatLine, Conversation, ConversationChange, JobId, Mode, Person, Priority, Provider, Rule, Stamps, StateAnswer, Suggestion, Task, TaskLine, TicketInput } from "@/core/types";
+import type { AddedPicture, AppState, ChatLine, Conversation, ConversationChange, JobId, Mode, Person, Priority, Provider, RepeatingTask, RepeatInput, Rule, Stamps, StateAnswer, Suggestion, Task, TaskLine, TicketInput } from "@/core/types";
 import type { RejectReason } from "@/core/config";
 
 export interface UiState {
@@ -60,6 +60,22 @@ let lastRead = 0;
 let lastFull = 0;
 let lastActive = Date.now();
 
+/**
+ * The screen's own changes, ahead of the server (see `act`). Each stays on top of what the
+ * server sends until an answer comes that was asked for after the server confirmed it. Answers
+ * can arrive out of order: when several changes are made quickly, or the minute's check is on
+ * its way during one, an answer to an earlier question would otherwise put the old status back
+ * on screen, as if the change had not been made.
+ */
+interface Ahead {
+  show: (state: AppState) => AppState;
+  /** When the server confirmed it, counted in `confirmedCount`. Null while on its way. */
+  confirmed: number | null;
+}
+let ahead: Ahead[] = [];
+/** How many changes the server has confirmed. Each question to the server remembers it as it is asked. */
+let confirmedCount = 0;
+
 let app: App | null = null;
 let ui: UiState = { mode: "professional", openConversation: null, openTask: null, openMeetings: [], toast: null, running: [], saving: 0, syncing: false, checking: [] };
 let started = false;
@@ -90,24 +106,27 @@ function inMyTimezone(state: AppState): AppState {
   };
 }
 
-/** Shows the data in `raw`, as of now. Changes the screen made on its own, ahead of the server, are dropped. */
+/** Shows the data in `raw`, as of now, with the screen's own changes the server may not have answered with yet (see `ahead`). */
 function render() {
   if (!raw) return;
   const now = new Date();
   const mine = inMyTimezone(raw);
-  app = { state: PERSONAL_SIDE ? mine : oneSide(mine), ui, now, today: isoDay(now) };
+  const state = PERSONAL_SIDE ? mine : oneSide(mine);
+  app = { state: ahead.reduce((s, change) => change.show(s), state), ui, now, today: isoDay(now) };
   emit();
 }
 
 /**
  * Takes in what the server sent: everything, or only the parts that changed (the others stay as
- * they are), or word that nothing did.
+ * they are), or word that nothing did. `askedAt`: `confirmedCount` when the question was asked.
+ * The changes confirmed before then are in the answer, and need no longer be kept on top.
  */
-function setState(answer: StateAnswer) {
+function setState(answer: StateAnswer, askedAt?: number) {
+  if (askedAt !== undefined) ahead = ahead.filter((change) => change.confirmed === null || change.confirmed > askedAt);
   if ("unchanged" in answer) {
     stamps = answer.stamps;
-    // A change on its way keeps what the screen shows meanwhile. Otherwise the time moves on.
-    if (ui.saving === 0) render();
+    // The time moves on; the changes on their way stay on screen (see `ahead`).
+    render();
     return;
   }
   if (!raw && !(answer.inbox && answer.calendar && answer.meetings)) return void refresh(true);
@@ -155,10 +174,11 @@ export async function refresh(whole = false): Promise<void> {
   // The timers' last runs are not in the check: on the pages that show them, the small part is always read.
   if (!all && have) query.set("have", JSON.stringify(TIMER_PAGES.some((p) => window.location.pathname.startsWith(p)) ? { ...have, rest: "" } : have));
   if (open) query.set("open", open);
+  const askedAt = confirmedCount;
   try {
     const answer = await request<StateAnswer>(`/api/state${query.size ? `?${query}` : ""}`);
     if (all) lastFull = Date.now();
-    setState(answer);
+    setState(answer, askedAt);
   } catch (error) {
     toast(`Could not load the dashboard: ${(error as Error).message}`);
   }
@@ -214,6 +234,10 @@ function start() {
     if (document.visibilityState === "visible" && Date.now() - lastRead > 30_000) void refresh();
   };
   document.addEventListener("visibilitychange", back);
+  // Closing the page while a change is on its way could stop it reaching the server: the browser asks first.
+  window.addEventListener("beforeunload", (event) => {
+    if (ui.saving > 0) event.preventDefault();
+  });
   const active = () => {
     const wasIdle = idle();
     lastActive = Date.now();
@@ -266,25 +290,34 @@ const inFlight = new Set<string>();
 
 /**
  * Sends one change to the server and shows the result. Resolves to false if it was refused.
- * `show` changes the screen straight away, before the server has answered; if the server
- * refuses, the screen is read again from the server.
+ * `show` changes the screen straight away, before the server has answered, and keeps it so
+ * until an answer that has it is in (see `ahead`); if the server refuses, the screen is read
+ * again from the server.
  */
 async function act(type: string, args: unknown[], done?: string, show?: (state: AppState) => AppState): Promise<boolean> {
   const key = `${type}:${JSON.stringify(args)}`;
   if (inFlight.has(key)) return false;
   inFlight.add(key);
   setUi({ saving: ui.saving + 1 });
-  if (show && app) {
-    app = { ...app, state: show(app.state) };
-    emit();
+  const change: Ahead | null = show ? { show, confirmed: null } : null;
+  if (change) {
+    ahead = [...ahead, change];
+    render();
   }
+  const askedAt = confirmedCount;
   try {
-    setState(await request<StateAnswer>("/api/action", { type, args, ...known() }));
+    const answer = await request<StateAnswer>("/api/action", { type, args, ...known() });
+    if (change) change.confirmed = ++confirmedCount;
+    setState(answer, askedAt);
     if (done) toast(done);
     return true;
   } catch (error) {
     toast((error as Error).message);
-    if (show) void refresh();
+    if (change) {
+      ahead = ahead.filter((c) => c !== change);
+      render();
+      void refresh();
+    }
     return false;
   } finally {
     inFlight.delete(key);
@@ -458,6 +491,13 @@ export const createTicket = (input: TicketInput) => act("createTicket", [input],
 export const updateTicket = (id: string, patch: Partial<TicketInput>, said?: string) =>
   act("updateTicket", [id, patch], said, inTasks(id, { ...(patch.status && { status: patch.status, done: patch.status === "done" }), ...(patch.title !== undefined && { title: patch.title }), ...(patch.due && { due: patch.due }) }));
 
+// Repeating tasks, shared by the team (see server/repeats.ts). Each answers true once it is saved.
+const inRepeats = (id: string, patch: Partial<RepeatingTask>) => (s: AppState): AppState => ({ ...s, repeats: s.repeats.map((r) => (r.id === id ? { ...r, ...patch } : r)) });
+export const addRepeat = (input: RepeatInput) => act("addRepeat", [input], "Repeating task set up");
+export const editRepeat = (id: string, input: RepeatInput) => act("editRepeat", [id, input], "Repeating task saved");
+export const pauseRepeat = (id: string, paused: boolean) => act("pauseRepeat", [id, paused], paused ? "Paused" : "Repeating again", inRepeats(id, { active: !paused }));
+export const removeRepeat = (id: string) => act("removeRepeat", [id], "Repeating task removed. The tasks it made stay on the board.", (s) => ({ ...s, repeats: s.repeats.filter((r) => r.id !== id) }));
+
 // The review, shared by the team.
 const outOfReview = (ids: string[]) => (s: AppState): AppState => ({ ...s, review: s.review.filter((g) => !ids.includes(g.id)) });
 export const acceptReview = (id: string, input?: Partial<TicketInput>) => act("acceptSuggestion", input ? [id, input] : [id], "Ticket made", outOfReview([id]));
@@ -549,10 +589,17 @@ export const removeTaskLogin = (personId: string, name: string) =>
 export const setMemberSends = (personId: string, name: string, on: boolean) =>
   void act("setMemberSends", [personId, on], on ? `${name} can send you tasks` : `${name} can no longer send you tasks`, inTeam(personId, (p) => ({ ...p, sendsTasks: on })));
 
-export const togglePersonDept = (personId: string, dept: string) =>
-  void act("togglePersonDept", [personId, dept], undefined, inTeam(personId, (p) => ({ ...p, depts: p.depts.includes(dept) ? p.depts.filter((d) => d !== dept) : [...p.depts, dept] })));
+// Each screen change below says what the result is, worked out once as it is asked for, and not
+// "the other way round": it may be put on top of an answer that has it already (see `ahead`).
+export const togglePersonDept = (personId: string, dept: string) => {
+  const on = !app?.state.team.find((p) => p.id === personId)?.depts.includes(dept);
+  void act("togglePersonDept", [personId, dept], undefined, inTeam(personId, (p) => ({ ...p, depts: on ? [...new Set([...p.depts, dept])] : p.depts.filter((d) => d !== dept) })));
+};
 export const addHandle = (personId: string, handle: string) => void act("addHandle", [personId, handle]);
-export const removeHandle = (personId: string, index: number) => void act("removeHandle", [personId, index], undefined, inTeam(personId, (p) => ({ ...p, handles: p.handles.filter((_, k) => k !== index) })));
+export const removeHandle = (personId: string, index: number) => {
+  const handle = app?.state.team.find((p) => p.id === personId)?.handles[index];
+  void act("removeHandle", [personId, index], undefined, inTeam(personId, (p) => ({ ...p, handles: p.handles.filter((h) => h !== handle) })));
+};
 export const addPerson = (input: Omit<Person, "id">) => void act("addPerson", [input], `Added ${input.name}`);
 export const removePerson = (personId: string) => void act("removePerson", [personId], "Removed", inTeam(personId, () => null));
 export const setPersonTelegram = (personId: string, telegramId: string) =>

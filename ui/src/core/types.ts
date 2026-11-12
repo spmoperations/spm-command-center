@@ -564,12 +564,46 @@ export interface JobStatus {
   notBefore: number | null;
 }
 
+/** What the form for a repeating task sends. */
+export interface RepeatInput {
+  title: string;
+  description: string;
+  client: string;
+  pri: Priority;
+  line: TaskLine | null;
+  /** Who each one is for: a TeamPerson id, or a Slack or Telegram pick, which joins the team list. */
+  assignee: string;
+  /** The days of the week it is made on, Monday 1 to Sunday 7. */
+  days: number[];
+  /** Where they are told each time. */
+  notify: ("slack" | "telegram")[];
+}
+
+/** The same ticket made again on the same days each week at 6:00 CET, for the same person, who is told each time. */
+export interface RepeatingTask extends RepeatInput {
+  id: string;
+  /** False while it is paused. */
+  active: boolean;
+  /** The login that set it up or last changed it: each one is made, and the person told, from that login's account. */
+  setBy: { id: string; name: string };
+  /** The last day (YYYY-MM-DD, CET) one was made, or that counts as done because it was set up after 6:00. */
+  lastDay: string | null;
+  /** The newest ticket it made, and how far that has got. */
+  last: { id: string; number: number | null; status: TicketStatus } | null;
+  /** How many tickets it has made. */
+  made: number;
+  /** What went wrong the last time, if it did. */
+  problem: string | null;
+}
+
 export interface AppState {
   /** YYYY-MM the target logs belong to. */
   month: string;
   inbox: Conversation[];
   /** The team's tickets: everyone with a login shares them. */
   tasks: Task[];
+  /** Tickets made again on the same days each week, for the same person: the team's (see server/repeats.ts). */
+  repeats: RepeatingTask[];
   suggestions: Suggestion[];
   /** What the checks flagged across the team, waiting to be made a ticket or turned down. */
   review: ReviewItem[];

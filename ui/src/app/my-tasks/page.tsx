@@ -6,7 +6,7 @@
 // also send the owner tasks from here, and see how far those have got. It reads only
 // /api/my-tasks, never the dashboard's data, and stands alone without its tabs (Shell.tsx).
 
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Seg } from "@/components/bits";
 import { ThemeToggle } from "@/components/Shell";
 import { LineChip, StatusPill } from "@/components/Tickets";
@@ -33,9 +33,40 @@ async function ask(init?: RequestInit, path = "/api/my-tasks"): Promise<Mine & {
     window.location.assign("/login");
     throw new Error("Please sign in.");
   }
-  if (!res.ok) throw new Error(data.error ?? `The server answered ${res.status}`);
+  if (!res.ok) throw Object.assign(new Error(data.error ?? `The server answered ${res.status}`), { status: res.status });
   return data as Mine;
 }
+
+/** A request that did not reach the server, or that the host gave up on before the server answered: worth one more try. */
+const worthRetrying = (error: unknown) => error instanceof TypeError || [502, 503, 504].includes((error as { status?: number }).status ?? 0);
+
+/**
+ * A status changed on this page, kept on top of what the server sends until an answer comes
+ * that was asked for after the server confirmed it. With several changes made quickly, the
+ * answers can arrive out of order, and an earlier one would otherwise put a status back on
+ * screen as if it had not been changed.
+ */
+interface Ahead {
+  id: string;
+  status: TicketStatus;
+  doneAt: number | null;
+  /** When the server confirmed it, counted as `confirmedCount`. Null while on its way. */
+  confirmed: number | null;
+}
+
+/** A status change, as it is made: on its way. */
+const madeNow = (id: string, status: TicketStatus): Ahead => ({ id, status, doneAt: Date.now(), confirmed: null });
+
+const withAhead = (mine: Mine, ahead: Ahead[]): Mine =>
+  ahead.length === 0
+    ? mine
+    : {
+        ...mine,
+        tasks: mine.tasks.map((t) => {
+          const last = ahead.filter((a) => a.id === t.id).pop();
+          return last ? { ...t, status: last.status, doneAt: last.status === "done" ? (t.doneAt ?? last.doneAt) : null } : t;
+        }),
+      };
 
 async function signOut() {
   try {
@@ -289,6 +320,11 @@ function SentList({ to, sent, today }: { to: string; sent: SentTask[]; today: st
 export default function MyTasksPage() {
   const [mine, setMine] = useState<Mine | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // A status change that did not go through: it stays until closed, whatever is changed after it.
+  const [failed, setFailed] = useState<string | null>(null);
+  const ahead = useRef<Ahead[]>([]);
+  const confirmedCount = useRef(0);
+  const saving = useRef(0);
   const [view, setViewNow] = useState<View>(() => {
     try {
       return window.localStorage.getItem(VIEW_KEY) === "list" ? "list" : "board";
@@ -310,24 +346,37 @@ export default function MyTasksPage() {
   const query = useSyncExternalStore(never, () => window.location.search, () => "");
   const picked = new URLSearchParams(query).get("task");
 
-  const load = useCallback(
-    () =>
-      ask().then(
-        (answer) => {
-          setMine(answer);
-          setError(null);
-        },
-        (e: Error) => setError(e.message),
-      ),
-    [],
-  );
+  /** Shows an answer asked for when `askedAt` changes had been confirmed, with the changes it may not have yet on top. */
+  const show = useCallback((answer: Mine, askedAt: number) => {
+    ahead.current = ahead.current.filter((a) => a.confirmed === null || a.confirmed > askedAt);
+    setMine(withAhead(answer, ahead.current));
+  }, []);
+
+  const load = useCallback(() => {
+    const askedAt = confirmedCount.current;
+    return ask().then(
+      (answer) => {
+        show(answer, askedAt);
+        setError(null);
+      },
+      (e: Error) => setError(e.message),
+    );
+  }, [show]);
 
   useEffect(() => {
     void load();
     // Back on the page: read again, in case the team changed something meanwhile.
     const back = () => document.visibilityState === "visible" && void load();
     document.addEventListener("visibilitychange", back);
-    return () => document.removeEventListener("visibilitychange", back);
+    // Closing the page while a change is on its way could stop it reaching the server: the browser asks first.
+    const leaving = (event: BeforeUnloadEvent) => {
+      if (saving.current > 0) event.preventDefault();
+    };
+    window.addEventListener("beforeunload", leaving);
+    return () => {
+      document.removeEventListener("visibilitychange", back);
+      window.removeEventListener("beforeunload", leaving);
+    };
   }, [load]);
 
   const setView = (v: View) => {
@@ -340,16 +389,35 @@ export default function MyTasksPage() {
   };
 
   async function setStatus(id: string, status: TicketStatus) {
-    if (!mine || mine.tasks.find((t) => t.id === id)?.status === status) return;
-    const before = mine;
-    // Shown at once; the server's answer replaces it.
-    setMine({ ...mine, tasks: mine.tasks.map((t) => (t.id === id ? { ...t, status } : t)) });
+    const task = mine?.tasks.find((t) => t.id === id);
+    if (!task || task.status === status) return;
+    // Shown at once, and kept on screen until the server's answers have it (see Ahead).
+    const change = madeNow(id, status);
+    ahead.current = [...ahead.current, change];
+    setMine((m) => (m ? withAhead(m, ahead.current) : m));
+    saving.current += 1;
+    const askedAt = confirmedCount.current;
+    const post = () => ask({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, status }) });
     try {
-      setMine(await ask({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, status }) }));
-      setError(null);
+      let answer: Mine;
+      try {
+        answer = await post();
+      } catch (e) {
+        // Setting a status twice is harmless: a second time changes nothing.
+        if (!worthRetrying(e)) throw e;
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        answer = await post();
+      }
+      change.confirmed = ++confirmedCount.current;
+      show(answer, askedAt);
     } catch (e) {
-      setMine(before);
-      setError((e as Error).message);
+      ahead.current = ahead.current.filter((a) => a !== change);
+      const why = e instanceof TypeError ? "the connection dropped" : (e as Error).message.replace(/\.$/, "");
+      setFailed(`${task.ticket} was not moved to ${TICKET_STATUS_NAME[status]} (${why}). Please try again.`);
+      // The page as the server has it, with the other changes still on their way on top.
+      void load();
+    } finally {
+      saving.current -= 1;
     }
   }
 
@@ -410,6 +478,14 @@ export default function MyTasksPage() {
         {error && (
           <p className="login-error" role="alert">
             {error}
+          </p>
+        )}
+        {failed && (
+          <p className="login-error my-failed" role="alert">
+            <span>{failed}</span>
+            <button className="linkbtn" onClick={() => setFailed(null)}>
+              Close
+            </button>
           </p>
         )}
         {!mine && !error && <p className="loading">Loading…</p>}
@@ -545,7 +621,8 @@ export default function MyTasksPage() {
             to={mine.send.to}
             onClose={() => setSending(false)}
             onSent={({ ticket, ...answer }) => {
-              setMine(answer);
+              // Status changes still on their way stay on screen (see Ahead).
+              setMine(withAhead(answer, ahead.current));
               setSending(false);
               setNotice(`Sent to ${firstName(answer.send?.to ?? "")}${ticket ? ` as ${ticket}` : ""}.`);
             }}

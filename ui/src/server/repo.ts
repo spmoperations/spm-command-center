@@ -19,6 +19,7 @@ import { hostedProblem, keysOnScreen } from "./app-keys";
 import { disconnectGoogle, googleAccounts, googleBlocked, googleCan } from "./google";
 import { isUploadKey, telegramAvatarIds, type StoredPicture } from "./media";
 import { SLACK_FILES_SCOPE, SLACK_NEEDS_UPLOAD, SLACK_UPLOAD_SCOPE, type Fetch } from "./slack";
+import { REPEAT_ACTIONS, repeatingTasks } from "./repeats";
 import { emailInUse, TASK_LOGIN_ACTIONS, taskLogins } from "./task-logins";
 import { hashPassword, MIN_PASSWORD, teamLogins } from "./team";
 import { telegramBlocked } from "./telegram";
@@ -409,6 +410,7 @@ export async function stateStamps(db: Db, ownerId: string, now = new Date()): Pr
        md5(concat(
          $3::text,
          ${rowsHash("k", "from tasks k where k.owner_id = $2")},
+         ${rowsHash("rt", "from repeating_tasks rt where rt.owner_id = $2")},
          ${rowsHash("row(v.id, v.at)", "from ticket_events v where v.owner_id = $2")},
          ${rowsHash("g", `from suggestions g where g.owner_id in (${teamUsersSql("$2")})`)},
          ${rowsHash("row(o.id, o.status, o.body, o.to_name, o.ctx, o.created_at, o.conversation_id, o.task_id, o.after_id)", "from outbox o where o.owner_id = $1")},
@@ -559,6 +561,7 @@ async function readState(db: Db, ownerId: string, now: Date, open: string | null
     ownerChats,
     callTitles,
     bookingTypes,
+    repeats,
   ] = await Promise.all([
     db.query<{ name: string }>("select name from users where id = $1", [ownerId]),
     loadRules(db, ownerId),
@@ -616,6 +619,8 @@ async function readState(db: Db, ownerId: string, now: Date, open: string | null
        from booking_types where owner_id in (${teamUsersSql("$1")}) group by link order by 3 desc, lower((array_agg(name))[1])`,
       [TEAM],
     ),
+    // The team's repeating tasks, whoever set them up (see repeats.ts).
+    repeatingTasks(db),
   ]);
 
   const people = await teamPeople(db);
@@ -648,6 +653,7 @@ async function readState(db: Db, ownerId: string, now: Date, open: string | null
     month,
     inbox,
     tasks,
+    repeats,
     review: await reviewItems(db, ownerId, people),
     setAside: await setAsideItems(db, ownerId, people),
     clients: await teamClients(db, ownerId),
@@ -1400,6 +1406,8 @@ export const ACTIONS: Record<string, (c: ActionContext, ...args: any[]) => Promi
   // The board and the review, shared by the team.
   ...TICKET_ACTIONS,
   ...TASK_LOGIN_ACTIONS,
+  // Repeating tasks, shared by the team (see repeats.ts).
+  ...REPEAT_ACTIONS,
 };
 
 export async function applyAction(db: Db, type: string, args: unknown[], ownerId = OWNER_ID, now = new Date()): Promise<void> {

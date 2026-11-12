@@ -912,6 +912,29 @@ img.avatar { object-fit: cover; background: var(--surface-2); }
 .tk-col.over { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .tk-col-head { display: flex; justify-content: space-between; align-items: center; padding: 2px 4px 4px; }
 .tk-empty { margin: 4px; font-size: 13px; }
+/* Repeating tasks, above the board (components/Repeats.tsx). */
+.rp-panel { padding: 14px 16px; margin-bottom: 14px; display: grid; gap: 10px; }
+.rp-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.rp-head h3 { margin: 0; font-size: 16px; }
+.rp-head p { margin: 2px 0 0; font-size: 13px; }
+.rp-head-actions { display: flex; align-items: center; gap: 12px; }
+.rp-list { list-style: none; margin: 0; padding: 0; display: grid; }
+.rp-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.rp-row.paused .tk-title { color: var(--muted); }
+.rp-main { display: grid; gap: 4px; min-width: 0; }
+.rp-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+.rp-last { display: inline-flex; align-items: center; gap: 6px; }
+.rp-last .linkbtn { font-size: 13px; }
+.rp-problem { margin: 0; font-size: 13px; color: var(--bad); }
+.rp-actions { display: flex; gap: 12px; flex: none; }
+.rp-days { display: flex; flex-wrap: wrap; gap: 6px; }
+.rp-day { min-width: 48px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: inherit; font-size: 13.5px; cursor: pointer; }
+.rp-day.on { background: var(--accent); border-color: var(--accent); color: var(--surface); font-weight: 600; }
+.rp-help { margin: 0; font-size: 13px; }
+.btn.on { border-color: var(--accent); color: var(--accent); }
+@media (max-width: 640px) {
+  .rp-row { flex-direction: column; }
+}
 .tk-card { display: grid; gap: 8px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; cursor: grab; }
 .tk-card.done .tk-title { color: var(--muted); text-decoration: line-through; }
 .tk-card-top { display: flex; gap: 8px; align-items: flex-start; }
@@ -941,6 +964,8 @@ select.f.tk-done { background: var(--good-soft); color: var(--good); }
 .chip.my-pri.p-mid { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
 .my-send-help { margin: 0; font-size: 13px; }
 .tk-field > span { font-size: 12.5px; color: var(--muted); }
+.my-failed { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 0 12px; }
+.my-failed .linkbtn { color: inherit; flex: none; }
 .my-notice { margin: 0 0 12px; padding: 8px 12px; border-radius: 8px; background: var(--good-soft); color: var(--good); font-size: 14px; }
 .my-sent { margin-top: 16px; }
 .my-sent h3 { margin: 0; font-size: 15px; }

@@ -7,6 +7,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Seg } from "@/components/bits";
+import { RepeatsPanel } from "@/components/Repeats";
 import { reviewWaiting } from "@/core/review";
 import { assignable, LineChip, SourceBox, sourceApp, StatusPill, ticketName, TicketForm, Who } from "@/components/Tickets";
 import { conversationPage, PERSONAL_SIDE, MODE_NAME, TASK_LINE_NAME, TASK_LINES, TICKET_STATUS_NAME, TICKET_STATUSES } from "@/core/config";
@@ -255,6 +256,7 @@ export default function TasksPage() {
   const [client, setClient] = useState("all");
   const [line, setLine] = useState<"all" | TaskLine>("all");
   const [adding, setAdding] = useState(false);
+  const [repeating, setRepeating] = useState(false);
   const [allDone, setAllDone] = useState(false);
   const [over, setOver] = useState<TicketStatus | null>(null);
   const [view, setViewNow] = useState<View>(() => {
@@ -341,11 +343,16 @@ export default function TasksPage() {
               <option key={c}>{c}</option>
             ))}
           </select>
+          <button className={`btn ${repeating ? "on" : ""}`} aria-pressed={repeating} onClick={() => setRepeating(!repeating)}>
+            Repeating{state.repeats.length ? ` ${state.repeats.length}` : ""}
+          </button>
           <button className="btn primary" onClick={() => setAdding(true)}>
             + New task
           </button>
         </div>
       </div>
+
+      {repeating && <RepeatsPanel app={app} onOpenTask={(id) => openTask(id)} onClose={() => setRepeating(false)} />}
 
       {view === "person" ? (
         <ByPerson tickets={shown} app={app} onOpen={(id) => openTask(id)} />

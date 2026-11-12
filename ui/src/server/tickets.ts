@@ -419,7 +419,7 @@ export async function teamSlack(db: Db): Promise<InSlack[]> {
  * own Telegram chats ("telegram:<id>"). Someone already on the list is that row; anyone else is
  * added, so they are there next time and can be told.
  */
-async function memberFor(c: Ctx, pick: string): Promise<string> {
+export async function memberFor(c: Ctx, pick: string): Promise<string> {
   const slack = pick.startsWith(SLACK_PICK);
   const id = pick.slice(pick.indexOf(":") + 1);
   if (!(slack ? /^[UW][A-Z0-9]{2,20}$/ : /^-?\d{1,20}$/).test(id)) throw new Error("Who should it be for?");
@@ -719,7 +719,7 @@ const toldOn = (ways: Notify[]) => (ways.length ? `, told on ${ways.map((w) => (
  * the board. A team member is told, where `notify` says, from the account of whoever assigned it:
  * the message waits in the outbox like every other.
  */
-async function assignTo(c: Ctx, taskId: string, assignee: string | null, notify: Notify[] = []): Promise<string> {
+export async function assignTo(c: Ctx, taskId: string, assignee: string | null, notify: Notify[] = []): Promise<string> {
   // A message about the ticket that has not gone yet no longer applies.
   await c.db.run("delete from outbox where owner_id = $1 and task_id = $2 and status = 'queued'", [c.ownerId, taskId]);
   const unhand = "delegated_to = null, delegated_name = null, delegated_role = null, delegated_note = null, delegated_at = null";
