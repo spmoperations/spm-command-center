@@ -10,7 +10,7 @@
 // (`MOST_CALLS`) and from then on takes only new ones: older calls are never read. At most
 // `MOST_CALLS` calls a run and `dailyLimit()` a day, and each run says what it used and roughly
 // what that cost (Settings, Timers).
-import { excerptFor, writeupText, type TranscriptLine } from "@/core/call-context";
+import { excerptFor, LONG_TITLE, shortTitle, writeupText, type TranscriptLine } from "@/core/call-context";
 import { isoDay } from "@/core/dates";
 import { redactSecrets } from "@/core/slack-text";
 import type { ActionItem } from "@/core/types";
@@ -56,6 +56,7 @@ interface CallRow {
 
 interface ItemRow {
   id: string;
+  title: string;
   dedupe_key: string;
   for_name: string | null;
   status: string;
@@ -105,7 +106,7 @@ export async function callContext({ db, ownerId, now, cursor }: JobContext, writ
   const problems: string[] = [];
   for (const call of calls) {
     const items = await db.query<ItemRow>(
-      `select s.id, s.dedupe_key, s.for_name, s.status, s.ticket_id, s.why, u.name as from_name from suggestions s join users u on u.id = s.owner_id
+      `select s.id, s.title, s.dedupe_key, s.for_name, s.status, s.ticket_id, s.why, u.name as from_name from suggestions s join users u on u.id = s.owner_id
        where s.owner_id = $1 and s.src_type = 'meeting' and s.src_id = $2 and s.status <> 'dismissed' and s.context is null order by s.dedupe_key`,
       [ownerId, call.id],
     );
@@ -150,12 +151,14 @@ export async function callContext({ db, ownerId, now, cursor }: JobContext, writ
     for (const a of readable) {
       const w = result.items.find((x) => x.id === a.row.id);
       const text = w && w.what.trim() ? writeupText(w, { title: call.title, at: Number(call.started_at), who: call.who, link: a.item!.link ?? call.url }) : "";
-      await db.run("update suggestions set context = $3 where owner_id = $1 and id = $2", [ownerId, a.row.id, text]);
+      // Fathom's line, when it is long, gives way to the short title written from the call. Its words stay on the card as the quote.
+      const title = text && a.row.title.length > LONG_TITLE && w!.title.trim() ? shortTitle(w!.title, 100) : null;
+      await db.run("update suggestions set context = $3, title = coalesce($4, title) where owner_id = $1 and id = $2", [ownerId, a.row.id, text, title]);
       if (!text) continue;
       written++;
-      // Already a task: its description becomes the write-up, unless a person has written their own.
+      // Already a task: its description becomes the write-up, unless a person has written their own; its title too, unless someone renamed it.
       if (a.row.status === "accepted" && a.row.ticket_id) {
-        const changed = await db.run("update tasks set description = $3, updated_at = $6 where owner_id = $1 and id = $2 and (description = $4 or description = $5)", [
+        const described = await db.run("update tasks set description = $3, updated_at = $6 where owner_id = $1 and id = $2 and (description = $4 or description = $5)", [
           TEAM,
           a.row.ticket_id,
           text,
@@ -163,13 +166,15 @@ export async function callContext({ db, ownerId, now, cursor }: JobContext, writ
           whyFor(a.row.why, a.row.from_name),
           now,
         ]);
-        if (changed) {
+        const renamed = title ? await db.run("update tasks set title = $3, updated_at = $5 where owner_id = $1 and id = $2 and title = $4", [TEAM, a.row.ticket_id, title, a.row.title, now]) : 0;
+        if (described || renamed) {
           updated++;
-          await db.run("insert into ticket_events (id, owner_id, task_id, at, by_user, by_name, what) values ($1, $2, $3, $4, null, 'Command Center', 'Description written from the call')", [
+          await db.run("insert into ticket_events (id, owner_id, task_id, at, by_user, by_name, what) values ($1, $2, $3, $4, null, 'Command Center', $5)", [
             eventId(),
             TEAM,
             a.row.ticket_id,
             now,
+            described && renamed ? "Title and description written from the call" : described ? "Description written from the call" : "Title written from the call",
           ]);
         }
       }

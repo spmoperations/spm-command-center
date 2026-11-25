@@ -154,6 +154,7 @@ const CallWriteups = z.object({
   items: z.array(
     z.object({
       id: z.string().describe(calls.FIELDS.id),
+      title: z.string().describe(calls.FIELDS.title),
       what: z.string().describe(calls.FIELDS.what),
       why: z.string().describe(calls.FIELDS.why),
       details: z.array(z.string()).describe(calls.FIELDS.details),

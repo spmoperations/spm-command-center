@@ -1,6 +1,7 @@
 // Fathom job. Read-only: brings in recorded calls with their notes, transcript and action
 // items. Every open action item becomes a suggestion for the team's review, with who Fathom
 // says it is for, and no AI of ours.
+import { shortTitle } from "@/core/call-context";
 import { namedDay } from "@/core/requests";
 import type { ActionItem } from "@/core/types";
 import { listMeetings, type FathomMeeting } from "@/server/fathom";
@@ -82,7 +83,7 @@ export async function fathomPull({ db, ownerId, now, cursor }: JobContext, apiKe
         suggested += await db.run(
           `insert into suggestions (id, owner_id, title, dept, pri, due, why, src_type, src_id, dedupe_key, created_at, for_name)
            values ($1, $2, $3, 'Operations', 'mid', $4, $5, 'meeting', $6, $7, $8, $9) on conflict (owner_id, dedupe_key) do nothing`,
-          [uid("s"), ownerId, item.text.slice(0, 160), namedDay(item.text, new Date(m.startedAt)), why, id, `${id}:action:${k}`, now, forWhom],
+          [uid("s"), ownerId, shortTitle(item.text), namedDay(item.text, new Date(m.startedAt)), why, id, `${id}:action:${k}`, now, forWhom],
         );
       }
       if (raw.created_at > newest) newest = raw.created_at;

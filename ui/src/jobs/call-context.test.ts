@@ -51,7 +51,7 @@ function pretend(answer?: (input: CallContext) => CallContextResult | Promise<Ca
     asked.push(input);
     if (answer) return answer(input);
     return {
-      items: input.items.map((i) => ({ id: i.id, what: `Do: ${i.task}.`, why: "Viewers leave early.", details: ["Use the neighborhood shot first"] })),
+      items: input.items.map((i) => ({ id: i.id, title: `Short: ${i.task.slice(0, 20)}`, what: `Do: ${i.task}.`, why: "Viewers leave early.", details: ["Use the neighborhood shot first"] })),
       usage: { input: 1000, output: 200 },
     };
   };
@@ -152,6 +152,31 @@ describe("call write-ups", () => {
       ["fathom:2", "Luis knows: use the new cut."],
     ]);
     expect(await db.query("select by_user, by_name, what from ticket_events where task_id = $1 and what like 'Description%'", [tasks[0].id])).toEqual([{ by_user: null, by_name: "Command Center", what: "Description written from the call" }]);
+  });
+
+  it("gives a long Fathom line the short title written from the call, unless someone renamed the task", async () => {
+    await call(1);
+    await call(2);
+    await call(3);
+    const long = "Build the case studies from the stats doc; 2-3 visuals per client, before and after; leave out the four clients named";
+    await db.run("update suggestions set title = $1 where id in ('s_2', 's_3')", [long]);
+    await applyAction(db, "acceptSuggestion", ["s_2"], OWNER_ID, new Date(NOW));
+    await applyAction(db, "acceptSuggestion", ["s_3"], OWNER_ID, new Date(NOW));
+    await db.run("update tasks set title = 'Case studies for the shoot' where src_id = 'fathom:3'");
+    await callContext(ctx(), pretend().writer);
+    // A short line stays as Fathom wrote it; a long one, still waiting or made a task, takes the short title.
+    expect(await db.query("select id, title from suggestions where id in ('s_1', 's_2') order by id")).toEqual([
+      { id: "s_1", title: "Swap the hook on clip 1" },
+      { id: "s_2", title: "Short: Swap the hook on cli" },
+    ]);
+    expect(await db.query("select src_id, title from tasks where src_id in ('fathom:2', 'fathom:3') order by src_id")).toEqual([
+      { src_id: "fathom:2", title: "Short: Swap the hook on cli" },
+      { src_id: "fathom:3", title: "Case studies for the shoot" },
+    ]);
+    expect((await db.query<{ what: string }>("select what from ticket_events where what like '%written from the call' order by what")).map((e) => e.what)).toEqual([
+      "Description written from the call",
+      "Title and description written from the call",
+    ]);
   });
 
   it("leaves out what was turned down, and calls read before times were kept still work", async () => {

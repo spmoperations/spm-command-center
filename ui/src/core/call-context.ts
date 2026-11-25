@@ -64,6 +64,18 @@ export function excerptFor(transcript: TranscriptLine[], item: { text: string; a
   return out;
 }
 
+/** A Fathom action item is a line, sometimes a long one: this cuts it at a word, with "…", instead of in the middle of one. */
+export function shortTitle(text: string, most = 160): string {
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (clean.length <= most) return clean;
+  const cut = clean.slice(0, most - 1);
+  const atWord = cut.lastIndexOf(" ");
+  return `${(atWord > most / 2 ? cut.slice(0, atWord) : cut).replace(/[\s,;:/–-]+$/, "")}…`;
+}
+
+/** Fathom's line is kept as the title up to this long; past it, the short title written from the call is used (see jobs/call-context). */
+export const LONG_TITLE = 80;
+
 /** What the AI wrote for one action item. */
 export interface Writeup {
   what: string;

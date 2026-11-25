@@ -1,6 +1,7 @@
 // Finding the part of a call where an action item was said, and laying out what the AI wrote.
 import { describe, expect, it } from "vitest";
-import { excerptFor, MOST_EXCERPT_CHARS, secondsOf, writeupText, type TranscriptLine } from "./call-context";
+import { SYSTEM } from "@/prompts/call-context";
+import { excerptFor, MOST_EXCERPT_CHARS, secondsOf, shortTitle, writeupText, type TranscriptLine } from "./call-context";
 
 describe("what a task from a call is about", () => {
   it("reads times in the call", () => {
@@ -45,6 +46,20 @@ describe("what a task from a call is about", () => {
     const got = excerptFor(transcript, { text: "x", at: "00:02:00" });
     expect(got.reduce((n, l) => n + l.who.length + l.text.length + 3, 0)).toBeLessThanOrEqual(MOST_EXCERPT_CHARS);
     expect(got.at(-1)?.text.endsWith("59")).toBe(true);
+  });
+
+  it("cuts a long action item at a word, not in the middle of one", () => {
+    const long = "Write the onboarding guide from the shared notes; 2-3 screenshots per step before and after; skip the old pricing; check gaps with the lead";
+    expect(shortTitle(long, 80)).toBe("Write the onboarding guide from the shared notes; 2-3 screenshots per step…");
+    expect(shortTitle(long, 80).length).toBeLessThanOrEqual(80);
+    expect(shortTitle("  Send   the report  ")).toBe("Send the report");
+    // One long word: cut where it must be.
+    expect(shortTitle("x".repeat(200), 50)).toBe(`${"x".repeat(49)}…`);
+  });
+
+  it("tells the model to write dates, not today or a weekday on its own, as the task is read days later", () => {
+    expect(SYSTEM).toMatch(/Write every day as a date worked out from the call's date/);
+    expect(SYSTEM).toMatch(/never "today", "tomorrow"/);
   });
 
   it("lays out what to do, why, the details and the call it came from", () => {
