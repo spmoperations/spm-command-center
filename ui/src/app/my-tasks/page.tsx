@@ -100,6 +100,14 @@ function Due({ t, today }: { t: MyTask; today: string }) {
   return <span className={`due ${t.status === "done" ? "" : due.tone}`}>{t.status === "done" ? "Done" : due.text}</span>;
 }
 
+/** A task that comes back on the same days each week (see server/repeats.ts). */
+const RepeatsChip = ({ text }: { text: string }) => (
+  <span className="chip rp-chip">
+    <span aria-hidden="true">↻ </span>
+    {text}
+  </span>
+);
+
 /** One ticket in a column of the board. It can be dragged to another column. */
 function Card({ t, today, onOpen, onStatus }: { t: MyTask; today: string; onOpen(): void; onStatus(status: TicketStatus): void }) {
   return (
@@ -117,6 +125,7 @@ function Card({ t, today, onOpen, onStatus }: { t: MyTask; today: string; onOpen
         </button>
       </div>
       {t.client && <span className="chip">{t.client}</span>}
+      {t.repeats && <RepeatsChip text={t.repeats} />}
       <div className="tk-meta">
         <StatusSelect t={t} onStatus={onStatus} />
         <Due t={t} today={today} />
@@ -138,6 +147,7 @@ function Line({ t, today, onOpen, onStatus }: { t: MyTask; today: string; onOpen
         {t.title}
       </button>
       {t.client && <span className="chip">{t.client}</span>}
+      {t.repeats && <RepeatsChip text={t.repeats} />}
       <PriorityChip pri={t.pri} />
       <StatusSelect t={t} onStatus={onStatus} />
       <Due t={t} today={today} />
@@ -189,6 +199,12 @@ function Detail({ t, today, onClose, onStatus }: { t: MyTask; today: string; onC
             <div>
               <dt>From</dt>
               <dd>{t.from}</dd>
+            </div>
+          )}
+          {t.repeats && (
+            <div>
+              <dt>Repeats</dt>
+              <dd>{t.repeats.replace(/^Repeats /, "")}, a new task each time at 6:00 CET</dd>
             </div>
           )}
         </dl>

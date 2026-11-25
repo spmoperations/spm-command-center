@@ -13,6 +13,7 @@ import crypto from "node:crypto";
 import { PRIORITY_NAME, REJECT_REASONS, SOURCE_NAME, TASK_LINE_NAME, TASK_LINES, TICKET_PREFIX, TICKET_STATUS_NAME, TICKET_STATUSES, type RejectReason } from "@/core/config";
 import { assignmentBlocks, assignmentText, CHANNEL_PICK, SLACK_PICK, ticketLink } from "@/core/delegation";
 import { isOverdue, isoDay, parseDay } from "@/core/dates";
+import { cleanDays, repeatsLabel } from "@/core/repeats";
 import { norm } from "@/core/rules";
 import type { Mode, MyTask, Priority, ReviewItem, SentTask, Source, SourceNote, Task, TaskLine, TaskSource, TeamPerson, TicketEvent, TicketInput, TicketStatus } from "@/core/types";
 import type { Db } from "./db";
@@ -800,10 +801,11 @@ const DONE_SHOWN_DAYS = 14;
  * the open ones, and those done in the last two weeks. Nothing about where a ticket came from.
  */
 export async function memberTickets(db: Db, memberId: string, now = new Date()): Promise<MyTask[]> {
-  const rows = await db.query<Pick<TicketRow, "id" | "number" | "title" | "description" | "project" | "pri" | "due" | "done" | "done_at" | "status"> & { given_by: string | null }>(
+  const rows = await db.query<Pick<TicketRow, "id" | "number" | "title" | "description" | "project" | "pri" | "due" | "done" | "done_at" | "status"> & { given_by: string | null; repeat_days: number[] | null; repeat_active: boolean | null }>(
     `select t.id, t.number, t.title, t.description, t.project, t.pri, t.due, t.done, t.done_at, t.status,
-       (select e.by_name from ticket_events e where e.owner_id = t.owner_id and e.task_id = t.id and e.what like '%Assigned to %' order by e.at desc, e.id desc limit 1) as given_by
-     from tasks t where t.owner_id = $1 and t.delegated_to = $2 and t.mode = 'professional' and (not t.done or t.done_at > $3)
+       (select e.by_name from ticket_events e where e.owner_id = t.owner_id and e.task_id = t.id and e.what like '%Assigned to %' order by e.at desc, e.id desc limit 1) as given_by,
+       r.days as repeat_days, r.active as repeat_active
+     from tasks t left join repeating_tasks r on r.owner_id = t.owner_id and r.id = t.repeat_id where t.owner_id = $1 and t.delegated_to = $2 and t.mode = 'professional' and (not t.done or t.done_at > $3)
      order by t.done, t.due = '', t.due, t.number, t.id limit 500`,
     [TEAM, memberId, now.getTime() - DONE_SHOWN_DAYS * 86_400_000],
   );
@@ -824,6 +826,8 @@ export async function memberTickets(db: Db, memberId: string, now = new Date()):
     status: statusOf(t),
     from: t.given_by || null,
     doneAt: t.done_at == null ? null : Number(t.done_at),
+    // Made by a repeating task that is still there: when it comes back.
+    repeats: t.repeat_days ? `${repeatsLabel(cleanDays(t.repeat_days))}${t.repeat_active ? "" : " (paused)"}` : null,
   }));
 }
 

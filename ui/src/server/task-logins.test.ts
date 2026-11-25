@@ -193,7 +193,7 @@ describe("their own tasks", () => {
     const mine = await listed(await luisCookie());
     expect(mine.name).toBe("Luis Ramos");
     expect(mine.tasks).toEqual([
-      { id: expect.any(String), ticket: expect.stringMatching(/^SPM-\d+$/), title: "Cut the Harbor reel", description: "Use the second take.", client: "Harbor Realty", pri: "mid", due: "2026-10-10", status: "open", from: "Alex", doneAt: null },
+      { id: expect.any(String), ticket: expect.stringMatching(/^SPM-\d+$/), title: "Cut the Harbor reel", description: "Use the second take.", client: "Harbor Realty", pri: "mid", due: "2026-10-10", status: "open", from: "Alex", doneAt: null, repeats: null },
     ]);
     expect(JSON.stringify(mine)).not.toMatch(/private line|slack\.example|Maya/);
   });

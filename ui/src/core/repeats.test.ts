@@ -1,6 +1,6 @@
 // When a repeating task is made: its days, at 6:00 Central European time, summer and winter, once a day.
 import { describe, expect, it } from "vitest";
-import { cleanDays, dayAfter, daysName, heldBackTo, inRepeatZone, nextRepeatDay, repeatIsDue } from "./repeats";
+import { cleanDays, dayAfter, daysName, heldBackTo, inRepeatZone, nextRepeatDay, repeatIsDue, repeatsLabel } from "./repeats";
 
 // Monday 12 Oct 2026 is summer time in Berlin (UTC+2); Monday 16 Nov is winter time (UTC+1).
 const at = (iso: string) => new Date(iso);
@@ -23,6 +23,9 @@ describe("repeating tasks: when", () => {
     expect(cleanDays([4, "1", 4, 0, 8, "x"])).toEqual([1, 4]);
     expect(cleanDays("Mon")).toEqual([]);
     expect(dayAfter("2026-12-31", 1)).toBe("2027-01-01");
+    expect(repeatsLabel([1, 4])).toBe("Repeats every Mon and Thu");
+    expect(repeatsLabel([1, 2, 3, 4, 5])).toBe("Repeats on weekdays");
+    expect(repeatsLabel([1, 2, 3, 4, 5, 6, 7])).toBe("Repeats every day");
   });
 
   it("is due on its days from 6:00 CET, once a day", () => {

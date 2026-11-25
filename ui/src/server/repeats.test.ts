@@ -5,6 +5,7 @@ import type { RepeatInput } from "@/core/types";
 import type { Db } from "./db";
 import { applyAction, loadState, OWNER_ID } from "./repo";
 import { makeRepeats } from "./repeats";
+import { memberTickets } from "./tickets";
 import { seal } from "./secrets";
 import { NOW, reset, seed, testDb } from "./testing";
 
@@ -154,6 +155,19 @@ describe("repeating tasks", () => {
     expect(await makeRepeats(db, new Date("2026-10-20T06:00:00+02:00"))).toEqual({ made: 1, failed: 0 });
     expect((await outbox()).map((o) => [o.owner_id, o.target])).toEqual([[OWNER_ID, "ULUIS"]]);
     expect(await refused(alex, "editRepeat", "r_gone", repeat())).toBe("That repeating task no longer exists.");
+  });
+
+  it("says on the person's own task page that it repeats, and when it is paused", async () => {
+    await act(alex, "addRepeat", repeat({ notify: [] }));
+    await makeRepeats(db, monday("06:00"));
+    const page = async () => (await memberTickets(db, "u_luis", monday("07:00"))).map((t) => [t.title, t.repeats]);
+    expect(await page()).toEqual([["Check in with the editors", "Repeats every Mon and Thu"]]);
+    const { id } = await theRepeat();
+    await actAt(monday("08:00"), alex, "pauseRepeat", id, true);
+    expect(await page()).toEqual([["Check in with the editors", "Repeats every Mon and Thu (paused)"]]);
+    // Removed: the task stays, as an ordinary one.
+    await act(alex, "removeRepeat", id);
+    expect(await page()).toEqual([["Check in with the editors", null]]);
   });
 
   it("is removed, and the tasks it made stay on the board", async () => {

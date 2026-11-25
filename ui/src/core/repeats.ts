@@ -38,6 +38,12 @@ export function daysName(days: number[]): string {
   return names.length <= 1 ? (names[0] ?? "no day") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
+/** How a task made by a repeating one says so: "Repeats every Mon and Thu", "Repeats on weekdays", "Repeats every day". */
+export function repeatsLabel(days: number[]): string {
+  const name = daysName(days);
+  return name === "every day" ? "Repeats every day" : name === "weekdays" ? "Repeats on weekdays" : `Repeats every ${name}`;
+}
+
 /** Whether one is to be made now: a day it is on, 6:00 has come, and none was made today. */
 export function repeatIsDue(r: { days: number[]; lastDay: string | null; active: boolean }, now: Date): { due: boolean; day: string } {
   const { day, weekday, minutes } = inRepeatZone(now);

@@ -6,7 +6,7 @@
 // whether or not the last one is done. Plain code: no AI. When is in core/repeats.ts.
 import crypto from "node:crypto";
 import { TASK_LINES } from "@/core/config";
-import { cleanDays, daysName, heldBackTo, repeatIsDue } from "@/core/repeats";
+import { cleanDays, heldBackTo, repeatIsDue, repeatsLabel } from "@/core/repeats";
 import type { Priority, RepeatingTask, RepeatInput, TaskLine, TicketStatus } from "@/core/types";
 import type { Db } from "./db";
 import { assignTo, insertTicket, logEvent, memberFor, TEAM, teamUsersSql } from "./tickets";
@@ -154,11 +154,11 @@ async function makeOne(db: Db, id: string, now: Date): Promise<string | null> {
     const { due, day } = repeatIsDue({ days: r.days, lastDay: r.last_day, active: r.active }, now);
     if (!due) return null;
     const c: Ctx = { db: tx, ownerId: r.set_by, now };
-    const every = daysName(r.days);
+    const label = repeatsLabel(r.days);
     const ticket = await insertTicket(
       c,
-      { title: r.title, description: r.description, project: r.project, pri: r.pri, due: "", status: "open", assigneeUser: null, line: r.line, source: { label: `Repeats ${every === "every day" || every === "weekdays" ? every : `every ${every}`}`, quote: "", from: "" } },
-      `Created: repeats ${every === "every day" || every === "weekdays" ? every : `every ${every}`}`,
+      { title: r.title, description: r.description, project: r.project, pri: r.pri, due: "", status: "open", assigneeUser: null, line: r.line, source: { label, quote: "", from: "" } },
+      `Created: ${label.replace(/^Repeats/, "repeats")}`,
     );
     await tx.run("update tasks set repeat_id = $3 where owner_id = $1 and id = $2", [TEAM, ticket, r.id]);
     // Told only where the account it is told from is still connected; the rest is said in its history.

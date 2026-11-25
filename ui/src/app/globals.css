@@ -933,6 +933,7 @@ img.avatar { object-fit: cover; background: var(--surface-2); }
 .rp-day { min-width: 48px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: inherit; font-size: 13.5px; cursor: pointer; }
 .rp-day.on { background: var(--accent); border-color: var(--accent); color: var(--surface); font-weight: 600; }
 .rp-help { margin: 0; font-size: 13px; }
+.rp-chip { color: var(--accent); border-color: var(--accent-soft); background: var(--accent-soft); }
 .btn.on { border-color: var(--accent); color: var(--accent); }
 @media (max-width: 640px) {
   .rp-row { flex-direction: column; }

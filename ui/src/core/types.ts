@@ -442,6 +442,8 @@ export interface MyTask {
   /** Who gave it to them, when the history says. */
   from: string | null;
   doneAt: number | null;
+  /** Made by a repeating task: "Repeats every Mon and Thu", with "(paused)" while it is paused. Null for any other task. */
+  repeats: string | null;
 }
 
 /** A task someone on the team list sent the owner from their task page, as that page lists it. */
