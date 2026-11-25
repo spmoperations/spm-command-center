@@ -4,9 +4,11 @@ Every instruction the Command Center gives an AI model is in this folder, one fi
 
 | Prompt | File | Used by | Runs |
 | --- | --- | --- | --- |
-| Find tasks in messages | [task-finder.ts](task-finder.ts) | The check "Finds other tasks in your messages" (`src/jobs/task-suggest.ts`) | Switched off for now: the Claude account has no credit |
+| Find tasks in messages | [task-finder.ts](task-finder.ts) | The check "Finds other tasks in your messages" (`src/jobs/task-suggest.ts`) | Switched off for now |
+| Is it a real task? | [task-check.ts](task-check.ts) | The check "Checks each flagged message with AI" (`src/jobs/task-check.ts`) | On a timer, capped each day |
+| What a task from a call is about | [call-context.ts](call-context.ts) | The check "Writes what each task from a call is about, with AI" (`src/jobs/call-context.ts`) | Right after each Fathom check, for new calls only: one request per call, at most 4 a run and 20 a day |
 
-That is the only prompt. Sorting the inbox, finding messages that ask for something, call notes and action items all work by plain rules, with no AI.
+Sorting the inbox, finding messages that ask for something, and which part of a call an action item came from all work by plain rules, with no AI.
 
 ## What is in a prompt file
 

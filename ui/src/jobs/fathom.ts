@@ -25,7 +25,15 @@ export function toMeeting(m: FathomMeeting, ownerEmail: string | null) {
   const others = (m.calendar_invitees ?? []).filter((p) => !sameEmail(p.email, ownerEmail)).map((p) => p.name || p.email || "").filter(Boolean);
   const actionItems: ActionItem[] = (m.action_items ?? [])
     .filter((a) => a.description)
-    .map((a) => ({ text: a.description!, who: a.assignee?.name || a.assignee?.email || "Unassigned", mine: sameEmail(a.assignee?.email, ownerEmail), done: Boolean(a.completed) }));
+    .map((a) => ({
+      text: a.description!,
+      who: a.assignee?.name || a.assignee?.email || "Unassigned",
+      mine: sameEmail(a.assignee?.email, ownerEmail),
+      done: Boolean(a.completed),
+      // When in the call it was said, so what was said around it can go with the task (see jobs/call-context).
+      ...(a.recording_timestamp ? { at: a.recording_timestamp } : {}),
+      ...(a.recording_playback_url ? { link: a.recording_playback_url } : {}),
+    }));
   return {
     externalId: String(m.recording_id),
     title: m.meeting_title || m.title || "Untitled call",
@@ -38,7 +46,7 @@ export function toMeeting(m: FathomMeeting, ownerEmail: string | null) {
     place: PLACES.find(([pattern]) => pattern.test(m.meeting_url ?? ""))?.[1] ?? "",
     url: m.share_url ?? m.url ?? null,
     summary: m.default_summary?.markdown_formatted ?? "",
-    transcript: (m.transcript ?? []).filter((l) => l.text).map((l): [string, string] => [l.speaker?.display_name || "Speaker", l.text!]),
+    transcript: (m.transcript ?? []).filter((l) => l.text).map((l): [string, string, string?] => (l.timestamp ? [l.speaker?.display_name || "Speaker", l.text!, l.timestamp] : [l.speaker?.display_name || "Speaker", l.text!])),
     actionItems,
   };
 }

@@ -880,6 +880,8 @@ img.avatar { object-fit: cover; background: var(--surface-2); }
 .rv-fields { display: flex; gap: 8px; flex-wrap: wrap; }
 .rv-fields .f { min-width: 160px; }
 .rv-for, .rv-why { margin: 0; font-size: 13.5px; color: var(--muted); }
+/* What a task from a call is about, written from the call (jobs/call-context). */
+.rv-context { margin: 0; font-size: 13.5px; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; max-height: 16em; overflow: auto; }
 .rv-done { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; border-radius: 8px; background: var(--good-soft); color: var(--good); font-size: 13.5px; }
 .rv-acts { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
 .rv-acts .btns { display: flex; gap: 6px; }

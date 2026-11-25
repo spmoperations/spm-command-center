@@ -612,6 +612,18 @@ describe("Fathom job", () => {
     });
   });
 
+  it("keeps when each line and each action item was said, and the link to that moment", () => {
+    const timed: FathomMeeting = {
+      ...call,
+      transcript: [{ speaker: { display_name: "Maya Chen" }, text: "People bail at the price.", timestamp: "00:10:40" }],
+      action_items: [{ description: "Send the September report", assignee: { name: "Jeremy Moser", email: "jeremy@example.com" }, completed: false, recording_timestamp: "00:10:45", recording_playback_url: "https://fathom.video/calls/42?timestamp=645" }],
+    };
+    expect(toMeeting(timed, "jeremy@example.com")).toMatchObject({
+      transcript: [["Maya Chen", "People bail at the price.", "00:10:40"]],
+      actionItems: [{ text: "Send the September report", at: "00:10:45", link: "https://fathom.video/calls/42?timestamp=645" }],
+    });
+  });
+
   it("stores the call and suggests every open action item once, saying who Fathom gave it to", async () => {
     const first = await fathomPull(ctx(), "key", fathom([call]));
     expect(first).toMatchObject({ items: 1, cursor: { createdAfter: "2026-10-07T10:00:00Z" } });
@@ -1041,6 +1053,25 @@ describe("runner", () => {
       expect((await syncAll(db)).map((r) => [r.jobId, r.ok])).toEqual([["fathom-pull", true]]);
     } finally {
       globalThis.fetch = realFetch;
+    }
+  });
+
+  it("writes up new calls right after the Fathom check, once there is an AI key", async () => {
+    await connect(db, OWNER_ID, "fathom", "fathom-key", async () => new Response(JSON.stringify({ items: [], next_cursor: null }), { status: 200 }));
+    const realFetch = globalThis.fetch;
+    const saved = process.env.ANTHROPIC_API_KEY;
+    globalThis.fetch = (async () => new Response(JSON.stringify({ items: [], next_cursor: null }), { status: 200 })) as typeof fetch;
+    process.env.ANTHROPIC_API_KEY = "sk-ant-api03-only-for-this-test";
+    try {
+      // No calls to write up, so the model is never asked.
+      expect((await runNow(db, "fathom-pull", OWNER_ID, NOW)).map((r) => [r.jobId, r.ok, r.message])).toEqual([
+        ["fathom-pull", true, "0 calls, 0 suggested tasks"],
+        ["call-context", true, "No new calls to write up"],
+      ]);
+    } finally {
+      globalThis.fetch = realFetch;
+      if (saved === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = saved;
     }
   });
 

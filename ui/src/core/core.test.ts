@@ -249,16 +249,16 @@ describe("timers", () => {
   it("defines every job once, with a default no faster than its floor", () => {
     expect(new Set(JOBS.map((j) => j.id)).size).toBe(JOBS.length);
     for (const job of JOBS) expect(job.defaultMin).toBeGreaterThanOrEqual(job.minMin);
-    expect(JOBS.filter((j) => j.usesAI).map((j) => j.id)).toEqual(["task-check", "task-suggest"]);
+    expect(JOBS.filter((j) => j.usesAI).map((j) => j.id)).toEqual(["call-context", "task-check", "task-suggest"]);
   });
 
   it("leaves out the checks that cannot work yet", () => {
     expect(JOBS.filter((j) => !j.live).map((j) => j.id)).toEqual(["telegram-pull", "gmail-pull", "calendar-pull", "task-suggest"]);
-    expect(liveJobs(false).map((j) => j.id)).toEqual(["slack-pull", "fathom-pull", "calendly-pull", "inbox-rules", "request-finder", "task-check", "slack-directory-sync", "outbox-retry"]);
+    expect(liveJobs(false).map((j) => j.id)).toEqual(["slack-pull", "fathom-pull", "call-context", "calendly-pull", "inbox-rules", "request-finder", "task-check", "slack-directory-sync", "outbox-retry"]);
     // Where Telegram can be used, its check joins them; the AI that finds tasks of its own stays off.
-    expect(liveJobs(true).map((j) => j.id)).toEqual(["slack-pull", "telegram-pull", "fathom-pull", "calendly-pull", "inbox-rules", "request-finder", "task-check", "slack-directory-sync", "outbox-retry"]);
+    expect(liveJobs(true).map((j) => j.id)).toEqual(["slack-pull", "telegram-pull", "fathom-pull", "call-context", "calendly-pull", "inbox-rules", "request-finder", "task-check", "slack-directory-sync", "outbox-retry"]);
     // The same for Google's two checks.
-    expect(liveJobs(false, true).map((j) => j.id)).toEqual(["slack-pull", "fathom-pull", "calendly-pull", "gmail-pull", "calendar-pull", "inbox-rules", "request-finder", "task-check", "slack-directory-sync", "outbox-retry"]);
+    expect(liveJobs(false, true).map((j) => j.id)).toEqual(["slack-pull", "fathom-pull", "call-context", "calendly-pull", "gmail-pull", "calendar-pull", "inbox-rules", "request-finder", "task-check", "slack-directory-sync", "outbox-retry"]);
   });
 
   it("keeps a timer at or above the fastest allowed", () => {

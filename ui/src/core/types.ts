@@ -211,6 +211,8 @@ export interface ReviewItem {
   unchecked: boolean;
   /** Why it may be done already, when something says so. */
   looksDone: string | null;
+  /** For an action item from a call: what to do, why and the details said, written from the call (see jobs/call-context). Null until written. */
+  context: string | null;
   src: TaskSource | null;
   /** Whose inbox or calls it came from: a login's id. */
   fromUser: string;
@@ -289,6 +291,10 @@ export interface ActionItem {
   /** Assigned to the owner of this dashboard. */
   mine: boolean;
   done: boolean;
+  /** When in the recording it was said ("00:10:45"). Kept for calls read from November 2026 on. */
+  at?: string | null;
+  /** The recording at that moment. */
+  link?: string | null;
 }
 
 export interface Meeting {
@@ -308,8 +314,8 @@ export interface Meeting {
   /** The call's notes, as Markdown. */
   summary: string;
   actionItems: ActionItem[];
-  /** [speaker, line]. Loaded only when a person opens the transcript. */
-  transcript: [string, string][];
+  /** [speaker, line, when in the call ("00:05:32")]. The time is there for calls read from November 2026 on. Loaded only when a person opens the transcript. */
+  transcript: [string, string, string?][];
   transcriptLines?: number;
   /** Name the owner speaks under in the transcript. */
   ownerSpeaker?: string;
@@ -516,6 +522,7 @@ export type JobId =
   | "slack-pull"
   | "telegram-pull"
   | "fathom-pull"
+  | "call-context"
   | "calendly-pull"
   | "gmail-pull"
   | "calendar-pull"

@@ -18,7 +18,8 @@ const REASONS = Object.entries(REJECT_REASONS) as [RejectReason, string][];
 /** What a card would make, as it stands on screen. */
 const asInput = (g: ReviewItem, today: string, people: Assignable[]): TicketInput => ({
   title: g.title,
-  description: g.why,
+  // What the call said about it, once written up (see jobs/call-context); else why it was found.
+  description: g.context ?? g.why,
   assignee: g.assignee,
   client: g.client,
   due: isOverdue(g.due, today) ? today : g.due,
@@ -96,6 +97,7 @@ function ReviewCard({ g, app, people, picked, onPick, clients }: { g: ReviewItem
         }
       />
       {g.why && <p className="rv-why">{g.why}</p>}
+      {g.context && <p className="rv-context">{g.context}</p>}
       {g.looksDone && (
         <div className="rv-done">
           <span>

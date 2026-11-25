@@ -294,6 +294,7 @@ interface SuggestionRow extends SourceParts {
   mt_at: number | null;
   confidence: number | null;
   checked_at: number | null;
+  context: string | null;
   chat_line: TaskLine | null;
 }
 
@@ -344,7 +345,7 @@ function guessFor(g: SuggestionRow, people: TeamPerson[], slack: InSlack[] = [])
   return { forName: g.for_name, assignee: named?.id ?? `user:${g.owner_id}` };
 }
 
-const SUGGESTION_FROM = `select s.id, s.owner_id, s.title, s.why, s.project, s.pri, s.due, s.mode, s.src_type, s.src_id, s.dedupe_key, s.for_name, s.looks_done, s.delegable, s.created_at, s.confidence, s.checked_at, u.name as from_name,
+const SUGGESTION_FROM = `select s.id, s.owner_id, s.title, s.why, s.project, s.pri, s.due, s.mode, s.src_type, s.src_id, s.dedupe_key, s.for_name, s.looks_done, s.delegable, s.created_at, s.confidence, s.checked_at, s.context, u.name as from_name,
          ${lineFrom("s.src_type", "s.src_id", "s.owner_id", "$1")} as chat_line,
          c.source as c_source, c.ctx as c_ctx, c.from_name as c_from, c.external_id as c_chat, c.last_text as c_text,
          m.body as m_body, m.at as m_at, mt.title as mt_title, mt.url as mt_url, mt.action_items as mt_items, mt.started_at as mt_at
@@ -389,6 +390,7 @@ function toReview(g: SuggestionRow, viewer: string, people: TeamPerson[], slack:
     confidence: g.confidence === null ? null : Number(g.confidence),
     unchecked: g.src_type === "message" && g.dedupe_key.startsWith("ask:") && g.checked_at === null,
     looksDone: g.looks_done ?? (item?.done ? "Marked done in Fathom." : null),
+    context: g.context || null,
     src: g.src_type && g.src_id ? { type: g.src_type, id: g.src_id } : null,
     fromUser: g.owner_id,
     mine: g.owner_id === viewer,
@@ -567,7 +569,7 @@ async function nameOf(db: Db, userId: string): Promise<string> {
 
 let written = 0;
 /** History lines written in the same moment keep the order they were written in: their ids sort that way. */
-const eventId = () => `e_${Date.now().toString(36).padStart(9, "0")}${(written++ % 1_679_616).toString(36).padStart(4, "0")}${crypto.randomBytes(3).toString("hex")}`;
+export const eventId = () => `e_${Date.now().toString(36).padStart(9, "0")}${(written++ % 1_679_616).toString(36).padStart(4, "0")}${crypto.randomBytes(3).toString("hex")}`;
 
 /** One line in a ticket's history. */
 export async function logEvent(c: Ctx, taskId: string, what: string): Promise<void> {
@@ -915,7 +917,8 @@ async function accept(c: Ctx, g: SuggestionRow, input: Partial<TicketInput> | un
     c,
     {
       title: edits.title ?? g.title,
-      description: edits.description ?? whyFor(g.why, g.from_name),
+      // What the call said about it, when that has been written up (see jobs/call-context); else why it was found.
+      description: edits.description ?? (g.context || whyFor(g.why, g.from_name)),
       project: tidy(edits.client ?? g.project, 120),
       pri: edits.pri ?? g.pri,
       due,

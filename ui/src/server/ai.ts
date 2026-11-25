@@ -1,5 +1,6 @@
 // The one place the Command Center uses an AI model: checking whether each message the rules
-// flagged is a real task (task-check), and finding other tasks in new messages (task-suggest).
+// flagged is a real task (task-check), writing what each task from a call is about
+// (call-context), and finding other tasks in new messages (task-suggest).
 // Everything else (priority, labels, who can take a task, call notes) is plain logic.
 //
 // This file only makes the call. What the model is told is in `src/prompts/`.
@@ -9,6 +10,7 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { DEPTS } from "@/core/config";
 import { FIELDS, message, SYSTEM, type TaskSearch } from "@/prompts/task-finder";
+import * as calls from "@/prompts/call-context";
 import * as check from "@/prompts/task-check";
 import { keysForNew, type AnthropicKeys } from "./app-keys";
 import type { Db } from "./db";
@@ -146,6 +148,50 @@ export async function checkCandidates(input: check.TaskCheck, keys: AnthropicKey
   if (response.stop_reason === "max_tokens") throw new NoVerdicts("The model's answer was cut short.", "cut_short", usage);
   if (!response.parsed_output) throw new NoVerdicts("The model's answer could not be read.", "unreadable", usage);
   return { verdicts: response.parsed_output.verdicts, usage };
+}
+
+const CallWriteups = z.object({
+  items: z.array(
+    z.object({
+      id: z.string().describe(calls.FIELDS.id),
+      what: z.string().describe(calls.FIELDS.what),
+      why: z.string().describe(calls.FIELDS.why),
+      details: z.array(z.string()).describe(calls.FIELDS.details),
+    }),
+  ),
+});
+
+export type CallWriteup = z.infer<typeof CallWriteups>["items"][number];
+
+export interface CallContextResult {
+  items: CallWriteup[];
+  usage: AiUsage;
+}
+
+/**
+ * Writes what each action item from one call is about. Writing up what was said needs little
+ * thought, so it runs at low effort. Throws the SDK's typed errors, which the job turns into a
+ * readable message, and `NoVerdicts` when it answered without a write-up.
+ */
+export async function writeCallContext(input: calls.CallContext, keys: AnthropicKeys): Promise<CallContextResult> {
+  const response = await anthropic(keys).beta.messages.parse({
+    model: AI_MODEL,
+    max_tokens: 8000,
+    system: calls.SYSTEM,
+    messages: [{ role: "user", content: calls.message(input) }],
+    output_config: { format: betaZodOutputFormat(CallWriteups), effort: "low" },
+    // Should the model decline a call, another model answers it in the same request.
+    betas: ["server-side-fallback-2026-07-01"],
+    fallbacks: "default",
+  });
+  const usage: AiUsage = {
+    input: response.usage.input_tokens + (response.usage.cache_creation_input_tokens ?? 0) + (response.usage.cache_read_input_tokens ?? 0),
+    output: response.usage.output_tokens,
+  };
+  if (response.stop_reason === "refusal") throw new NoVerdicts("The model declined to read this call.", "declined", usage);
+  if (response.stop_reason === "max_tokens") throw new NoVerdicts("The model's answer was cut short.", "cut_short", usage);
+  if (!response.parsed_output) throw new NoVerdicts("The model's answer could not be read.", "unreadable", usage);
+  return { items: response.parsed_output.items, usage };
 }
 
 /** Checks an AI key before it is saved: asking which models it may use costs nothing. */

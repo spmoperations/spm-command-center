@@ -359,8 +359,8 @@ async function loadCalendar(db: Db, ownerId: string): Promise<CalendarItem[]> {
   return [...items.values()];
 }
 
-export async function loadTranscript(db: Db, ownerId: string, meetingId: string): Promise<[string, string][]> {
-  const [row] = await db.query<{ transcript: [string, string][] }>("select transcript from meetings where owner_id = $1 and id = $2", [ownerId, meetingId]);
+export async function loadTranscript(db: Db, ownerId: string, meetingId: string): Promise<[string, string, string?][]> {
+  const [row] = await db.query<{ transcript: [string, string, string?][] }>("select transcript from meetings where owner_id = $1 and id = $2", [ownerId, meetingId]);
   return row?.transcript ?? [];
 }
 

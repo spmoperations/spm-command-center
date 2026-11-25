@@ -22,7 +22,7 @@ export interface FathomMeeting {
   scheduled_start_time?: string | null;
   transcript?: { speaker?: { display_name?: string | null } | null; text?: string | null; timestamp?: string | null }[] | null;
   default_summary?: { markdown_formatted?: string | null } | null;
-  action_items?: { description?: string | null; completed?: boolean | null; assignee?: FathomPerson | null }[] | null;
+  action_items?: { description?: string | null; completed?: boolean | null; assignee?: FathomPerson | null; recording_timestamp?: string | null; recording_playback_url?: string | null }[] | null;
   calendar_invitees?: (FathomPerson & { is_external?: boolean | null })[] | null;
   recorded_by?: FathomPerson | null;
 }

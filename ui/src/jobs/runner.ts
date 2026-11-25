@@ -13,6 +13,7 @@ import { RateLimited, slackClient } from "@/server/slack";
 import { telegramApi, telegramConnected } from "@/server/telegram";
 import { calendarPull } from "./calendar";
 import { calendlyPull } from "./calendly";
+import { callContext } from "./call-context";
 import { fathomPull } from "./fathom";
 import { gmailPull } from "./gmail";
 import { outboxSend } from "./outbox";
@@ -86,6 +87,9 @@ async function execute(jobId: JobId, ctx: JobContext): Promise<JobResult> {
     case "task-check":
       if (!(await aiConfigured(ctx.db, ctx.ownerId))) throw new NotReady("The AI key is not set");
       return taskCheck(ctx);
+    case "call-context":
+      if (!(await aiConfigured(ctx.db, ctx.ownerId))) throw new NotReady("The AI key is not set");
+      return callContext(ctx);
     case "outbox-retry": {
       const token = await secretFor(ctx.db, ctx.ownerId, "slack");
       // Telegram is opened only if something is waiting to go there.
@@ -130,6 +134,13 @@ async function connectedTo(db: Db, ownerId: string): Promise<Set<string>> {
   // Google's accounts are kept in a table of their own (see `google_accounts`).
   if (await googleConnected(db, ownerId)) connected.add("google");
   return connected;
+}
+
+/** The jobs that run right after `jobId`, leaving out one that needs the AI key when it is not set: it would only fail each time. */
+async function followersOf(db: Db, ownerId: string, jobId: JobId) {
+  const list = JOBS.filter((j) => j.follows?.includes(jobId));
+  if (!list.some((j) => j.needs === "ai") || (await aiConfigured(db, ownerId))) return list;
+  return list.filter((j) => j.needs !== "ai");
 }
 
 const running = new Set<string>();
@@ -198,7 +209,7 @@ export async function tick(db: Db, ownerId = OWNER_ID, now = Date.now()): Promis
     const run = await runJob(db, def.id, ownerId, now);
     runs.push(run);
     // Jobs that follow another run right after it succeeds.
-    if (run.ok) for (const follower of JOBS.filter((j) => j.follows?.includes(def.id))) runs.push(await runJob(db, follower.id, ownerId, now));
+    if (run.ok) for (const follower of await followersOf(db, ownerId, def.id)) runs.push(await runJob(db, follower.id, ownerId, now));
   }
   return runs;
 }
@@ -226,7 +237,7 @@ export async function syncAll(db: Db, ownerId = OWNER_ID): Promise<JobRun[]> {
 /** What "Run now" does: the job itself, then anything that follows it. */
 export async function runNow(db: Db, jobId: JobId, ownerId = OWNER_ID, now = Date.now()): Promise<JobRun[]> {
   const runs = [await runJob(db, jobId, ownerId, now)];
-  if (runs[0].ok) for (const follower of JOBS.filter((j) => j.follows?.includes(jobId))) runs.push(await runJob(db, follower.id, ownerId, now));
+  if (runs[0].ok) for (const follower of await followersOf(db, ownerId, jobId)) runs.push(await runJob(db, follower.id, ownerId, now));
   return runs;
 }
 
